@@ -88,6 +88,42 @@ Use this config in your Claude Desktop MCP config file:
 
 After saving config, restart Claude Desktop.
 
+## Development Setup (Local Source)
+
+For active development, use a separate MCP entry (for example `rhino-dev`) so it does not conflict with the published `uvx rhinomcp-mod` setup.
+
+### 1. Run the MCP server from local source
+
+Use `uv run` from your local `rhino_mcp_server` folder:
+
+```json
+{
+  "mcpServers": {
+    "rhino-dev": {
+      "command": "uv",
+      "args": [
+        "--directory",
+        "/absolute/path/to/rhinomcp_mod/rhino_mcp_server",
+        "run",
+        "rhinomcp-mod"
+      ]
+    }
+  }
+}
+```
+
+Replace `/absolute/path/to/rhinomcp_mod` with your local checkout path.
+
+### 2. Build and load local plugin
+
+1. Build `rhino_mcp_plugin/rhinomcp.sln` in `Debug` or `Release`.
+2. Load the generated `.rhp` from `rhino_mcp_plugin/bin/<Configuration>/net7.0/` in Rhino.
+3. Run `mcpmodstart`.
+
+### 3. Enable only one server entry
+
+Keep only one server enabled at a time (`rhino` or `rhino-dev`) to avoid duplicate connections.
+
 ### 4. Start and Verify
 
 1. Start Rhino and run `mcpmodstart`.
