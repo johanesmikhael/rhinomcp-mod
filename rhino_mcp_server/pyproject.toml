@@ -1,0 +1,33 @@
+[project]
+name = "rhinomcp-mod"
+version = "0.0.0.3"
+description = "Rhino integration through the Model Context Protocol"
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [
+    {name = "Jingcheng Chen", email = "mail@jchen.ch"}
+]
+license = {text = "MIT"}
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
+dependencies = [
+    "fastmcp>=2.11.2",
+    "mcp[cli]>=1.12.4",
+]
+
+[project.scripts]
+rhinomcp-mod = "rhinomcp.server:main"
+
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[project.urls]
+"Homepage" = "https://github.com/johanesmikhael/rhinomcp-mod"
+"Bug Tracker" = "https://github.com/johanesmikhael/rhinomcp-mod/issues"
