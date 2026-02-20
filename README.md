@@ -5,9 +5,6 @@ RhinoMCP Mod is a derivative work based on the original [RhinoMCP](https://githu
 - Original project: `jingcheng-chen/rhinomcp`
 - This repository adapts and extends the original implementation.
 
-## Derivative Work Notice
-
-This project includes derivative code and ideas from the original RhinoMCP repository. Please review attribution and license requirements in `LICENSE` and `NOTICE`.
 
 ## What Is Different In This Mod
 
