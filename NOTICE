@@ -1,0 +1,11 @@
+RhinoMCP Mod
+Copyright 2026 Mikhael Johanes
+
+This project is a derivative work of RhinoMCP.
+Original project: RhinoMCP
+Original license: Apache License 2.0 (see LICENSE)
+
+Modifications in this derivative include:
+- Improved geometric reasoning and object-relationship understanding.
+- Reconfigured system behavior to prioritize rearranging/reconfiguring 3D objects.
+

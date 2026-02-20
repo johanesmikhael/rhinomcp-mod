@@ -1,0 +1,27 @@
+.DS_Store
+.vscode
+.cursor
+node_modules/
+
+
+# environment
+*.env
+*/agents_db
+*/__pycache__
+
+# misc
+test*
+# .NET / Rhino build artifacts
+**/bin/
+**/obj/
+*.user
+*.suo
+*.rhp
+*.yak
+*.pdb
+**/bin/Release/manifest.yml
+
+# common local env/IDE
+.venv/
+venv/
+.idea/
