@@ -9,7 +9,7 @@
   
   <PropertyGroup>
     <!-- Specifies information for Assembly and Yak -->
-    <Version>0.0.0.4</Version>
+    <Version>0.1.0</Version>
     <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
     <Title>rhinomcp-mod</Title>
     <AssemblyName>rhinomcp-mod</AssemblyName>
