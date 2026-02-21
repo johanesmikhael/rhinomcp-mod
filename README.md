@@ -2,10 +2,6 @@
 
 RhinoMCP Mod is a derivative work based on the original [RhinoMCP](https://github.com/jingcheng-chen/rhinomcp).
 
-- Original project: `jingcheng-chen/rhinomcp`
-- This repository adapts and extends the original implementation.
-
-
 ## Let your AI agents see the geometry
 
 <img src="images/screenshot.png" alt="Geometry and Topological context" width="400">
