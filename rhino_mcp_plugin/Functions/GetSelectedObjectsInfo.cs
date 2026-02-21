@@ -18,6 +18,7 @@ public partial class RhinoMCPModFunctions
         {
             var data = Serializer.RhinoObject(obj, includeGeometrySummary: true, outlineMaxPoints: outlineMaxPoints);
             InjectStoredPoseIntoSummary(obj, data);
+            InjectStoredObbIntoSummary(obj, data);
             if (includeAttributes)
             {
                 data["attributes"] = BuildPublicAttributes(obj);

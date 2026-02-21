@@ -57,7 +57,7 @@ internal static class MCPConnectivityGraphBuilder
 
     public static MCPConnectivityGraph Compute(RhinoDoc doc)
     {
-        var tolerance = doc.ModelAbsoluteTolerance * 2.0;
+        var tolerance = doc.ModelAbsoluteTolerance * 5.0;
         var nodes = new List<Node>(MaxNodes);
 
         foreach (var obj in doc.Objects)

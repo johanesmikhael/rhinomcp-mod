@@ -9,13 +9,13 @@
   
   <PropertyGroup>
     <!-- Specifies information for Assembly and Yak -->
-    <Version>0.0.0.3</Version>
+    <Version>0.0.0.4</Version>
     <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
     <Title>rhinomcp-mod</Title>
     <AssemblyName>rhinomcp-mod</AssemblyName>
     <RootNamespace>rhinomcp_mod</RootNamespace>
     <Company>Mikhael Johanes</Company>
-    <Description>Mod of Rhino integration through the Model Context Protocol by Jingcheng Chen</Description>
+    <Description>Mod of Rhino integration through the Model Context Protocol with improved geometry and topology understanding</Description>
   </PropertyGroup>
   
   <ItemGroup>

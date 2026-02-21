@@ -131,6 +131,7 @@ public partial class RhinoMCPModFunctions
         {
             var poseAfter = ApplyTransformToPose(poseBefore, xform, center);
             WriteStoredPose(updatedObject, poseAfter);
+            RefreshStoredObbFromObject(updatedObject);
         }
         else
         {

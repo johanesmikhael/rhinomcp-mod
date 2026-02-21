@@ -278,6 +278,48 @@ public static partial class Serializer
         return ChooseOutlineCurve(joined, tolerance);
     }
 
+    private static double GetCurveAreaOrBboxArea(Curve curve, double tolerance)
+    {
+        if (curve == null)
+        {
+            return 0.0;
+        }
+
+        if (curve.IsClosed && curve.IsPlanar(tolerance))
+        {
+            var amp = AreaMassProperties.Compute(curve);
+            if (amp != null)
+            {
+                return Math.Abs(amp.Area);
+            }
+        }
+
+        BoundingBox bbox = curve.GetBoundingBox(true);
+        if (!bbox.IsValid)
+        {
+            return 0.0;
+        }
+
+        return Math.Abs((bbox.Max.X - bbox.Min.X) * (bbox.Max.Y - bbox.Min.Y));
+    }
+
+    private static double ScoreClosedOutlineCurve(Curve curve, double tolerance)
+    {
+        if (curve == null || !curve.IsClosed)
+        {
+            return double.MinValue;
+        }
+
+        double primaryArea = GetCurveAreaOrBboxArea(curve, tolerance);
+        BoundingBox bbox = curve.GetBoundingBox(true);
+        double bboxArea = bbox.IsValid
+            ? Math.Abs((bbox.Max.X - bbox.Min.X) * (bbox.Max.Y - bbox.Min.Y))
+            : 0.0;
+        double length = curve.GetLength();
+
+        return primaryArea * 1000.0 + bboxArea * 10.0 + length;
+    }
+
     private static JObject BuildBrepGeometrySummary(Brep brep, int outlineMaxPoints = 16)
     {
         if (brep == null)
@@ -438,53 +480,69 @@ public static partial class Serializer
                 throw new InvalidOperationException("No visible outline segments found.");
             }
 
-            Curve[] joined = Curve.JoinCurves(segments, tolerance);
-            var closed = joined.Where(c => c != null && c.IsClosed).ToList();
+            Curve[] joined = Curve.JoinCurves(segments, tolerance) ?? Array.Empty<Curve>();
+            Curve[] joinedLoose = Curve.JoinCurves(segments, tolerance * 10.0) ?? Array.Empty<Curve>();
 
-            if (closed.Count == 0)
-            {
-                double looseTol = tolerance * 10.0;
-                Curve[] joinedLoose = Curve.JoinCurves(segments, looseTol);
-                closed = joinedLoose.Where(c => c != null && c.IsClosed).ToList();
-            }
+            var closed = new List<Curve>();
+            closed.AddRange(joined.Where(c => c != null && c.IsClosed));
+            closed.AddRange(joinedLoose.Where(c => c != null && c.IsClosed));
 
             Curve outlineCurve = null;
-
-            if (closed.Count == 0)
+            if (closed.Count > 0)
             {
-                var pts2d = new List<Point2d>();
-                foreach (var c in segments)
+                outlineCurve = closed
+                    .OrderByDescending(c => ScoreClosedOutlineCurve(c, tolerance))
+                    .FirstOrDefault();
+            }
+
+            Curve hullCurve = null;
+            var pts2d = new List<Point2d>();
+            foreach (var c in segments)
+            {
+                if (c == null)
                 {
-                    if (c == null)
-                    {
-                        continue;
-                    }
-
-                    Point3d p0 = c.PointAtStart;
-                    Point3d p1 = c.PointAtEnd;
-                    Point3d pm = c.PointAtNormalizedLength(0.5);
-
-                    pts2d.Add(new Point2d(p0.X, p0.Y));
-                    pts2d.Add(new Point2d(p1.X, p1.Y));
-                    pts2d.Add(new Point2d(pm.X, pm.Y));
+                    continue;
                 }
 
-                if (pts2d.Count >= 3)
-                {
-                    int[] hullIndices;
-                    var hull = PolylineCurve.CreateConvexHull2d(
-                        pts2d.ToArray(),
-                        out hullIndices
-                    );
+                Point3d p0 = c.PointAtStart;
+                Point3d p1 = c.PointAtEnd;
+                Point3d pm = c.PointAtNormalizedLength(0.5);
 
-                    if (hull != null && hull.IsClosed)
-                    {
-                        outlineCurve = hull;
-                    }
+                pts2d.Add(new Point2d(p0.X, p0.Y));
+                pts2d.Add(new Point2d(p1.X, p1.Y));
+                pts2d.Add(new Point2d(pm.X, pm.Y));
+            }
+
+            if (pts2d.Count >= 3)
+            {
+                int[] hullIndices;
+                var hull = PolylineCurve.CreateConvexHull2d(
+                    pts2d.ToArray(),
+                    out hullIndices
+                );
+
+                if (hull != null && hull.IsClosed)
+                {
+                    hullCurve = hull;
                 }
             }
 
-            if (outlineCurve == null && closed.Count == 0)
+            if (outlineCurve != null && hullCurve != null)
+            {
+                double outlineArea = GetCurveAreaOrBboxArea(outlineCurve, tolerance);
+                double hullArea = GetCurveAreaOrBboxArea(hullCurve, tolerance);
+                if (hullArea > outlineArea * 1.25)
+                {
+                    outlineCurve = hullCurve;
+                }
+            }
+
+            if (outlineCurve == null)
+            {
+                outlineCurve = hullCurve;
+            }
+
+            if (outlineCurve == null)
             {
                 BoundingBox bbox = brep.GetBoundingBox(workingPlane);
                 if (!bbox.IsValid)
@@ -499,16 +557,6 @@ public static partial class Serializer
                 );
 
                 outlineCurve = rect.ToNurbsCurve();
-            }
-
-            if (outlineCurve == null && closed.Count > 0)
-            {
-                outlineCurve = closed
-                    .Select(c => new { Curve = c, Props = AreaMassProperties.Compute(c) })
-                    .Where(x => x.Props != null)
-                    .OrderByDescending(x => Math.Abs(x.Props.Area))
-                    .Select(x => x.Curve)
-                    .FirstOrDefault();
             }
 
             if (outlineCurve == null)

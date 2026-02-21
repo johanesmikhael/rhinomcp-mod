@@ -11,7 +11,8 @@ namespace RhinoMCPModPlugin.Functions;
 
 public partial class RhinoMCPModFunctions
 {
-    private const string PoseStorageKey = "rhinomcp_mod.pose.v1";
+    private const string PoseStorageKey = "rhinomcp.pose.v1";
+    private const string ObbStorageKey = "rhinomcp.obb.v1";
 
     private static JArray BuildIdentityRotation()
     {
@@ -245,10 +246,208 @@ public partial class RhinoMCPModFunctions
         }
     }
 
+    private static JObject BuildBboxSnapshot(BoundingBox bbox)
+    {
+        return new JObject
+        {
+            ["min"] = new JArray
+            {
+                Math.Round(bbox.Min.X, 6),
+                Math.Round(bbox.Min.Y, 6),
+                Math.Round(bbox.Min.Z, 6)
+            },
+            ["max"] = new JArray
+            {
+                Math.Round(bbox.Max.X, 6),
+                Math.Round(bbox.Max.Y, 6),
+                Math.Round(bbox.Max.Z, 6)
+            }
+        };
+    }
+
+    private static bool TryReadVec3(JToken token, out double x, out double y, out double z)
+    {
+        x = y = z = 0.0;
+        if (token is not JArray arr || arr.Count < 3)
+        {
+            return false;
+        }
+
+        x = arr[0]?.ToObject<double>() ?? 0.0;
+        y = arr[1]?.ToObject<double>() ?? 0.0;
+        z = arr[2]?.ToObject<double>() ?? 0.0;
+        return true;
+    }
+
+    private static bool IsBboxSnapshotValidForObject(JObject snapshot, RhinoObject obj)
+    {
+        if (snapshot == null || obj?.Geometry == null)
+        {
+            return false;
+        }
+
+        if (!TryReadVec3(snapshot["min"], out double minX, out double minY, out double minZ) ||
+            !TryReadVec3(snapshot["max"], out double maxX, out double maxY, out double maxZ))
+        {
+            return false;
+        }
+
+        BoundingBox bbox = obj.Geometry.GetBoundingBox(true);
+        if (!bbox.IsValid)
+        {
+            return false;
+        }
+
+        double tol = Math.Max((RhinoDoc.ActiveDoc?.ModelAbsoluteTolerance ?? 0.01) * 10.0, 1e-4);
+        return Math.Abs(minX - bbox.Min.X) <= tol &&
+               Math.Abs(minY - bbox.Min.Y) <= tol &&
+               Math.Abs(minZ - bbox.Min.Z) <= tol &&
+               Math.Abs(maxX - bbox.Max.X) <= tol &&
+               Math.Abs(maxY - bbox.Max.Y) <= tol &&
+               Math.Abs(maxZ - bbox.Max.Z) <= tol;
+    }
+
+    private static JObject BuildStoredObbPayload(RhinoObject obj, JObject geometry)
+    {
+        if (obj?.Geometry == null || geometry == null)
+        {
+            return null;
+        }
+
+        if (geometry["obb"] is not JObject obb)
+        {
+            return null;
+        }
+
+        BoundingBox bbox = obj.Geometry.GetBoundingBox(true);
+        if (!bbox.IsValid)
+        {
+            return null;
+        }
+
+        var payload = new JObject
+        {
+            ["bbox_world"] = BuildBboxSnapshot(bbox),
+            ["obb"] = obb.DeepClone()
+        };
+
+        if (geometry["proj_outline_world"] is JObject projOutlineWorld)
+        {
+            payload["proj_outline_world"] = projOutlineWorld.DeepClone();
+        }
+
+        if (geometry["surface_edges_world"] is JObject surfaceEdgesWorld)
+        {
+            payload["surface_edges_world"] = surfaceEdgesWorld.DeepClone();
+        }
+
+        return payload;
+    }
+
+    private bool TryReadStoredObb(RhinoObject obj, out JObject payload)
+    {
+        payload = null;
+        string raw = obj?.Attributes?.GetUserString(ObbStorageKey);
+        if (string.IsNullOrWhiteSpace(raw))
+        {
+            return false;
+        }
+
+        try
+        {
+            if (JObject.Parse(raw) is not JObject parsed)
+            {
+                return false;
+            }
+
+            if (!IsBboxSnapshotValidForObject(parsed["bbox_world"] as JObject, obj))
+            {
+                return false;
+            }
+
+            if (parsed["obb"] is not JObject)
+            {
+                return false;
+            }
+
+            payload = parsed;
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private void WriteStoredObb(RhinoObject obj, JObject geometry)
+    {
+        if (obj == null || geometry == null)
+        {
+            return;
+        }
+
+        JObject payload = BuildStoredObbPayload(obj, geometry);
+        if (payload == null)
+        {
+            return;
+        }
+
+        obj.Attributes.SetUserString(ObbStorageKey, payload.ToString(Newtonsoft.Json.Formatting.None));
+        obj.CommitChanges();
+    }
+
+    private void RefreshStoredObbFromObject(RhinoObject obj, int outlineMaxPoints = 32)
+    {
+        if (obj?.Geometry == null)
+        {
+            return;
+        }
+
+        var summary = Serializer.RhinoObject(obj, includeGeometrySummary: true, outlineMaxPoints: outlineMaxPoints);
+        if (summary["geometry"] is JObject geometry && geometry["obb"] is JObject)
+        {
+            WriteStoredObb(obj, geometry);
+        }
+    }
+
+    private void InjectStoredObbIntoSummary(RhinoObject obj, JObject summary)
+    {
+        if (summary?["geometry"] is not JObject geometry)
+        {
+            return;
+        }
+
+        if (TryReadStoredObb(obj, out JObject cachedPayload))
+        {
+            if (cachedPayload["obb"] is JObject cachedObb)
+            {
+                geometry["obb"] = cachedObb.DeepClone();
+            }
+
+            if (cachedPayload["proj_outline_world"] is JObject cachedProjOutline)
+            {
+                geometry["proj_outline_world"] = cachedProjOutline.DeepClone();
+            }
+
+            if (cachedPayload["surface_edges_world"] is JObject cachedSurfaceEdges)
+            {
+                geometry["surface_edges_world"] = cachedSurfaceEdges.DeepClone();
+            }
+
+            return;
+        }
+
+        if (geometry["obb"] is JObject)
+        {
+            WriteStoredObb(obj, geometry);
+        }
+    }
+
     private JObject BuildPublicAttributes(RhinoObject obj)
     {
         var attributes = Serializer.RhinoObjectAttributes(obj);
         attributes.Remove(PoseStorageKey);
+        attributes.Remove(ObbStorageKey);
         return attributes;
     }
 

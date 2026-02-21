@@ -15,6 +15,7 @@ public partial class RhinoMCPModFunctions
         var outlineMaxPoints = parameters["outline_max_points"]?.ToObject<int>() ?? 0;
         var data = Serializer.RhinoObject(obj, includeGeometrySummary: true, outlineMaxPoints: outlineMaxPoints);
         InjectStoredPoseIntoSummary(obj, data);
+        InjectStoredObbIntoSummary(obj, data);
         return data;
     }
 }

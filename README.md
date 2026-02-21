@@ -6,9 +6,12 @@ RhinoMCP Mod is a derivative work based on the original [RhinoMCP](https://githu
 - This repository adapts and extends the original implementation.
 
 
-## What Is Different In This Mod
+## Let your AI agents see the geometry
 
-This fork is focused on **better geometry understanding** and **topological context** for AI-driven design in Rhino.
+<img src="images/screenshot.png" alt="Geometry and Topological context" width="400">
+
+
+This repository extends Rhino MCP with deeper geometric and topological context for AI-assisted design in Rhino3D.
 
 ### 1. Improved Geometry Understanding
 
