@@ -1,6 +1,6 @@
 # RhinoMCP Mod
 
-RhinoMCP Mod is a derivative work based on the original [RhinoMCP](https://github.com/jingcheng-chen/rhinomcp) project by Jingcheng Chen.
+RhinoMCP Mod is a derivative work based on the original [RhinoMCP](https://github.com/jingcheng-chen/rhinomcp).
 
 - Original project: `jingcheng-chen/rhinomcp`
 - This repository adapts and extends the original implementation.
