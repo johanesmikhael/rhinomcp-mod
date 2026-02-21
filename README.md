@@ -18,7 +18,7 @@ Compared to baseline object metadata, this mod exposes richer geometric semantic
 - `pose.world_from_local` frames for lines, curves/polylines, breps, and extrusions
 - Planarity-aware curve/polyline summaries
 - OBB-oriented summaries for complex solids (brep/extrusion)
-- Geometry details suitable for downstream reasoning, not just display
+- Geometry details suitable for downstream reasoning
 
 ### 2. Added Topological Context
 
@@ -131,14 +131,6 @@ Keep only one server enabled at a time (`rhino` or `rhino-dev`) to avoid duplica
 3. Open Claude Desktop.
 4. Confirm Rhino tools appear in Claude (hammer/tools icon).
 
-## Screenshots (To Add)
-
-- Rhino Package Manager install screen (macOS) for `rhinomcp-mod`
-- Rhino Package Manager install screen (Windows) for `rhinomcp-mod`
-- `mcpmodstart` command in Rhino
-- `mcpmodgraph` connectivity graph visualization
-- Claude Desktop MCP config screen
-- Claude tools enabled screen
 
 ## Credits
 
