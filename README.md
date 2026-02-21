@@ -137,5 +137,4 @@ Keep only one server enabled at a time (`rhino` or `rhino-dev`) to avoid duplica
 
 ## Credits
 
-- Original project and concept: [Jingcheng Chen](https://github.com/jingcheng-chen)
-- Upstream repository: [jingcheng-chen/rhinomcp](https://github.com/jingcheng-chen/rhinomcp)
+- Original project and concept: [Jingcheng Chen](https://github.com/jingcheng-chen/rhinomcp)
