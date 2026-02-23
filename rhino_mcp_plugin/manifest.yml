@@ -1,5 +1,5 @@
 name: rhinomcp-mod
-version: 0.1.0
+version: 0.1.1
 authors:
   - Mikhael Johanes
 description: Mod of Rhino integration through the Model Context Protocol with improved geometry and topology understanding

@@ -187,6 +187,7 @@ public partial class RhinoMCPModFunctions
             }
             doc.Objects.ModifyAttributes(rhinoObject, rhinoObject.Attributes, true);
             GetOrBootstrapPose(rhinoObject);
+            RefreshStoredObbFromObject(rhinoObject);
         }
 
         // Update views

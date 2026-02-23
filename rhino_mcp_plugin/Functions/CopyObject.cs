@@ -39,10 +39,12 @@ public partial class RhinoMCPModFunctions
         var copiedObject = getObjectByIdOrName(new JObject { ["id"] = newId.ToString() });
         var copiedPose = ApplyTransformToPose(sourcePose, xform, sourceCenter);
         WriteStoredPose(copiedObject, copiedPose);
+        RefreshStoredObbFromObject(copiedObject);
 
         doc.Views.Redraw();
         var data = Serializer.RhinoObject(copiedObject, includeGeometrySummary: true, outlineMaxPoints: 32);
         InjectStoredPoseIntoSummary(copiedObject, data);
+        InjectStoredObbIntoSummary(copiedObject, data);
         return data;
     }
 }

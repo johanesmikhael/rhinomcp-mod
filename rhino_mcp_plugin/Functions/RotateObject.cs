@@ -34,6 +34,7 @@ public partial class RhinoMCPModFunctions
         var updatedObject = getObjectByIdOrName(new JObject { ["id"] = obj.Id.ToString() });
         var poseAfter = ApplyTransformToPose(poseBefore, xform, center);
         WriteStoredPose(updatedObject, poseAfter);
+        RefreshStoredObbFromObject(updatedObject);
         return BuildMinimalObjectState(updatedObject, new[] { "pose", "position" });
     }
 }
