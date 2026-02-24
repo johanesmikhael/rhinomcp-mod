@@ -165,16 +165,88 @@ namespace rhinomcp_mod.Serializers
             else if (obj.Geometry is Rhino.Geometry.Extrusion extrusion)
             {
                 objInfo["type"] = "EXTRUSION";
-                objInfo["geometry"] = SerializeExtrusionGeometry(extrusion, includeGeometrySummary, outlineMaxPoints);
+                Plane? storedPosePlane = TryReadStoredPosePlane(obj, out Plane planeFromPose) ? planeFromPose : null;
+                objInfo["geometry"] = SerializeExtrusionGeometry(extrusion, includeGeometrySummary, outlineMaxPoints, storedPosePlane);
             }
             else if (obj.Geometry is Rhino.Geometry.Brep brep)
             {
                 string brepType;
-                objInfo["geometry"] = SerializeBrepGeometry(brep, includeGeometrySummary, outlineMaxPoints, out brepType);
+                Plane? storedPosePlane = TryReadStoredPosePlane(obj, out Plane planeFromPose) ? planeFromPose : null;
+                objInfo["geometry"] = SerializeBrepGeometry(brep, includeGeometrySummary, outlineMaxPoints, out brepType, storedPosePlane);
                 objInfo["type"] = brepType;
             }
 
             return objInfo;
+        }
+
+        private static bool TryReadStoredPosePlane(RhinoObject obj, out Plane plane)
+        {
+            plane = Plane.WorldXY;
+            const string poseStorageKey = "rhinomcp_mod.pose.v1";
+            string raw = obj?.Attributes?.GetUserString(poseStorageKey);
+            if (string.IsNullOrWhiteSpace(raw))
+            {
+                return false;
+            }
+
+            try
+            {
+                if (JObject.Parse(raw)?["world_from_local"] is not JObject worldFromLocal)
+                {
+                    return false;
+                }
+                if (worldFromLocal["R"] is not JArray r || r.Count != 3)
+                {
+                    return false;
+                }
+                if (r[0] is not JArray r0 || r0.Count != 3 ||
+                    r[1] is not JArray r1 || r1.Count != 3 ||
+                    r[2] is not JArray r2 || r2.Count != 3)
+                {
+                    return false;
+                }
+                if (worldFromLocal["t"] is not JArray t || t.Count != 3)
+                {
+                    return false;
+                }
+
+                var xAxis = new Vector3d(
+                    r0[0]?.ToObject<double>() ?? 0.0,
+                    r1[0]?.ToObject<double>() ?? 0.0,
+                    r2[0]?.ToObject<double>() ?? 0.0
+                );
+                var yAxis = new Vector3d(
+                    r0[1]?.ToObject<double>() ?? 0.0,
+                    r1[1]?.ToObject<double>() ?? 0.0,
+                    r2[1]?.ToObject<double>() ?? 0.0
+                );
+                var zAxis = new Vector3d(
+                    r0[2]?.ToObject<double>() ?? 0.0,
+                    r1[2]?.ToObject<double>() ?? 0.0,
+                    r2[2]?.ToObject<double>() ?? 0.0
+                );
+                var origin = new Point3d(
+                    t[0]?.ToObject<double>() ?? 0.0,
+                    t[1]?.ToObject<double>() ?? 0.0,
+                    t[2]?.ToObject<double>() ?? 0.0
+                );
+
+                if (!xAxis.Unitize() || !yAxis.Unitize() || !zAxis.Unitize())
+                {
+                    return false;
+                }
+                if (Math.Abs(Vector3d.Multiply(Vector3d.CrossProduct(xAxis, yAxis), zAxis)) < 0.9)
+                {
+                    return false;
+                }
+
+                plane = new Plane(origin, xAxis, yAxis);
+                return plane.IsValid;
+            }
+            catch
+            {
+                return false;
+            }
         }
     }
 }

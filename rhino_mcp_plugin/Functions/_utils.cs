@@ -199,6 +199,8 @@ public partial class RhinoMCPModFunctions
         BoundingBox bbox = obj.Geometry.GetBoundingBox(true);
         JObject canonical = CanonicalizePose((JObject)pose.DeepClone(), bbox.Center);
         obj.Attributes.SetUserString(PoseStorageKey, canonical.ToString(Newtonsoft.Json.Formatting.None));
+        // Pose changes invalidate pose-dependent OBB/projection cache.
+        obj.Attributes.DeleteUserString(ObbStorageKey);
         obj.CommitChanges();
     }
 
@@ -417,6 +419,40 @@ public partial class RhinoMCPModFunctions
             return;
         }
 
+        if (geometry["pose"] is JObject pose &&
+            TryReadPoseFrame(pose, out Vector3d xAxis, out Vector3d yAxis, out _, out Point3d origin))
+        {
+            Plane posePlane = new Plane(origin, xAxis, yAxis);
+            BoundingBox obbBox = obj.Geometry.GetBoundingBox(posePlane);
+            if (obbBox.IsValid)
+            {
+                Box obb = new Box(posePlane, obbBox);
+                var obbCorners = new JArray();
+                foreach (var pt in obb.GetCorners())
+                {
+                    obbCorners.Add(new JArray
+                    {
+                        Math.Round(pt.X, 2),
+                        Math.Round(pt.Y, 2),
+                        Math.Round(pt.Z, 2)
+                    });
+                }
+
+                geometry["obb"] = new JObject
+                {
+                    ["extents"] = new JArray
+                    {
+                        Math.Round(obb.X.Length, 2),
+                        Math.Round(obb.Y.Length, 2),
+                        Math.Round(obb.Z.Length, 2)
+                    },
+                    ["world_corners"] = obbCorners
+                };
+                WriteStoredObb(obj, geometry);
+                return;
+            }
+        }
+
         if (TryReadStoredObb(obj, out JObject cachedPayload))
         {
             if (cachedPayload["obb"] is JObject cachedObb)
@@ -511,6 +547,8 @@ public partial class RhinoMCPModFunctions
 
     private static void ReprojectBrepLocals(JObject geometry, Vector3d xAxis, Vector3d yAxis, Vector3d zAxis, Point3d origin)
     {
+        Plane posePlane = new Plane(origin, xAxis, yAxis);
+
         if (geometry["surface_edges_world"] is JObject sew &&
             sew["points"] is JArray worldPoints)
         {
@@ -535,15 +573,29 @@ public partial class RhinoMCPModFunctions
             pow["points"] is JArray outlineWorld)
         {
             var local2d = new JArray();
+            var projectedWorld = new JArray();
             foreach (var token in outlineWorld)
             {
                 if (TryParsePointToken(token, out Point3d world))
                 {
-                    var local = BuildLocalPoint(world, xAxis, yAxis, zAxis, origin);
+                    Point3d projected = posePlane.ClosestPoint(world);
+                    projectedWorld.Add(new JArray
+                    {
+                        Math.Round(projected.X, 2),
+                        Math.Round(projected.Y, 2),
+                        Math.Round(projected.Z, 2)
+                    });
+
+                    var local = BuildLocalPoint(projected, xAxis, yAxis, zAxis, origin);
                     local2d.Add(new JArray { local[0], local[1] });
                 }
             }
 
+            geometry["proj_outline_world"] = new JObject
+            {
+                ["points"] = projectedWorld,
+                ["closed"] = pow["closed"]?.DeepClone()
+            };
             geometry["proj_outline_local_xy"] = new JObject
             {
                 ["points"] = local2d,

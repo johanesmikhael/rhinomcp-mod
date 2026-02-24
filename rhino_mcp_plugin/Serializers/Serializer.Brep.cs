@@ -12,7 +12,7 @@ namespace rhinomcp_mod.Serializers;
 
 public static partial class Serializer
 {
-    private static JObject SerializeBrepGeometry(Brep brep, bool includeGeometrySummary, int outlineMaxPoints, out string type)
+    private static JObject SerializeBrepGeometry(Brep brep, bool includeGeometrySummary, int outlineMaxPoints, out string type, Plane? workingPlaneOverride = null)
     {
         type = brep.Faces.Count == 1 ? "SURFACE" : "BREP";
         var geometry = new JObject();
@@ -25,7 +25,7 @@ public static partial class Serializer
 
         try
         {
-            geometry = BuildBrepGeometrySummary(brep, outlineMaxPoints);
+            geometry = BuildBrepGeometrySummary(brep, outlineMaxPoints, workingPlaneOverride);
         }
         catch
         {
@@ -320,7 +320,7 @@ public static partial class Serializer
         return primaryArea * 1000.0 + bboxArea * 10.0 + length;
     }
 
-    private static JObject BuildBrepGeometrySummary(Brep brep, int outlineMaxPoints = 16)
+    private static JObject BuildBrepGeometrySummary(Brep brep, int outlineMaxPoints = 16, Plane? workingPlaneOverride = null)
     {
         if (brep == null)
         {
@@ -335,7 +335,7 @@ public static partial class Serializer
         double tolerance = RhinoDoc.ActiveDoc.ModelAbsoluteTolerance;
         bool isSingleFace = brep.Faces.Count == 1;
 
-        Plane workingPlane = BuildBrepWorkingPlane(brep);
+        Plane workingPlane = workingPlaneOverride ?? BuildBrepWorkingPlane(brep);
 
         JArray localPoints = null;
         JArray worldPoints = null;

@@ -30,6 +30,7 @@ public partial class RhinoMCPModFunctions
         WriteStoredPose(obj, rebasedPose);
 
         var updatedObject = getObjectByIdOrName(new JObject { ["id"] = obj.Id.ToString() });
+        RefreshStoredObbFromObject(updatedObject);
         return BuildMinimalObjectState(updatedObject, new[] { "pose", "position" });
     }
 }

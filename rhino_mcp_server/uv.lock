@@ -1,5 +1,5 @@
 version = 1
-revision = 2
+revision = 3
 requires-python = ">=3.10"
 
 [[package]]
@@ -922,8 +922,8 @@ wheels = [
 ]
 
 [[package]]
-name = "rhinomcp"
-version = "0.1.3.6"
+name = "rhinomcp-mod"
+version = "0.1.1"
 source = { editable = "." }
 dependencies = [
     { name = "fastmcp" },
