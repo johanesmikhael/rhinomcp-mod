@@ -14,6 +14,8 @@ namespace rhinomcp_mod.Serializers
 {
     public static partial class Serializer
     {
+        private const string PoseStorageKey = "rhinomcp.pose.v1";
+
         public static RhinoDoc doc = RhinoDoc.ActiveDoc;
 
         public static JObject SerializeColor(Color color)
@@ -127,6 +129,15 @@ namespace rhinomcp_mod.Serializers
 
         public static JObject RhinoObject(RhinoObject obj, bool includeGeometrySummary = false, int outlineMaxPoints = 0)
         {
+            Plane? preferredWorkingPlane = null;
+            bool hasStoredWorkingPlane = TryReadStoredPosePlane(obj, out Plane storedPlane);
+            if (hasStoredWorkingPlane)
+            {
+                preferredWorkingPlane = storedPlane;
+            }
+            bool hasPoseUserString = !string.IsNullOrWhiteSpace(obj?.Attributes?.GetUserString(PoseStorageKey));
+            string workingPlaneSource = hasStoredWorkingPlane ? "stored_pose" : "geometry_fallback";
+
             var objInfo = new JObject
             {
                 ["id"] = obj.Id.ToString(),
@@ -165,14 +176,24 @@ namespace rhinomcp_mod.Serializers
             else if (obj.Geometry is Rhino.Geometry.Extrusion extrusion)
             {
                 objInfo["type"] = "EXTRUSION";
-                Plane? storedPosePlane = TryReadStoredPosePlane(obj, out Plane planeFromPose) ? planeFromPose : null;
-                objInfo["geometry"] = SerializeExtrusionGeometry(extrusion, includeGeometrySummary, outlineMaxPoints, storedPosePlane);
+                if (includeGeometrySummary)
+                {
+                    RhinoApp.WriteLine(
+                        $"[outline-debug] object={obj.Id} type=EXTRUSION plane_source={workingPlaneSource} pose_user_string={hasPoseUserString}"
+                    );
+                }
+                objInfo["geometry"] = SerializeExtrusionGeometry(extrusion, includeGeometrySummary, outlineMaxPoints, preferredWorkingPlane);
             }
             else if (obj.Geometry is Rhino.Geometry.Brep brep)
             {
                 string brepType;
-                Plane? storedPosePlane = TryReadStoredPosePlane(obj, out Plane planeFromPose) ? planeFromPose : null;
-                objInfo["geometry"] = SerializeBrepGeometry(brep, includeGeometrySummary, outlineMaxPoints, out brepType, storedPosePlane);
+                if (includeGeometrySummary)
+                {
+                    RhinoApp.WriteLine(
+                        $"[outline-debug] object={obj.Id} type=BREP plane_source={workingPlaneSource} pose_user_string={hasPoseUserString}"
+                    );
+                }
+                objInfo["geometry"] = SerializeBrepGeometry(brep, includeGeometrySummary, outlineMaxPoints, out brepType, preferredWorkingPlane);
                 objInfo["type"] = brepType;
             }
 
@@ -182,7 +203,7 @@ namespace rhinomcp_mod.Serializers
         private static bool TryReadStoredPosePlane(RhinoObject obj, out Plane plane)
         {
             plane = Plane.WorldXY;
-            const string poseStorageKey = "rhinomcp_mod.pose.v1";
+            const string poseStorageKey = PoseStorageKey;
             string raw = obj?.Attributes?.GetUserString(poseStorageKey);
             if (string.IsNullOrWhiteSpace(raw))
             {
@@ -235,7 +256,23 @@ namespace rhinomcp_mod.Serializers
                 {
                     return false;
                 }
-                if (Math.Abs(Vector3d.Multiply(Vector3d.CrossProduct(xAxis, yAxis), zAxis)) < 0.9)
+
+                // Preserve stored pose orientation: keep z axis direction, then orthonormalize x/y around it.
+                xAxis = xAxis - (Vector3d.Multiply(xAxis, zAxis) * zAxis);
+                if (!xAxis.Unitize())
+                {
+                    return false;
+                }
+
+                yAxis = Vector3d.CrossProduct(zAxis, xAxis);
+                if (!yAxis.Unitize())
+                {
+                    return false;
+                }
+
+                // Recompute x to remove accumulated numeric drift.
+                xAxis = Vector3d.CrossProduct(yAxis, zAxis);
+                if (!xAxis.Unitize())
                 {
                     return false;
                 }

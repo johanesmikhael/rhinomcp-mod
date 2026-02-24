@@ -206,18 +206,12 @@ public partial class RhinoMCPModFunctions
 
     private JObject GetOrBootstrapPose(RhinoObject obj)
     {
-        JObject canonical = BuildCanonicalPoseFromObject(obj);
         if (TryReadStoredPose(obj, out JObject stored))
         {
-            if (IsPoseEquivalentForValidity(stored, canonical))
-            {
-                return stored;
-            }
-
-            WriteStoredPose(obj, canonical);
-            return canonical;
+            return stored;
         }
 
+        JObject canonical = BuildCanonicalPoseFromObject(obj);
         WriteStoredPose(obj, canonical);
         return canonical;
     }
@@ -244,7 +238,6 @@ public partial class RhinoMCPModFunctions
         {
             JObject pose = GetOrBootstrapPose(obj);
             geometry["pose"] = pose;
-            ReprojectGeometryLocalsFromPose(geometry, pose);
         }
     }
 
@@ -486,136 +479,6 @@ public partial class RhinoMCPModFunctions
         attributes.Remove(ObbStorageKey);
         return attributes;
     }
-
-    private static bool TryParsePointToken(JToken token, out Point3d point)
-    {
-        point = Point3d.Origin;
-        if (token is not JArray arr || arr.Count < 3)
-        {
-            return false;
-        }
-
-        point = new Point3d(
-            arr[0]?.ToObject<double>() ?? 0.0,
-            arr[1]?.ToObject<double>() ?? 0.0,
-            arr[2]?.ToObject<double>() ?? 0.0
-        );
-        return true;
-    }
-
-    private static JArray BuildLocalPoint(Point3d worldPoint, Vector3d xAxis, Vector3d yAxis, Vector3d zAxis, Point3d origin)
-    {
-        Vector3d d = worldPoint - origin;
-        return new JArray
-        {
-            Math.Round(Vector3d.Multiply(d, xAxis), 2),
-            Math.Round(Vector3d.Multiply(d, yAxis), 2),
-            Math.Round(Vector3d.Multiply(d, zAxis), 2)
-        };
-    }
-
-    private static void ReprojectLineLocals(JObject geometry, Vector3d xAxis, Vector3d yAxis, Vector3d zAxis, Point3d origin)
-    {
-        if (geometry["world_start"] is JToken ws && TryParsePointToken(ws, out Point3d start))
-        {
-            geometry["local_start"] = BuildLocalPoint(start, xAxis, yAxis, zAxis, origin);
-        }
-        if (geometry["world_end"] is JToken we && TryParsePointToken(we, out Point3d end))
-        {
-            geometry["local_end"] = BuildLocalPoint(end, xAxis, yAxis, zAxis, origin);
-        }
-    }
-
-    private static void ReprojectCurveOrPolylineLocals(JObject geometry, Vector3d xAxis, Vector3d yAxis, Vector3d zAxis, Point3d origin)
-    {
-        if (geometry["world_points"] is not JArray worldPoints)
-        {
-            return;
-        }
-
-        var localPoints = new JArray();
-        foreach (var token in worldPoints)
-        {
-            if (TryParsePointToken(token, out Point3d world))
-            {
-                localPoints.Add(BuildLocalPoint(world, xAxis, yAxis, zAxis, origin));
-            }
-        }
-
-        geometry["local_points"] = localPoints;
-    }
-
-    private static void ReprojectBrepLocals(JObject geometry, Vector3d xAxis, Vector3d yAxis, Vector3d zAxis, Point3d origin)
-    {
-        Plane posePlane = new Plane(origin, xAxis, yAxis);
-
-        if (geometry["surface_edges_world"] is JObject sew &&
-            sew["points"] is JArray worldPoints)
-        {
-            var local2d = new JArray();
-            foreach (var token in worldPoints)
-            {
-                if (TryParsePointToken(token, out Point3d world))
-                {
-                    var local = BuildLocalPoint(world, xAxis, yAxis, zAxis, origin);
-                    local2d.Add(new JArray { local[0], local[1] });
-                }
-            }
-
-            geometry["surface_edges_local"] = new JObject
-            {
-                ["points"] = local2d,
-                ["closed"] = sew["closed"]?.DeepClone()
-            };
-        }
-
-        if (geometry["proj_outline_world"] is JObject pow &&
-            pow["points"] is JArray outlineWorld)
-        {
-            var local2d = new JArray();
-            var projectedWorld = new JArray();
-            foreach (var token in outlineWorld)
-            {
-                if (TryParsePointToken(token, out Point3d world))
-                {
-                    Point3d projected = posePlane.ClosestPoint(world);
-                    projectedWorld.Add(new JArray
-                    {
-                        Math.Round(projected.X, 2),
-                        Math.Round(projected.Y, 2),
-                        Math.Round(projected.Z, 2)
-                    });
-
-                    var local = BuildLocalPoint(projected, xAxis, yAxis, zAxis, origin);
-                    local2d.Add(new JArray { local[0], local[1] });
-                }
-            }
-
-            geometry["proj_outline_world"] = new JObject
-            {
-                ["points"] = projectedWorld,
-                ["closed"] = pow["closed"]?.DeepClone()
-            };
-            geometry["proj_outline_local_xy"] = new JObject
-            {
-                ["points"] = local2d,
-                ["closed"] = pow["closed"]?.DeepClone()
-            };
-        }
-    }
-
-    private static void ReprojectGeometryLocalsFromPose(JObject geometry, JObject pose)
-    {
-        if (!TryReadPoseFrame(pose, out Vector3d xAxis, out Vector3d yAxis, out Vector3d zAxis, out Point3d origin))
-        {
-            return;
-        }
-
-        ReprojectLineLocals(geometry, xAxis, yAxis, zAxis, origin);
-        ReprojectCurveOrPolylineLocals(geometry, xAxis, yAxis, zAxis, origin);
-        ReprojectBrepLocals(geometry, xAxis, yAxis, zAxis, origin);
-    }
-
     private static bool IsPoseEquivalentForValidity(JObject storedPose, JObject derivedPose)
     {
         if (!TryReadPoseFrame(storedPose, out Vector3d sx, out Vector3d sy, out Vector3d sz, out Point3d st))
@@ -737,6 +600,7 @@ public partial class RhinoMCPModFunctions
     {
         var summary = Serializer.RhinoObject(obj, true, 32);
         InjectStoredPoseIntoSummary(obj, summary);
+        InjectStoredObbIntoSummary(obj, summary);
         var geometry = summary["geometry"] as JObject;
         BoundingBox bbox = obj.Geometry.GetBoundingBox(true);
         Point3d center = bbox.Center;
