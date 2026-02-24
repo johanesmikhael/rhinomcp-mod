@@ -26,3 +26,5 @@ from .tools.rebase_objects_pose import rebase_objects_pose
 from .tools.create_layer import create_layer
 from .tools.get_or_set_current_layer import get_or_set_current_layer
 from .tools.delete_layer import delete_layer
+from .tools.open_file import open_file
+from .tools.close_file import close_file

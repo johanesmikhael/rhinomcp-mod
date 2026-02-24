@@ -217,6 +217,8 @@ def get_rhino_connection():
 # Main execution
 def main():
     """Run the MCP server"""
+    # Import package root so @mcp.tool/@mcp.prompt decorators in __init__ imports are executed.
+    import rhinomcp  # noqa: F401
     mcp.run()
     # mcp.run(transport="streamable-http")
 

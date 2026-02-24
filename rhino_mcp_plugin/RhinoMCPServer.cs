@@ -33,6 +33,16 @@ namespace RhinoMCPModPlugin
         private Thread serverThread;
         private readonly object lockObject = new object();
         private RhinoMCPModFunctions handler;
+        public bool IsRunning
+        {
+            get
+            {
+                lock (lockObject)
+                {
+                    return running;
+                }
+            }
+        }
 
         public RhinoMCPModServer(string host = "127.0.0.1", int port = 1999)
         {
@@ -121,7 +131,7 @@ namespace RhinoMCPModPlugin
         {
             RhinoApp.WriteLine("Server thread started");
 
-            while (IsRunning())
+            while (IsRunningInternal())
             {
                 try
                 {
@@ -150,7 +160,7 @@ namespace RhinoMCPModPlugin
                 {
                     RhinoApp.WriteLine($"Error in server loop: {e.Message}");
 
-                    if (!IsRunning())
+                    if (!IsRunningInternal())
                         break;
 
                     Thread.Sleep(500);
@@ -160,7 +170,7 @@ namespace RhinoMCPModPlugin
             RhinoApp.WriteLine("Server thread stopped");
         }
 
-        private bool IsRunning()
+        private bool IsRunningInternal()
         {
             lock (lockObject)
             {
@@ -179,7 +189,7 @@ namespace RhinoMCPModPlugin
             {
                 NetworkStream stream = client.GetStream();
 
-                while (IsRunning())
+                while (IsRunningInternal())
                 {
                     try
                     {
@@ -329,14 +339,21 @@ namespace RhinoMCPModPlugin
                 ["execute_rhinoscript_python_code"] = this.handler.ExecuteRhinoscript,
                 ["create_layer"] = this.handler.CreateLayer,
                 ["get_or_set_current_layer"] = this.handler.GetOrSetCurrentLayer,
-                ["delete_layer"] = this.handler.DeleteLayer
+                ["delete_layer"] = this.handler.DeleteLayer,
+                ["open_file"] = this.handler.OpenFile,
+                ["close_file"] = this.handler.CloseFile
                 // Add more handlers as needed
             };
 
             if (handlers.TryGetValue(cmdType, out var handler))
             {
+                bool useUndoRecord = cmdType != "open_file" && cmdType != "close_file";
                 var doc = RhinoDoc.ActiveDoc;
-                var record = doc.BeginUndoRecord("Run MCP command");
+                uint record = 0;
+                if (useUndoRecord && doc != null)
+                {
+                    record = doc.BeginUndoRecord("Run MCP command");
+                }
                 try
                 {
                     JObject result = handler(parameters);
@@ -357,7 +374,10 @@ namespace RhinoMCPModPlugin
                 }
                 finally
                 {
-                    doc.EndUndoRecord(record);
+                    if (useUndoRecord && doc != null)
+                    {
+                        doc.EndUndoRecord(record);
+                    }
                 }
             }
             else

@@ -18,6 +18,12 @@ namespace RhinoMCPModPlugin
                 server = new RhinoMCPModServer();
             }
 
+            if (server.IsRunning)
+            {
+                RhinoApp.WriteLine("Server is already running.");
+                return;
+            }
+
             server.Start();
             RhinoApp.WriteLine("Server started.");
         }
@@ -26,6 +32,13 @@ namespace RhinoMCPModPlugin
         {
             if (server != null)
             {
+                if (!server.IsRunning)
+                {
+                    server = null;
+                    RhinoApp.WriteLine("Server is already stopped.");
+                    return;
+                }
+
                 server.Stop();
                 server = null;
                 RhinoApp.WriteLine("Server stopped.");
@@ -34,7 +47,7 @@ namespace RhinoMCPModPlugin
 
         public static bool IsServerRunning()
         {
-            return server != null;
+            return server != null && server.IsRunning;
         }
     }
 }

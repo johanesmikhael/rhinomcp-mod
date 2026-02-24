@@ -24,7 +24,7 @@ def get_or_set_current_layer(
     
     Examples of params:
     - name: "Layer 1"
-    - guid: "00000000-0000-0000-0000-000000000000"
+    - guid: "a-real-layer-guid-from-get_document_info"
     """
     try:
         # Get the global connection

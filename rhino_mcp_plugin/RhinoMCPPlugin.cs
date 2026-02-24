@@ -20,9 +20,18 @@ namespace RhinoMCPModPlugin
         
         ///<summary>Gets the only instance of the RhinoMCPModPlugin plug-in.</summary>
         public static RhinoMCPModPlugin Instance { get; private set; }
+        public override Rhino.PlugIns.PlugInLoadTime LoadTime => Rhino.PlugIns.PlugInLoadTime.AtStartup;
 
-        // You can override methods here to change the plug-in behavior on
-        // loading and shut down, add options pages to the Rhino _Option command
-        // and maintain plug-in wide options in a document.
+        protected override Rhino.PlugIns.LoadReturnCode OnLoad(ref string errorMessage)
+        {
+            RhinoMCPModServerController.StartServer();
+            return Rhino.PlugIns.LoadReturnCode.Success;
+        }
+
+        protected override void OnShutdown()
+        {
+            RhinoMCPModServerController.StopServer();
+            base.OnShutdown();
+        }
     }
 }

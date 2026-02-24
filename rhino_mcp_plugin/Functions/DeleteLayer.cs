@@ -23,24 +23,37 @@ public partial class RhinoMCPModFunctions
         var doc = RhinoDoc.ActiveDoc;
 
         Layer layer = null;
-        if (hasName) layer = doc.Layers.FindName(name);
-        if (hasGuid) layer = doc.Layers.FindId(Guid.Parse(guid));
-
-        if (layer == null)
+        if (hasGuid)
         {
-            return new JObject
+            if (!Guid.TryParse(guid, out Guid parsedGuid))
             {
-                ["success"] = false,
-                ["message"] = "Layer not found"
-            };
+                throw new Exception($"Invalid layer guid format: {guid}");
+            }
+            if (parsedGuid == Guid.Empty)
+            {
+                throw new Exception("Layer guid cannot be 00000000-0000-0000-0000-000000000000");
+            }
+            layer = doc.Layers.FindId(parsedGuid);
+            if (layer == null)
+            {
+                throw new Exception($"Layer not found for guid: {guid}");
+            }
         }
-        if (layer == null)
+        else if (hasName)
         {
-            return new JObject
+            if (string.IsNullOrWhiteSpace(name))
             {
-                ["success"] = false,
-                ["message"] = "Layer not found"
-            };
+                throw new Exception("Layer name cannot be empty");
+            }
+            layer = doc.Layers.FindName(name);
+            if (layer == null)
+            {
+                throw new Exception($"Layer not found for name: {name}");
+            }
+        }
+        else
+        {
+            throw new Exception("Either name or guid is required");
         }
 
         name = layer.Name;
