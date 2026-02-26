@@ -26,3 +26,6 @@ test*
 venv/
 .idea/
 *.code-workspace
+
+
+tutorial/
