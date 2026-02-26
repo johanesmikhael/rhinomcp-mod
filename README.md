@@ -19,6 +19,10 @@ Compared to baseline object metadata, this mod exposes richer geometric semantic
 - OBB-oriented summaries for complex solids (brep/extrusion)
 - Geometry details suitable for downstream reasoning
 
+Rhino visualization command for this geometry cache:
+
+- Rhino command: `mcpmodobb` (toggle OBB + projection profile display)
+
 ### 2. Added Topological Context
 
 This mod adds a connectivity graph pipeline:
@@ -126,9 +130,10 @@ Keep only one server enabled at a time (`rhino` or `rhino-dev`) to avoid duplica
 ### 4. Start and Verify
 
 1. Start Rhino and run `mcpmodstart`.
-2. Optional: run `mcpmodgraph` to toggle connectivity graph display.
-3. Open Claude Desktop.
-4. Confirm Rhino tools appear in Claude (hammer/tools icon).
+2. Optional: run `mcpmodobb` to toggle OBB + projection profile visualization.
+3. Optional: run `mcpmodgraph` to toggle connectivity graph display.
+4. Open Claude Desktop.
+5. Confirm Rhino tools appear in Claude (hammer/tools icon).
 
 
 ## Credits
