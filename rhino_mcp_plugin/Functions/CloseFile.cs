@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Threading;
 using Newtonsoft.Json.Linq;
 using Rhino;
 
@@ -65,7 +66,7 @@ public partial class RhinoMCPModFunctions
             doc.Modified = false;
         }
 
-        if (!TryCloseDocument(docSerialBeforeClose, saveChanges))
+        if (!TryCloseDocument(docSerialBeforeClose, pathBeforeClose))
         {
             throw new Exception("Failed to close active document");
         }
@@ -81,23 +82,30 @@ public partial class RhinoMCPModFunctions
         };
     }
 
-    private static bool TryCloseDocument(uint docSerialBeforeClose, bool saveChanges)
+    private static bool TryCloseDocument(uint docSerialBeforeClose, string pathBeforeClose)
     {
         var commands = new List<string>();
 
-        if (!saveChanges)
+        if (!string.IsNullOrWhiteSpace(pathBeforeClose))
         {
-            // Modified flag should already be cleared above; close without prompt options.
-            commands.Add("_-Close _Enter");
-            commands.Add("-_Close _Enter");
-            commands.Add("_Close");
+            // On macOS, explicitly targeting the path avoids interactive close-path prompts.
+            string escapedPath = pathBeforeClose.Replace("\"", "\"\"");
+            commands.Add($"_-Close \"{escapedPath}\" _Enter");
+            commands.Add($"-_Close \"{escapedPath}\" _Enter");
         }
-        else
-        {
-            commands.Add("_-Close _Enter");
-            commands.Add("-_Close _Enter");
-            commands.Add("_Close");
-        }
+
+        // Prefer explicit option assignment first to avoid interactive prompts.
+        // If saveChanges is true, data is already saved above before we get here.
+        commands.Add("_-Close _Save=_No _Enter");
+        commands.Add("-_Close _Save=_No _Enter");
+        commands.Add("_Close _Save=_No _Enter");
+        // Legacy variants kept as fallback for command parser differences.
+        commands.Add("_-Close _No _Enter");
+        commands.Add("-_Close _No _Enter");
+        commands.Add("_Close _No _Enter");
+        commands.Add("_-Close _Enter");
+        commands.Add("-_Close _Enter");
+        commands.Add("_Close");
 
         foreach (string command in commands)
         {
@@ -107,13 +115,40 @@ public partial class RhinoMCPModFunctions
                 continue;
             }
 
-            var activeDoc = RhinoDoc.ActiveDoc;
-            if (activeDoc == null || activeDoc.RuntimeSerialNumber != docSerialBeforeClose)
+            if (WaitForDocumentToClose(docSerialBeforeClose, 500))
             {
                 return true;
             }
         }
 
         return false;
+    }
+
+    private static bool WaitForDocumentToClose(uint docSerialBeforeClose, int timeoutMs)
+    {
+        if (IsDocumentClosed(docSerialBeforeClose))
+        {
+            return true;
+        }
+
+        DateTime timeoutAt = DateTime.UtcNow.AddMilliseconds(timeoutMs);
+        while (DateTime.UtcNow < timeoutAt)
+        {
+            RhinoApp.Wait();
+            if (IsDocumentClosed(docSerialBeforeClose))
+            {
+                return true;
+            }
+
+            Thread.Sleep(20);
+        }
+
+        return IsDocumentClosed(docSerialBeforeClose);
+    }
+
+    private static bool IsDocumentClosed(uint docSerialBeforeClose)
+    {
+        var activeDoc = RhinoDoc.ActiveDoc;
+        return activeDoc == null || activeDoc.RuntimeSerialNumber != docSerialBeforeClose;
     }
 }
