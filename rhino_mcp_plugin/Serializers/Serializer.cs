@@ -16,8 +16,6 @@ namespace rhinomcp_mod.Serializers
     {
         private const string PoseStorageKey = "rhinomcp.pose.v1";
 
-        public static RhinoDoc doc = RhinoDoc.ActiveDoc;
-
         public static JObject SerializeColor(Color color)
         {
             return new JObject()
@@ -127,77 +125,140 @@ namespace rhinomcp_mod.Serializers
             return attributesDict;
         }
 
+        private static T SafeGet<T>(Func<T> getter, T fallback)
+        {
+            try
+            {
+                return getter();
+            }
+            catch
+            {
+                return fallback;
+            }
+        }
+
         public static JObject RhinoObject(RhinoObject obj, bool includeGeometrySummary = false, int outlineMaxPoints = 0)
         {
-            Plane? preferredWorkingPlane = null;
-            bool hasStoredWorkingPlane = TryReadStoredPosePlane(obj, out Plane storedPlane);
-            if (hasStoredWorkingPlane)
+            string objectIdForError = SafeGet(() => obj?.Id.ToString(), "(unknown)");
+            string stage = "start";
+            try
             {
-                preferredWorkingPlane = storedPlane;
-            }
-            bool hasPoseUserString = !string.IsNullOrWhiteSpace(obj?.Attributes?.GetUserString(PoseStorageKey));
-            string workingPlaneSource = hasStoredWorkingPlane ? "stored_pose" : "geometry_fallback";
-
-            var objInfo = new JObject
-            {
-                ["id"] = obj.Id.ToString(),
-                ["name"] = obj.Name ?? "(unnamed)",
-                ["type"] = obj.ObjectType.ToString(),
-                ["layer"] = doc.Layers[obj.Attributes.LayerIndex].Name,
-                ["material"] = obj.Attributes.MaterialIndex.ToString(),
-                ["color"] = SerializeColor(obj.Attributes.ObjectColor)
-            };
-
-            // add boundingbox
-            // BoundingBox bbox = obj.Geometry.GetBoundingBox(true);
-            // objInfo["bounding_box"] = SerializeBBox(bbox);
-
-            // Add geometry data
-            if (obj.Geometry is Rhino.Geometry.Point point)
-            {
-                objInfo["type"] = "POINT";
-                objInfo["geometry"] = SerializePoint(point.Location);
-            }
-            else if (obj.Geometry is Rhino.Geometry.LineCurve line)
-            {
-                objInfo["type"] = "LINE";
-                objInfo["geometry"] = SerializeLineGeometry(line.Line.From, line.Line.To, includeGeometrySummary);
-            }
-            else if (obj.Geometry is Rhino.Geometry.PolylineCurve polyline)
-            {
-                objInfo["type"] = "POLYLINE";
-                objInfo["geometry"] = SerializePolylineGeometry(polyline, includeGeometrySummary);
-            }
-            else if (obj.Geometry is Rhino.Geometry.Curve curve)
-            {
-                objInfo["type"] = "CURVE";
-                objInfo["geometry"] = SerializeCurveGeometry(curve, includeGeometrySummary, outlineMaxPoints);
-            }
-            else if (obj.Geometry is Rhino.Geometry.Extrusion extrusion)
-            {
-                objInfo["type"] = "EXTRUSION";
-                if (includeGeometrySummary)
+                stage = "resolve-layer";
+                string layerName = ResolveLayerName(obj);
+                Plane? preferredWorkingPlane = null;
+                stage = "read-stored-pose-plane";
+                bool hasStoredWorkingPlane = TryReadStoredPosePlane(obj, out Plane storedPlane);
+                if (hasStoredWorkingPlane)
                 {
-                    RhinoApp.WriteLine(
-                        $"[outline-debug] object={obj.Id} type=EXTRUSION plane_source={workingPlaneSource} pose_user_string={hasPoseUserString}"
-                    );
+                    preferredWorkingPlane = storedPlane;
                 }
-                objInfo["geometry"] = SerializeExtrusionGeometry(extrusion, includeGeometrySummary, outlineMaxPoints, preferredWorkingPlane);
-            }
-            else if (obj.Geometry is Rhino.Geometry.Brep brep)
-            {
-                string brepType;
-                if (includeGeometrySummary)
+                stage = "read-pose-user-string";
+                bool hasPoseUserString = SafeGet(
+                    () => !string.IsNullOrWhiteSpace(obj?.Attributes?.GetUserString(PoseStorageKey)),
+                    false
+                );
+                string workingPlaneSource = hasStoredWorkingPlane ? "stored_pose" : "geometry_fallback";
+
+                stage = "build-base-json";
+                var objInfo = new JObject
                 {
-                    RhinoApp.WriteLine(
-                        $"[outline-debug] object={obj.Id} type=BREP plane_source={workingPlaneSource} pose_user_string={hasPoseUserString}"
-                    );
+                    ["id"] = SafeGet(() => obj.Id.ToString(), "(unknown)"),
+                    ["name"] = SafeGet(() => obj.Name ?? "(unnamed)", "(unnamed)"),
+                    ["type"] = SafeGet(() => obj.ObjectType.ToString(), "UNKNOWN"),
+                    ["layer"] = layerName,
+                    ["material"] = SafeGet(() => obj.Attributes.MaterialIndex.ToString(), "-1"),
+                    ["color"] = SafeGet(() => SerializeColor(obj.Attributes.ObjectColor), SerializeColor(System.Drawing.Color.Black))
+                };
+
+                // add boundingbox
+                // BoundingBox bbox = obj.Geometry.GetBoundingBox(true);
+                // objInfo["bounding_box"] = SerializeBBox(bbox);
+
+                // Add geometry data
+                stage = "serialize-geometry";
+                if (obj.Geometry is Rhino.Geometry.Point point)
+                {
+                    objInfo["type"] = "POINT";
+                    objInfo["geometry"] = SerializePoint(point.Location);
                 }
-                objInfo["geometry"] = SerializeBrepGeometry(brep, includeGeometrySummary, outlineMaxPoints, out brepType, preferredWorkingPlane);
-                objInfo["type"] = brepType;
+                else if (obj.Geometry is Rhino.Geometry.LineCurve line)
+                {
+                    objInfo["type"] = "LINE";
+                    objInfo["geometry"] = SerializeLineGeometry(line.Line.From, line.Line.To, includeGeometrySummary);
+                }
+                else if (obj.Geometry is Rhino.Geometry.PolylineCurve polyline)
+                {
+                    objInfo["type"] = "POLYLINE";
+                    objInfo["geometry"] = SerializePolylineGeometry(polyline, includeGeometrySummary);
+                }
+                else if (obj.Geometry is Rhino.Geometry.Curve curve)
+                {
+                    objInfo["type"] = "CURVE";
+                    objInfo["geometry"] = SerializeCurveGeometry(curve, includeGeometrySummary, outlineMaxPoints);
+                }
+                else if (obj.Geometry is Rhino.Geometry.Extrusion extrusion)
+                {
+                    objInfo["type"] = "EXTRUSION";
+                    if (includeGeometrySummary)
+                    {
+                        RhinoApp.WriteLine(
+                            $"[outline-debug] object={obj.Id} type=EXTRUSION plane_source={workingPlaneSource} pose_user_string={hasPoseUserString}"
+                        );
+                    }
+                    objInfo["geometry"] = SerializeExtrusionGeometry(extrusion, includeGeometrySummary, outlineMaxPoints, preferredWorkingPlane);
+                }
+                else if (obj.Geometry is Rhino.Geometry.Brep brep)
+                {
+                    string brepType;
+                    if (includeGeometrySummary)
+                    {
+                        RhinoApp.WriteLine(
+                            $"[outline-debug] object={obj.Id} type=BREP plane_source={workingPlaneSource} pose_user_string={hasPoseUserString}"
+                        );
+                    }
+                    objInfo["geometry"] = SerializeBrepGeometry(brep, includeGeometrySummary, outlineMaxPoints, out brepType, preferredWorkingPlane);
+                    objInfo["type"] = brepType;
+                }
+
+                return objInfo;
+            }
+            catch (Exception ex)
+            {
+                throw new Exception(
+                    $"RhinoObject serialization failed at stage '{stage}' for object {objectIdForError}: {ex.Message}",
+                    ex
+                );
+            }
+        }
+
+        private static string ResolveLayerName(RhinoObject obj)
+        {
+            if (obj == null)
+            {
+                return "(unknown)";
             }
 
-            return objInfo;
+            RhinoDoc activeDoc = RhinoDoc.ActiveDoc;
+            if (activeDoc == null)
+            {
+                return "(unknown)";
+            }
+
+            Layer resolvedLayer = null;
+            int layerIndex = SafeGet(() => obj.Attributes?.LayerIndex ?? -1, -1);
+            if (layerIndex >= 0)
+            {
+                try
+                {
+                    resolvedLayer = activeDoc.Layers[layerIndex];
+                }
+                catch
+                {
+                    resolvedLayer = null;
+                }
+            }
+
+            return resolvedLayer?.Name ?? "(unknown)";
         }
 
         private static bool TryReadStoredPosePlane(RhinoObject obj, out Plane plane)

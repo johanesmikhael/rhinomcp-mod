@@ -10,6 +10,8 @@ public partial class RhinoMCPModFunctions
     {
         var obj = getObjectByIdOrName(parameters);
         string translationMode = (parameters["translation_mode"]?.ToString() ?? "pose_t").ToLowerInvariant();
+        string zDirection = castToString(parameters["z_direction"]);
+        string xDirection = castToString(parameters["x_direction"]);
 
         Point3d anchor;
         if (translationMode == "bbox_center")
@@ -26,7 +28,14 @@ public partial class RhinoMCPModFunctions
             throw new InvalidOperationException("translation_mode must be 'pose_t' or 'bbox_center'.");
         }
 
-        var rebasedPose = BuildDefaultPose(anchor);
+        bool hasDirectionOverride = !string.IsNullOrWhiteSpace(zDirection) || !string.IsNullOrWhiteSpace(xDirection);
+        var rebasedPose = hasDirectionOverride
+            ? BuildPoseFromDirectionHints(
+                anchor,
+                string.IsNullOrWhiteSpace(zDirection) ? "+z" : zDirection,
+                string.IsNullOrWhiteSpace(xDirection) ? "+y" : xDirection
+            )
+            : BuildDefaultPose(anchor);
         WriteStoredPose(obj, rebasedPose);
 
         var updatedObject = getObjectByIdOrName(new JObject { ["id"] = obj.Id.ToString() });

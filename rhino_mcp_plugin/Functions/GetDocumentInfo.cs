@@ -6,6 +6,18 @@ namespace RhinoMCPModPlugin.Functions;
 
 public partial class RhinoMCPModFunctions
 {
+    private static JToken SafeLayerProperty(System.Func<JToken> getter, JToken fallback = null)
+    {
+        try
+        {
+            return getter();
+        }
+        catch
+        {
+            return fallback ?? JValue.CreateNull();
+        }
+    }
+
     public JObject GetDocumentInfo(JObject parameters)
     {
         const int LIMIT = 300;
@@ -32,8 +44,15 @@ public partial class RhinoMCPModFunctions
         foreach (var docObject in doc.Objects)
         {
             if (count >= LIMIT) break;
-            
-            objectData.Add(Serializer.RhinoObject(docObject));
+
+            try
+            {
+                objectData.Add(Serializer.RhinoObject(docObject));
+            }
+            catch (System.Exception ex)
+            {
+                RhinoApp.WriteLine($"Skipping object in get_document_info ({docObject?.Id}): {ex}");
+            }
             count++;
         }
 
@@ -43,14 +62,22 @@ public partial class RhinoMCPModFunctions
         foreach (var docLayer in doc.Layers)
         {
             if (count >= LIMIT) break;
-            layerData.Add(new JObject
+
+            try
             {
-                ["id"] = docLayer.Id.ToString(),
-                ["name"] = docLayer.Name,
-                ["color"] = docLayer.Color.ToString(),
-                ["visible"] = docLayer.IsVisible,
-                ["locked"] = docLayer.IsLocked
-            });
+                layerData.Add(new JObject
+                {
+                    ["id"] = SafeLayerProperty(() => docLayer.Id.ToString(), "(unknown)"),
+                    ["name"] = SafeLayerProperty(() => docLayer.Name, "(unnamed)"),
+                    ["color"] = SafeLayerProperty(() => docLayer.Color.ToString(), "(unknown)"),
+                    ["visible"] = SafeLayerProperty(() => docLayer.IsVisible, false),
+                    ["locked"] = SafeLayerProperty(() => docLayer.IsLocked, false)
+                });
+            }
+            catch (System.Exception ex)
+            {
+                RhinoApp.WriteLine($"Skipping layer in get_document_info ({docLayer?.Id}): {ex.Message}");
+            }
             count++;
         }
 

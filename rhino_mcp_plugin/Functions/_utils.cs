@@ -46,6 +46,76 @@ public partial class RhinoMCPModFunctions
         };
     }
 
+    private static bool TryResolveDirectionVector(string direction, out Vector3d axis)
+    {
+        axis = Vector3d.Unset;
+        if (string.IsNullOrWhiteSpace(direction))
+        {
+            return false;
+        }
+
+        switch (direction.Trim().ToLowerInvariant())
+        {
+            case "+x":
+                axis = Vector3d.XAxis;
+                return true;
+            case "-x":
+                axis = -Vector3d.XAxis;
+                return true;
+            case "+y":
+                axis = Vector3d.YAxis;
+                return true;
+            case "-y":
+                axis = -Vector3d.YAxis;
+                return true;
+            case "+z":
+                axis = Vector3d.ZAxis;
+                return true;
+            case "-z":
+                axis = -Vector3d.ZAxis;
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    private static JObject BuildPoseFromDirectionHints(Point3d origin, string zDirection, string xDirection)
+    {
+        if (!TryResolveDirectionVector(zDirection, out Vector3d zAxis))
+        {
+            throw new InvalidOperationException("z_direction must be one of: +z, -z.");
+        }
+        if (!TryResolveDirectionVector(xDirection, out Vector3d xHint))
+        {
+            throw new InvalidOperationException("x_direction must be one of: +x, -x, +y, -y.");
+        }
+
+        if (!zAxis.Unitize())
+        {
+            throw new InvalidOperationException("z_direction resolved to an invalid axis.");
+        }
+
+        xHint = xHint - (Vector3d.Multiply(xHint, zAxis) * zAxis);
+        if (!xHint.Unitize())
+        {
+            throw new InvalidOperationException("x_direction cannot be parallel to z_direction.");
+        }
+
+        Vector3d yAxis = Vector3d.CrossProduct(zAxis, xHint);
+        if (!yAxis.Unitize())
+        {
+            throw new InvalidOperationException("Could not construct y axis from provided directions.");
+        }
+
+        Vector3d xAxis = Vector3d.CrossProduct(yAxis, zAxis);
+        if (!xAxis.Unitize())
+        {
+            throw new InvalidOperationException("Could not construct x axis from provided directions.");
+        }
+
+        return BuildPoseFromFrame(xAxis, yAxis, zAxis, origin);
+    }
+
     private static JObject BuildPoseFromFrame(Vector3d xAxis, Vector3d yAxis, Vector3d zAxis, Point3d origin)
     {
         return new JObject
