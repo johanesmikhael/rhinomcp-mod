@@ -1,6 +1,6 @@
 """Rhino integration through the Model Context Protocol."""
 
-__version__ = "0.1.1"
+__version__ = "0.2.0"
 
 # Expose key classes and functions for easier imports
 from .static.rhinoscriptsyntax import rhinoscriptsyntax_json
