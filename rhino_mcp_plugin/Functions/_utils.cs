@@ -116,6 +116,101 @@ public partial class RhinoMCPModFunctions
         return BuildPoseFromFrame(xAxis, yAxis, zAxis, origin);
     }
 
+    private static JObject BuildPoseByClosestAxisSwap(
+        JObject currentPose,
+        Point3d origin,
+        string zDirection,
+        string xDirection
+    )
+    {
+        if (!TryReadPoseFrame(currentPose, out Vector3d baseX, out Vector3d baseY, out Vector3d baseZ, out _))
+        {
+            return BuildDefaultPose(origin);
+        }
+
+        baseX.Unitize();
+        baseY.Unitize();
+        baseZ.Unitize();
+
+        bool hasZHint = !string.IsNullOrWhiteSpace(zDirection);
+        bool hasXHint = !string.IsNullOrWhiteSpace(xDirection);
+        Vector3d zHint = Vector3d.Unset;
+        Vector3d xHint = Vector3d.Unset;
+        if (hasZHint && !TryResolveDirectionVector(zDirection, out zHint))
+        {
+            throw new InvalidOperationException("z_direction must be one of: +z, -z.");
+        }
+        if (hasXHint && !TryResolveDirectionVector(xDirection, out xHint))
+        {
+            throw new InvalidOperationException("x_direction must be one of: +x, -x, +y, -y.");
+        }
+
+        Vector3d[] baseAxes = { baseX, baseY, baseZ };
+        int[][] perms = new int[][]
+        {
+            new [] { 0, 1, 2 },
+            new [] { 0, 2, 1 },
+            new [] { 1, 0, 2 },
+            new [] { 1, 2, 0 },
+            new [] { 2, 0, 1 },
+            new [] { 2, 1, 0 }
+        };
+        int[] signs = { -1, 1 };
+
+        Vector3d bestX = baseX;
+        Vector3d bestY = baseY;
+        Vector3d bestZ = baseZ;
+        double bestScore = double.NegativeInfinity;
+
+        foreach (var perm in perms)
+        {
+            foreach (int sx in signs)
+            {
+                foreach (int sy in signs)
+                {
+                    foreach (int sz in signs)
+                    {
+                        Vector3d candidateX = baseAxes[perm[0]] * sx;
+                        Vector3d candidateY = baseAxes[perm[1]] * sy;
+                        Vector3d candidateZ = baseAxes[perm[2]] * sz;
+
+                        // Keep right-handed orthonormal frames only.
+                        double handedness = Vector3d.Multiply(Vector3d.CrossProduct(candidateX, candidateY), candidateZ);
+                        if (handedness < 0.999)
+                        {
+                            continue;
+                        }
+
+                        double score = 0.0;
+                        if (hasZHint)
+                        {
+                            score += 1000.0 * Vector3d.Multiply(candidateZ, zHint);
+                        }
+                        if (hasXHint)
+                        {
+                            score += 1000.0 * Vector3d.Multiply(candidateX, xHint);
+                        }
+
+                        // Tie-break toward minimal relabeling from existing frame.
+                        score += Math.Abs(Vector3d.Multiply(candidateX, baseX));
+                        score += Math.Abs(Vector3d.Multiply(candidateY, baseY));
+                        score += Math.Abs(Vector3d.Multiply(candidateZ, baseZ));
+
+                        if (score > bestScore)
+                        {
+                            bestScore = score;
+                            bestX = candidateX;
+                            bestY = candidateY;
+                            bestZ = candidateZ;
+                        }
+                    }
+                }
+            }
+        }
+
+        return BuildPoseFromFrame(bestX, bestY, bestZ, origin);
+    }
+
     private static JObject BuildPoseFromFrame(Vector3d xAxis, Vector3d yAxis, Vector3d zAxis, Point3d origin)
     {
         return new JObject
@@ -259,7 +354,7 @@ public partial class RhinoMCPModFunctions
         }
     }
 
-    private void WriteStoredPose(RhinoObject obj, JObject pose)
+    private void WriteStoredPose(RhinoObject obj, JObject pose, bool invalidateObbCache = true)
     {
         if (obj == null || pose == null)
         {
@@ -269,8 +364,11 @@ public partial class RhinoMCPModFunctions
         BoundingBox bbox = obj.Geometry.GetBoundingBox(true);
         JObject canonical = CanonicalizePose((JObject)pose.DeepClone(), bbox.Center);
         obj.Attributes.SetUserString(PoseStorageKey, canonical.ToString(Newtonsoft.Json.Formatting.None));
-        // Pose changes invalidate pose-dependent OBB/projection cache.
-        obj.Attributes.DeleteUserString(ObbStorageKey);
+        if (invalidateObbCache)
+        {
+            // Pose changes invalidate pose-dependent OBB/projection cache.
+            obj.Attributes.DeleteUserString(ObbStorageKey);
+        }
         obj.CommitChanges();
     }
 
@@ -341,6 +439,175 @@ public partial class RhinoMCPModFunctions
         x = arr[0]?.ToObject<double>() ?? 0.0;
         y = arr[1]?.ToObject<double>() ?? 0.0;
         z = arr[2]?.ToObject<double>() ?? 0.0;
+        return true;
+    }
+
+    private static bool TryReadPoint3d(JToken token, out Point3d point)
+    {
+        point = Point3d.Unset;
+        if (!TryReadVec3(token, out double x, out double y, out double z))
+        {
+            return false;
+        }
+
+        point = new Point3d(x, y, z);
+        return true;
+    }
+
+    private static bool TryBuildLocalOutlineFromWorld(JObject pose, JObject worldOutline, out JObject localOutline)
+    {
+        localOutline = null;
+        if (pose == null || worldOutline?["points"] is not JArray worldPoints)
+        {
+            return false;
+        }
+
+        if (!TryReadPoseFrame(pose, out Vector3d xAxis, out Vector3d yAxis, out _, out Point3d origin))
+        {
+            return false;
+        }
+
+        Plane posePlane = new Plane(origin, xAxis, yAxis);
+        if (!posePlane.IsValid)
+        {
+            return false;
+        }
+
+        var localPoints = new JArray();
+        bool hasAny = false;
+        foreach (var token in worldPoints)
+        {
+            if (!TryReadPoint3d(token, out Point3d point))
+            {
+                continue;
+            }
+
+            if (!posePlane.ClosestParameter(point, out double u, out double v))
+            {
+                continue;
+            }
+
+            localPoints.Add(new JArray
+            {
+                Math.Round(u, 2),
+                Math.Round(v, 2)
+            });
+            hasAny = true;
+        }
+
+        if (!hasAny)
+        {
+            return false;
+        }
+
+        localOutline = new JObject
+        {
+            ["points"] = localPoints,
+            ["closed"] = worldOutline["closed"]?.ToObject<bool>() ?? false
+        };
+        return true;
+    }
+
+    private static void ReprojectLocalOutlinesFromWorld(JObject geometry, JObject pose)
+    {
+        if (geometry == null || pose == null)
+        {
+            return;
+        }
+
+        if (geometry["proj_outline_world"] is JObject projWorld &&
+            TryBuildLocalOutlineFromWorld(pose, projWorld, out JObject projLocal))
+        {
+            geometry["proj_outline_local_xy"] = projLocal;
+        }
+
+        if (geometry["surface_edges_world"] is JObject edgesWorld &&
+            TryBuildLocalOutlineFromWorld(pose, edgesWorld, out JObject edgesLocal))
+        {
+            geometry["surface_edges_local"] = edgesLocal;
+        }
+    }
+
+    private static bool TryBuildObbFromWorldCornersInPoseFrame(JObject pose, JObject cachedObb, out JObject obb)
+    {
+        obb = null;
+        if (pose == null || cachedObb?["world_corners"] is not JArray worldCorners || worldCorners.Count == 0)
+        {
+            return false;
+        }
+
+        if (!TryReadPoseFrame(pose, out Vector3d xAxis, out Vector3d yAxis, out _, out Point3d origin))
+        {
+            return false;
+        }
+
+        Plane posePlane = new Plane(origin, xAxis, yAxis);
+        if (!posePlane.IsValid)
+        {
+            return false;
+        }
+
+        bool hasPoint = false;
+        double minU = double.PositiveInfinity, minV = double.PositiveInfinity, minW = double.PositiveInfinity;
+        double maxU = double.NegativeInfinity, maxV = double.NegativeInfinity, maxW = double.NegativeInfinity;
+
+        foreach (var token in worldCorners)
+        {
+            if (!TryReadPoint3d(token, out Point3d point))
+            {
+                continue;
+            }
+
+            if (!posePlane.ClosestParameter(point, out double u, out double v))
+            {
+                continue;
+            }
+
+            Vector3d delta = point - posePlane.Origin;
+            double w = Vector3d.Multiply(delta, posePlane.ZAxis);
+
+            minU = Math.Min(minU, u);
+            minV = Math.Min(minV, v);
+            minW = Math.Min(minW, w);
+            maxU = Math.Max(maxU, u);
+            maxV = Math.Max(maxV, v);
+            maxW = Math.Max(maxW, w);
+            hasPoint = true;
+        }
+
+        if (!hasPoint)
+        {
+            return false;
+        }
+
+        var box = new Box(
+            posePlane,
+            new Interval(minU, maxU),
+            new Interval(minV, maxV),
+            new Interval(minW, maxW)
+        );
+
+        var corners = new JArray();
+        foreach (var corner in box.GetCorners())
+        {
+            corners.Add(new JArray
+            {
+                Math.Round(corner.X, 2),
+                Math.Round(corner.Y, 2),
+                Math.Round(corner.Z, 2)
+            });
+        }
+
+        obb = new JObject
+        {
+            ["extents"] = new JArray
+            {
+                Math.Round(box.X.Length, 2),
+                Math.Round(box.Y.Length, 2),
+                Math.Round(box.Z.Length, 2)
+            },
+            ["world_corners"] = corners
+        };
         return true;
     }
 
@@ -482,6 +749,29 @@ public partial class RhinoMCPModFunctions
             return;
         }
 
+        if (geometry["pose"] is JObject poseFromSummary &&
+            TryReadStoredObb(obj, out JObject cachedPayload) &&
+            cachedPayload["obb"] is JObject cachedObb &&
+            TryBuildObbFromWorldCornersInPoseFrame(poseFromSummary, cachedObb, out JObject reprojectedObb))
+        {
+            geometry["obb"] = reprojectedObb;
+            // Keep serializer projection if present (it reflects current pose plane).
+            // Use cache only as a fallback when serializer did not produce it.
+            if (geometry["proj_outline_world"] is not JObject &&
+                cachedPayload["proj_outline_world"] is JObject cachedProjOutline)
+            {
+                geometry["proj_outline_world"] = cachedProjOutline.DeepClone();
+            }
+            if (geometry["surface_edges_world"] is not JObject &&
+                cachedPayload["surface_edges_world"] is JObject cachedSurfaceEdges)
+            {
+                geometry["surface_edges_world"] = cachedSurfaceEdges.DeepClone();
+            }
+            ReprojectLocalOutlinesFromWorld(geometry, poseFromSummary);
+            WriteStoredObb(obj, geometry);
+            return;
+        }
+
         if (geometry["pose"] is JObject pose &&
             TryReadPoseFrame(pose, out Vector3d xAxis, out Vector3d yAxis, out _, out Point3d origin))
         {
@@ -516,22 +806,24 @@ public partial class RhinoMCPModFunctions
             }
         }
 
-        if (TryReadStoredObb(obj, out JObject cachedPayload))
+        if (TryReadStoredObb(obj, out JObject cachedPayloadFallback))
         {
-            if (cachedPayload["obb"] is JObject cachedObb)
+            JObject poseFromGeometry = geometry["pose"] as JObject;
+            if (cachedPayloadFallback["obb"] is JObject cachedObbFallback)
             {
-                geometry["obb"] = cachedObb.DeepClone();
+                geometry["obb"] = cachedObbFallback.DeepClone();
             }
 
-            if (cachedPayload["proj_outline_world"] is JObject cachedProjOutline)
+            if (cachedPayloadFallback["proj_outline_world"] is JObject cachedProjOutlineFallback)
             {
-                geometry["proj_outline_world"] = cachedProjOutline.DeepClone();
+                geometry["proj_outline_world"] = cachedProjOutlineFallback.DeepClone();
             }
 
-            if (cachedPayload["surface_edges_world"] is JObject cachedSurfaceEdges)
+            if (cachedPayloadFallback["surface_edges_world"] is JObject cachedSurfaceEdgesFallback)
             {
-                geometry["surface_edges_world"] = cachedSurfaceEdges.DeepClone();
+                geometry["surface_edges_world"] = cachedSurfaceEdgesFallback.DeepClone();
             }
+            ReprojectLocalOutlinesFromWorld(geometry, poseFromGeometry);
 
             return;
         }
