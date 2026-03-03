@@ -1,8 +1,10 @@
 using System;
 using System.Collections.Generic;
 using System.Drawing;
+using System.Linq;
 using Rhino;
 using Rhino.Display;
+using Rhino.DocObjects;
 using Rhino.Geometry;
 using Rhino.Geometry.Intersect;
 
@@ -21,7 +23,7 @@ internal sealed class MCPConnectivityGraphConduit : DisplayConduit
             return;
         }
 
-        var graph = MCPConnectivityGraphBuilder.Compute(doc);
+        var graph = MCPConnectivityGraphController.GetOrComputeGraph(doc);
         if (graph.Nodes.Count == 0)
         {
             e.Display.Draw2dText("MCP Graph ON | no visible objects", Color.White, new Point2d(20, 40), false, 14);
@@ -88,7 +90,8 @@ internal static class MCPConnectivityGraphBuilder
                 Name = obj.Name ?? string.Empty,
                 Center = bbox.Center,
                 BoundingBox = bbox,
-                Geometry = obj.Geometry
+                Geometry = obj.Geometry,
+                ProxyMesh = BuildProxyMesh(obj.Geometry, tolerance)
             });
         }
 
@@ -262,7 +265,7 @@ internal static class MCPConnectivityGraphBuilder
             return false;
         }
 
-        return TryGetGeometryContactPoint(a.Geometry, b.Geometry, tolerance, out contactPoint);
+        return TryGetGeometryContactPoint(a, b, tolerance, out contactPoint);
     }
 
     private static double BoundingBoxDistance(BoundingBox a, BoundingBox b)
@@ -288,18 +291,18 @@ internal static class MCPConnectivityGraphBuilder
         return 0.0;
     }
 
-    private static bool TryGetGeometryContactPoint(GeometryBase a, GeometryBase b, double tolerance, out Point3d contactPoint)
+    private static bool TryGetGeometryContactPoint(in Node a, in Node b, double tolerance, out Point3d contactPoint)
     {
-        if (a is Mesh ma && b is Mesh mb)
+        if (a.ProxyMesh != null && b.ProxyMesh != null)
         {
-            var lines = Intersection.MeshMeshFast(ma, mb);
+            var lines = Intersection.MeshMeshFast(a.ProxyMesh, b.ProxyMesh);
             if (TryGetRepresentativePoint(lines, out contactPoint))
             {
                 return true;
             }
         }
 
-        if (TryGetBrepFamily(a, out var ba) && TryGetBrepFamily(b, out var bb))
+        if (TryGetBrepFamily(a.Geometry, out var ba) && TryGetBrepFamily(b.Geometry, out var bb))
         {
             var ok = Intersection.BrepBrep(ba, bb, tolerance, out var curves, out var points);
             if (ok && TryGetRepresentativePoint(points, curves, out contactPoint))
@@ -422,6 +425,61 @@ internal static class MCPConnectivityGraphBuilder
         }
     }
 
+    private static Mesh BuildProxyMesh(GeometryBase geometry, double tolerance)
+    {
+        if (geometry is Mesh mesh)
+        {
+            return mesh;
+        }
+
+        Brep brep = null;
+        if (geometry is Brep b)
+        {
+            brep = b;
+        }
+        else if (geometry is Extrusion extrusion)
+        {
+            brep = extrusion.ToBrep();
+        }
+        else if (geometry is Surface surface)
+        {
+            brep = surface.ToBrep();
+        }
+
+        if (brep == null)
+        {
+            return null;
+        }
+
+        var meshing = MeshingParameters.FastRenderMesh;
+        meshing.MinimumEdgeLength = Math.Max(RhinoMath.ZeroTolerance, tolerance * 0.25);
+        meshing.MaximumEdgeLength = 0.0;
+        meshing.SimplePlanes = true;
+
+        var meshParts = Mesh.CreateFromBrep(brep, meshing);
+        if (meshParts == null || meshParts.Length == 0)
+        {
+            return null;
+        }
+
+        if (meshParts.Length == 1)
+        {
+            return meshParts[0];
+        }
+
+        var combined = new Mesh();
+        foreach (var part in meshParts.Where(part => part != null))
+        {
+            combined.Append(part);
+        }
+
+        if (!combined.IsValid || combined.Faces.Count == 0)
+        {
+            return null;
+        }
+
+        return combined;
+    }
 }
 
 internal sealed class MCPConnectivityGraph
@@ -445,6 +503,7 @@ internal struct Node
     public Point3d Center;
     public BoundingBox BoundingBox;
     public GeometryBase Geometry;
+    public Mesh ProxyMesh;
 }
 
 internal struct Edge
@@ -457,7 +516,12 @@ internal struct Edge
 internal static class MCPConnectivityGraphController
 {
     private static readonly MCPConnectivityGraphConduit Conduit = new();
+    private static readonly object SyncRoot = new();
     private static bool _enabled;
+    private static bool _eventsHooked;
+    private static bool _dirty = true;
+    private static uint _cachedDocRuntimeSerial;
+    private static MCPConnectivityGraph _cachedGraph;
 
     public static bool IsEnabled => _enabled;
 
@@ -471,6 +535,11 @@ internal static class MCPConnectivityGraphController
 
         _enabled = enabled;
         Conduit.Enabled = enabled;
+        if (enabled)
+        {
+            EnsureEventsHooked();
+            MarkDirty();
+        }
         RhinoDoc.ActiveDoc?.Views.Redraw();
         RhinoApp.WriteLine($"MCP connectivity graph {(enabled ? "enabled" : "disabled")}.");
     }
@@ -478,5 +547,73 @@ internal static class MCPConnectivityGraphController
     public static void Toggle()
     {
         SetEnabled(!_enabled);
+    }
+
+    public static MCPConnectivityGraph GetOrComputeGraph(RhinoDoc doc)
+    {
+        lock (SyncRoot)
+        {
+            if (doc == null)
+            {
+                return new MCPConnectivityGraph(Array.Empty<Node>(), Array.Empty<Edge>(), 0.0);
+            }
+
+            if (_cachedGraph != null && !_dirty && _cachedDocRuntimeSerial == doc.RuntimeSerialNumber)
+            {
+                return _cachedGraph;
+            }
+
+            _cachedGraph = MCPConnectivityGraphBuilder.Compute(doc);
+            _cachedDocRuntimeSerial = doc.RuntimeSerialNumber;
+            _dirty = false;
+            return _cachedGraph;
+        }
+    }
+
+    private static void EnsureEventsHooked()
+    {
+        if (_eventsHooked)
+        {
+            return;
+        }
+
+        RhinoDoc.AddRhinoObject += OnGraphAffectingObjectEvent;
+        RhinoDoc.DeleteRhinoObject += OnGraphAffectingObjectEvent;
+        RhinoDoc.UndeleteRhinoObject += OnGraphAffectingObjectEvent;
+        RhinoDoc.ReplaceRhinoObject += OnGraphAffectingReplaceEvent;
+        RhinoDoc.ModifyObjectAttributes += OnGraphAffectingAttributesEvent;
+        _eventsHooked = true;
+    }
+
+    private static void OnGraphAffectingObjectEvent(object sender, RhinoObjectEventArgs e)
+    {
+        MarkDirtyAndRedraw(sender as RhinoDoc);
+    }
+
+    private static void OnGraphAffectingReplaceEvent(object sender, RhinoReplaceObjectEventArgs e)
+    {
+        MarkDirtyAndRedraw(sender as RhinoDoc);
+    }
+
+    private static void OnGraphAffectingAttributesEvent(object sender, RhinoModifyObjectAttributesEventArgs e)
+    {
+        MarkDirtyAndRedraw(sender as RhinoDoc);
+    }
+
+    private static void MarkDirtyAndRedraw(RhinoDoc doc)
+    {
+        MarkDirty();
+        if (_enabled)
+        {
+            (doc ?? RhinoDoc.ActiveDoc)?.Views.Redraw();
+        }
+    }
+
+    private static void MarkDirty()
+    {
+        lock (SyncRoot)
+        {
+            _dirty = true;
+        }
     }
 }

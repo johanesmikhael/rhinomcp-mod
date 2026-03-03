@@ -10,7 +10,7 @@ public partial class RhinoMCPModFunctions
         var doc = Rhino.RhinoDoc.ActiveDoc
             ?? throw new System.InvalidOperationException("No active Rhino document.");
 
-        var graph = MCPConnectivityGraphBuilder.Compute(doc);
+        var graph = MCPConnectivityGraphController.GetOrComputeGraph(doc);
 
         var nodes = new JArray();
         for (var i = 0; i < graph.Nodes.Count; i++)
