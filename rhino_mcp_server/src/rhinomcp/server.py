@@ -202,7 +202,7 @@ _rhino_connection = None
 def get_rhino_connection():
     """Get or create a persistent Rhino connection"""
     global _rhino_connection
-    
+
     # Create a new connection if needed
     if _rhino_connection is None:
         _rhino_connection = RhinoConnection(host="127.0.0.1", port=1999)
@@ -211,8 +211,18 @@ def get_rhino_connection():
             _rhino_connection = None
             raise Exception("Could not connect to Rhino. Make sure the Rhino addon is running.")
         logger.info("Created new persistent connection to Rhino")
-    
+
     return _rhino_connection
+
+def rhino_connected() -> bool:
+    """Check if connected to Rhino"""
+    global _rhino_connection
+    return _rhino_connection is not None and _rhino_connection.sock is not None
+
+def send_to_rhino(command: Dict[str, Any]) -> Dict[str, Any]:
+    """Send a command to Rhino and return the result"""
+    rhino = get_rhino_connection()
+    return rhino.send_command(command.get("type", "unknown"), command.get("params", {}))
 
 # Main execution
 def main():

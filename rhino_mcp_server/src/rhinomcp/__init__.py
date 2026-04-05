@@ -28,3 +28,22 @@ from .tools.get_or_set_current_layer import get_or_set_current_layer
 from .tools.delete_layer import delete_layer
 from .tools.open_file import open_file
 from .tools.close_file import close_file
+from .tools.list_plugins import list_plugins
+from .tools.run_rhino_command import run_rhino_command
+from .tools.get_rhino_log import get_rhino_log
+from .tools.extended_tools import (
+    get_selected_objects,
+    select_objects,
+    deselect_all,
+    zoom_to_objects,
+    get_viewport_info,
+    rename_layer,
+    move_objects_to_layer,
+    get_layer_states,
+    save_layer_state,
+    restore_layer_state,
+    get_materials,
+    create_material,
+    set_object_material,
+    get_object_materials,
+)
