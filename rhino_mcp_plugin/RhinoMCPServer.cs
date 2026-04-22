@@ -341,8 +341,27 @@ namespace RhinoMCPModPlugin
                 ["get_or_set_current_layer"] = this.handler.GetOrSetCurrentLayer,
                 ["delete_layer"] = this.handler.DeleteLayer,
                 ["open_file"] = this.handler.OpenFile,
-                ["close_file"] = this.handler.CloseFile
-                // Add more handlers as needed
+                ["close_file"] = this.handler.CloseFile,
+                ["list_plugins"] = this.handler.ListPlugins,
+                ["run_command"] = this.handler.RunRhinoCommand,
+                ["get_log"] = this.handler.GetRhinoLog,
+                // Selection
+                ["get_selected_objects"] = this.handler.GetSelectedObjects,
+                ["select_objects_by_filter"] = this.handler.SelectObjectsByFilter,
+                ["deselect_all"] = this.handler.DeselectAll,
+                ["zoom_to_objects"] = this.handler.ZoomToObjects,
+                ["get_viewport_info"] = this.handler.GetViewportInfo,
+                // Layers
+                ["rename_layer"] = this.handler.RenameLayer,
+                ["move_objects_to_layer"] = this.handler.MoveObjectsToLayer,
+                ["get_layer_states"] = this.handler.GetLayerStates,
+                ["save_layer_state"] = this.handler.SaveLayerState,
+                ["restore_layer_state"] = this.handler.RestoreLayerState,
+                // Materials
+                ["get_materials"] = this.handler.GetMaterials,
+                ["create_material"] = this.handler.CreateMaterial,
+                ["set_object_material"] = this.handler.SetObjectMaterial,
+                ["get_object_materials"] = this.handler.GetObjectMaterials
             };
 
             if (handlers.TryGetValue(cmdType, out var handler))
