@@ -3,7 +3,7 @@ from rhinomcp.server import mcp
 
 @mcp.tool()
 async def get_selected_objects() -> str:
-    """Get information about currently selected objects in Rhino."""
+    """Get id, name, type, and layer of all currently selected objects in Rhino."""
     from rhinomcp.server import get_rhino_connection
     rhino = get_rhino_connection()
     result = rhino.send_command("get_selected_objects", {})
@@ -14,9 +14,16 @@ async def get_selected_objects() -> str:
     )
 
 @mcp.tool()
-async def select_objects(ids: list[str] | None = None, names: list[str] | None = None, 
+async def select_objects(ids: list[str] | None = None, names: list[str] | None = None,
                          layer: str | None = None, type: str | None = None) -> str:
-    """Select objects by ID, name, layer, or type."""
+    """Select objects by ID, name, layer, or type. Filters are OR logic — any matching filter includes the object.
+
+    Args:
+        ids: List of object GUIDs.
+        names: List of object names (partial match not supported).
+        layer: Layer name — selects all objects on that layer.
+        type: Object type string. Valid values: Brep, Mesh, Curve, Extrusion, Point, PointSet, Annotation, Hatch, Light, SubD.
+    """
     from rhinomcp.server import get_rhino_connection
     rhino = get_rhino_connection()
     params = {}
@@ -95,7 +102,7 @@ async def get_layer_states() -> str:
 
 @mcp.tool()
 async def save_layer_state(name: str) -> str:
-    """Save the current layer visibility and lock state."""
+    """Save the current layer visibility and lock state under a name. State is in-memory only — lost if the Rhino plugin restarts."""
     from rhinomcp.server import get_rhino_connection
     rhino = get_rhino_connection()
     result = rhino.send_command("save_layer_state", {"name": name})
@@ -103,7 +110,7 @@ async def save_layer_state(name: str) -> str:
 
 @mcp.tool()
 async def restore_layer_state(name: str) -> str:
-    """Restore a previously saved layer state."""
+    """Restore a previously saved layer visibility and lock state. Only restores states saved in the current session."""
     from rhinomcp.server import get_rhino_connection
     rhino = get_rhino_connection()
     result = rhino.send_command("restore_layer_state", {"name": name})
@@ -122,7 +129,7 @@ async def get_materials() -> str:
 
 @mcp.tool()
 async def create_material(name: str = "NewMaterial", r: int = 128, g: int = 128, b: int = 128) -> str:
-    """Create a new material with diffuse color."""
+    """Create a new Rhino material with a diffuse color. Only diffuse color is supported. Returns the material index needed for set_object_material."""
     from rhinomcp.server import get_rhino_connection
     rhino = get_rhino_connection()
     result = rhino.send_command("create_material", {"name": name, "r": r, "g": g, "b": b})
@@ -130,7 +137,7 @@ async def create_material(name: str = "NewMaterial", r: int = 128, g: int = 128,
 
 @mcp.tool()
 async def set_object_material(ids: list[str], material_name: str | None = None, material_index: int | None = None) -> str:
-    """Assign a material to objects."""
+    """Assign a material to objects. Prefer material_index (faster, unambiguous). material_name used only if index not provided. Use get_materials to find available materials and their indices."""
     from rhinomcp.server import get_rhino_connection
     rhino = get_rhino_connection()
     params = {"ids": ids}

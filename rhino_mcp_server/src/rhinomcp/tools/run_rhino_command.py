@@ -4,11 +4,12 @@ from rhinomcp.server import mcp
 
 @mcp.tool()
 async def run_rhino_command(ctx: Context, command: str) -> str:
-    """Execute a Rhino command by name.
-    
+    """Execute a Rhino command by name. Avoid interactive or dialog-based commands — they will block execution.
+
     Args:
-        command: The English name of the Rhino command to run (e.g., "_Line", "_Sphere", "CM_OpenFeatureTree").
-        
+        command: The English name of the Rhino command (e.g., "_Line", "_Sphere", "CM_OpenFeatureTree").
+            Commands are prefixed with underscore automatically for locale-independence.
+
     Returns:
         Result message indicating success or failure.
     """

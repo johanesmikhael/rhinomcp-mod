@@ -237,11 +237,13 @@ namespace RhinoMCPModPlugin.Functions
             {
                 var layerName = state["name"]?.ToString();
                 var visible = state["visible"]?.ToObject<bool>() ?? true;
+                var locked = state["locked"]?.ToObject<bool>() ?? false;
                 var idx = doc.Layers.FindByFullPath(layerName, -1);
                 if (idx >= 0)
                 {
                     var layer = doc.Layers[idx];
                     layer.IsVisible = visible;
+                    layer.IsLocked = locked;
                     doc.Layers.Modify(layer, idx, true);
                     restored++;
                 }
@@ -255,9 +257,13 @@ namespace RhinoMCPModPlugin.Functions
             var doc = RhinoDoc.ActiveDoc;
             if (doc == null) return new JObject { ["error"] = "No active document" };
             var materials = new JArray();
-            foreach (var mat in doc.Materials)
+            for (int i = 0; i < doc.Materials.Count; i++)
+            {
+                var mat = doc.Materials[i];
+                if (mat == null || mat.IsDeleted) continue;
                 materials.Add(new JObject { ["index"] = mat.Index, ["name"] = mat.Name,
                     ["diffuseColor"] = $"{mat.DiffuseColor.R},{mat.DiffuseColor.G},{mat.DiffuseColor.B}" });
+            }
             return new JObject { ["materials"] = materials, ["count"] = materials.Count };
         }
 
@@ -306,14 +312,12 @@ namespace RhinoMCPModPlugin.Functions
             var g = parameters["g"]?.ToObject<int>() ?? 128;
             var b = parameters["b"]?.ToObject<int>() ?? 128;
 
-            var mat = doc.Materials.Add();
-            if (mat >= 0)
+            var material = new Rhino.DocObjects.Material
             {
-                var material = doc.Materials[mat];
-                material.Name = name;
-                material.DiffuseColor = Color.FromArgb(r, g, b);
-                doc.Materials.Modify(material, mat, true);
-            }
+                Name = name,
+                DiffuseColor = Color.FromArgb(r, g, b)
+            };
+            int mat = doc.Materials.Add(material);
             doc.Views.Redraw();
             return new JObject { ["message"] = $"Material '{name}' created.", ["index"] = mat };
         }
