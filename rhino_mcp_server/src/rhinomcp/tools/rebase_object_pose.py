@@ -15,7 +15,9 @@ def rebase_object_pose(
     Rebase canonical pose without moving geometry.
 
     Keeps orientation basis from current pose and only relabels/signed-swaps axes.
-    Translation anchor is always the current geometry bbox center.
+    Translation anchor is always the current oriented bounding box (OBB)
+    center, recomputed in the existing pose frame (falls back to the
+    world axis-aligned bbox center when the pose frame is unreadable).
     Optionally, directional hints can be requested by setting:
     - z_direction: +z or -z
     - x_direction: +x, -x, +y, or -y

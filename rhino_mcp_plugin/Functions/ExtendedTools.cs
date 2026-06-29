@@ -329,16 +329,24 @@ namespace RhinoMCPModPlugin.Functions
             var ids = parameters["ids"] as JArray;
             var objects = new JArray();
 
+            IEnumerable<RhinoObject> targets;
             if (ids == null)
             {
-                var allObjs = doc.Objects.GetObjectList(ObjectType.AnyObject);
-                foreach (var obj in allObjs)
-                {
-                    var matIndex = obj.Attributes.MaterialIndex;
-                    var matName = matIndex >= 0 && matIndex < doc.Materials.Count ? doc.Materials[matIndex]?.Name : "ByLayer";
-                    objects.Add(new JObject { ["id"] = obj.Id.ToString(), ["name"] = obj.Name ?? "",
-                        ["material_index"] = matIndex, ["material_name"] = matName });
-                }
+                targets = doc.Objects.GetObjectList(ObjectType.AnyObject);
+            }
+            else
+            {
+                targets = ids
+                    .Select(idToken => Guid.TryParse(idToken?.ToString(), out var g) ? doc.Objects.FindId(g) : null)
+                    .Where(obj => obj != null);
+            }
+
+            foreach (var obj in targets)
+            {
+                var matIndex = obj.Attributes.MaterialIndex;
+                var matName = matIndex >= 0 && matIndex < doc.Materials.Count ? doc.Materials[matIndex]?.Name : "ByLayer";
+                objects.Add(new JObject { ["id"] = obj.Id.ToString(), ["name"] = obj.Name ?? "",
+                    ["material_index"] = matIndex, ["material_name"] = matName });
             }
             return new JObject { ["objects"] = objects, ["count"] = objects.Count };
         }

@@ -13,9 +13,16 @@ public partial class RhinoMCPModFunctions
         string xDirection = castToString(parameters["x_direction"]);
         var currentPose = GetOrBootstrapPose(obj);
 
-        Point3d anchor = TryReadPoseFrame(currentPose, out _, out _, out _, out Point3d poseOrigin)
-            ? poseOrigin
-            : obj.Geometry.GetBoundingBox(true).Center;
+        Point3d anchor = obj.Geometry.GetBoundingBox(true).Center;
+        if (TryReadPoseFrame(currentPose, out Vector3d poseX, out Vector3d poseY, out _, out Point3d poseOrigin))
+        {
+            Plane posePlane = new Plane(poseOrigin, poseX, poseY);
+            BoundingBox obbBox = obj.Geometry.GetBoundingBox(posePlane);
+            if (obbBox.IsValid)
+            {
+                anchor = new Box(posePlane, obbBox).Center;
+            }
+        }
 
         bool hasDirectionOverride = !string.IsNullOrWhiteSpace(zDirection) || !string.IsNullOrWhiteSpace(xDirection);
         var rebasedPose = hasDirectionOverride
