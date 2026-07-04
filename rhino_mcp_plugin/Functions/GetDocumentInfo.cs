@@ -4,6 +4,7 @@ using Rhino.DocObjects;
 using Rhino.Geometry;
 using rhinomcp_mod.Serializers;
 using System;
+using System.Collections.Generic;
 using System.Linq;
 
 namespace RhinoMCPModPlugin.Functions;
@@ -49,6 +50,97 @@ public partial class RhinoMCPModFunctions
             return detail;
         }
         throw new ArgumentException("detail must be one of: inventory, summary, full.");
+    }
+
+    private static string ReadDocumentInfoBboxMode(JObject parameters)
+    {
+        string mode = parameters?["bbox_mode"]?.ToString()?.Trim().ToLowerInvariant() ?? "intersects";
+        if (mode == "intersects" || mode == "contains_center" || mode == "contained")
+        {
+            return mode;
+        }
+        throw new ArgumentException("bbox_mode must be one of: intersects, contains_center, contained.");
+    }
+
+    private static bool TryReadDocumentInfoPoint3d(JToken token, out Point3d point)
+    {
+        point = Point3d.Unset;
+        if (token is not JArray arr || arr.Count != 3)
+        {
+            return false;
+        }
+
+        point = new Point3d(
+            arr[0]?.ToObject<double>() ?? 0.0,
+            arr[1]?.ToObject<double>() ?? 0.0,
+            arr[2]?.ToObject<double>() ?? 0.0
+        );
+        return true;
+    }
+
+    private static bool TryReadDocumentInfoBbox(JObject parameters, out BoundingBox bbox)
+    {
+        bbox = BoundingBox.Unset;
+        if (parameters?["bbox"] == null || parameters["bbox"].Type == JTokenType.Null)
+        {
+            return false;
+        }
+
+        if (parameters["bbox"] is not JArray arr || arr.Count != 2 ||
+            !TryReadDocumentInfoPoint3d(arr[0], out Point3d first) ||
+            !TryReadDocumentInfoPoint3d(arr[1], out Point3d second))
+        {
+            throw new ArgumentException("bbox must be [[min_x,min_y,min_z],[max_x,max_y,max_z]].");
+        }
+
+        bbox = new BoundingBox(
+            new Point3d(
+                Math.Min(first.X, second.X),
+                Math.Min(first.Y, second.Y),
+                Math.Min(first.Z, second.Z)
+            ),
+            new Point3d(
+                Math.Max(first.X, second.X),
+                Math.Max(first.Y, second.Y),
+                Math.Max(first.Z, second.Z)
+            )
+        );
+
+        if (!bbox.IsValid)
+        {
+            throw new ArgumentException("bbox must define a valid world axis-aligned bounding box.");
+        }
+
+        return true;
+    }
+
+    private static bool ContainsPoint(BoundingBox container, Point3d point)
+    {
+        return point.X >= container.Min.X && point.X <= container.Max.X &&
+               point.Y >= container.Min.Y && point.Y <= container.Max.Y &&
+               point.Z >= container.Min.Z && point.Z <= container.Max.Z;
+    }
+
+    private static bool ContainsBbox(BoundingBox container, BoundingBox candidate)
+    {
+        return ContainsPoint(container, candidate.Min) && ContainsPoint(container, candidate.Max);
+    }
+
+    private static bool BboxesIntersect(BoundingBox a, BoundingBox b)
+    {
+        return a.Min.X <= b.Max.X && a.Max.X >= b.Min.X &&
+               a.Min.Y <= b.Max.Y && a.Max.Y >= b.Min.Y &&
+               a.Min.Z <= b.Max.Z && a.Max.Z >= b.Min.Z;
+    }
+
+    private static bool BboxMatches(BoundingBox query, BoundingBox candidate, string mode)
+    {
+        return mode switch
+        {
+            "contained" => ContainsBbox(query, candidate),
+            "contains_center" => ContainsPoint(query, candidate.Center),
+            _ => BboxesIntersect(query, candidate)
+        };
     }
 
     private static JObject BuildDocumentObjectInventory(RhinoObject obj, string detail, bool includeBbox)
@@ -160,6 +252,8 @@ public partial class RhinoMCPModFunctions
         int limit = ReadBoundedInt(parameters, "limit", defaultLimit, 1, MaxDocumentInfoLimit);
         int offset = ReadBoundedInt(parameters, "offset", 0, 0, int.MaxValue);
         bool includeBbox = parameters?["include_bbox"]?.ToObject<bool>() ?? true;
+        bool hasSpatialFilter = TryReadDocumentInfoBbox(parameters, out BoundingBox queryBbox);
+        string bboxMode = hasSpatialFilter ? ReadDocumentInfoBboxMode(parameters) : "intersects";
         int maxGeometryPoints = ReadBoundedInt(
             parameters,
             "max_geometry_points",
@@ -191,7 +285,32 @@ public partial class RhinoMCPModFunctions
             .ToList();
 
         int skippedObjectErrors = 0;
-        foreach (var docObject in objects.Skip(offset).Take(limit))
+        var matchedObjects = new List<RhinoObject>();
+        if (hasSpatialFilter)
+        {
+            foreach (var docObject in objects)
+            {
+                try
+                {
+                    BoundingBox objectBbox = docObject.Geometry.GetBoundingBox(true);
+                    if (objectBbox.IsValid && BboxMatches(queryBbox, objectBbox, bboxMode))
+                    {
+                        matchedObjects.Add(docObject);
+                    }
+                }
+                catch (System.Exception ex)
+                {
+                    RhinoApp.WriteLine($"Skipping object in get_document_info spatial filter ({docObject?.Id}): {ex.Message}");
+                    skippedObjectErrors++;
+                }
+            }
+        }
+        else
+        {
+            matchedObjects = objects;
+        }
+
+        foreach (var docObject in matchedObjects.Skip(offset).Take(limit))
         {
             try
             {
@@ -239,7 +358,7 @@ public partial class RhinoMCPModFunctions
             ["objects_returned"] = objectData.Count,
             ["objects_offset"] = offset,
             ["objects_limit"] = limit,
-            ["objects_truncated"] = (long)offset + limit < objects.Count,
+            ["objects_truncated"] = (long)offset + limit < matchedObjects.Count,
             ["objects_skipped_errors"] = skippedObjectErrors,
             ["objects"] = objectData,
             ["layer_count"] = doc.Layers.Count,
@@ -249,6 +368,17 @@ public partial class RhinoMCPModFunctions
             ["layers_skipped_errors"] = skippedLayerErrors,
             ["layers"] = layerData
         };
+
+        if (hasSpatialFilter)
+        {
+            result["spatial_filter"] = new JObject
+            {
+                ["bbox"] = Serializer.SerializeBBox(queryBbox),
+                ["bbox_frame"] = "world_aabb",
+                ["bbox_mode"] = bboxMode,
+                ["matched_objects"] = matchedObjects.Count
+            };
+        }
 
         RhinoApp.WriteLine($"Document info collected: {objectData.Count} objects");
         return result;

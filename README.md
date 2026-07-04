@@ -42,6 +42,12 @@ Use `get_document_info` as the first scene-index call. Its default is intentiona
 get_document_info(detail="inventory", limit=100, offset=0, include_bbox=true)
 ```
 
+For focused edits, scope the inventory to a world axis-aligned bounding box:
+
+```text
+get_document_info(detail="inventory", bbox=[[0,0,0],[100,100,30]], bbox_mode="intersects")
+```
+
 Supported `detail` values:
 
 - `inventory`: id, name, type, layer, and optional world axis-aligned `bbox`.
@@ -54,6 +60,8 @@ Pagination and truncation fields:
 - `objects_returned`: number of objects in this response.
 - `objects_truncated`: true when more objects are available.
 - `objects_offset` / `objects_limit`: page position and page size.
+- `spatial_filter`: present when `bbox` is supplied; includes normalized world AABB,
+  `bbox_mode`, and matched object count.
 
 For detailed geometry, first identify target ids/names from `inventory` or `summary`, then call `get_objects_info(objects=[...])`. Use `max_geometry_points` with `detail="full"` to cap curve/polyline point output.
 

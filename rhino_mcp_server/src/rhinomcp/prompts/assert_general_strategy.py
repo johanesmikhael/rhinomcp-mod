@@ -54,6 +54,7 @@ def asset_general_strategy() -> str:
 
     TOOL USAGE GUIDELINES:
     - Use get_document_info(detail="inventory") for the first scene scan: id, name, type, layer, and world AABB bbox.
+    - When the user names a focused region or you already know a target bbox, scope the scene scan with get_document_info(..., bbox=[[min_x,min_y,min_z],[max_x,max_y,max_z]], bbox_mode="intersects").
     - Use get_document_info(detail="summary") when compact per-object descriptors are needed without coordinate arrays.
     - Use limit/offset on get_document_info when the scene is large; watch objects_truncated and objects_returned.
     - Use get_object_info / get_objects_info to understand source objects.
