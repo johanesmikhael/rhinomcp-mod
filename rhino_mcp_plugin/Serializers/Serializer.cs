@@ -137,7 +137,13 @@ namespace rhinomcp_mod.Serializers
             }
         }
 
-        public static JObject RhinoObject(RhinoObject obj, bool includeGeometrySummary = false, int outlineMaxPoints = 0)
+        public static JObject RhinoObject(
+            RhinoObject obj,
+            bool includeGeometrySummary = false,
+            int outlineMaxPoints = 0,
+            bool includeWorld = true,
+            bool includeOutlines = true
+        )
         {
             string objectIdForError = SafeGet(() => obj?.Id.ToString(), "(unknown)");
             string stage = "start";
@@ -184,17 +190,32 @@ namespace rhinomcp_mod.Serializers
                 else if (obj.Geometry is Rhino.Geometry.LineCurve line)
                 {
                     objInfo["type"] = "LINE";
-                    objInfo["geometry"] = SerializeLineGeometry(line.Line.From, line.Line.To, includeGeometrySummary);
+                    objInfo["geometry"] = SerializeLineGeometry(
+                        line.Line.From,
+                        line.Line.To,
+                        includeGeometrySummary,
+                        includeWorld
+                    );
                 }
                 else if (obj.Geometry is Rhino.Geometry.PolylineCurve polyline)
                 {
                     objInfo["type"] = "POLYLINE";
-                    objInfo["geometry"] = SerializePolylineGeometry(polyline, includeGeometrySummary, outlineMaxPoints);
+                    objInfo["geometry"] = SerializePolylineGeometry(
+                        polyline,
+                        includeGeometrySummary,
+                        outlineMaxPoints,
+                        includeWorld
+                    );
                 }
                 else if (obj.Geometry is Rhino.Geometry.Curve curve)
                 {
                     objInfo["type"] = "CURVE";
-                    objInfo["geometry"] = SerializeCurveGeometry(curve, includeGeometrySummary, outlineMaxPoints);
+                    objInfo["geometry"] = SerializeCurveGeometry(
+                        curve,
+                        includeGeometrySummary,
+                        outlineMaxPoints,
+                        includeWorld
+                    );
                 }
                 else if (obj.Geometry is Rhino.Geometry.Extrusion extrusion)
                 {
@@ -205,7 +226,14 @@ namespace rhinomcp_mod.Serializers
                             $"[outline-debug] object={obj.Id} type=EXTRUSION plane_source={workingPlaneSource} pose_user_string={hasPoseUserString}"
                         );
                     }
-                    objInfo["geometry"] = SerializeExtrusionGeometry(extrusion, includeGeometrySummary, outlineMaxPoints, preferredWorkingPlane);
+                    objInfo["geometry"] = SerializeExtrusionGeometry(
+                        extrusion,
+                        includeGeometrySummary,
+                        outlineMaxPoints,
+                        preferredWorkingPlane,
+                        includeWorld,
+                        includeOutlines
+                    );
                 }
                 else if (obj.Geometry is Rhino.Geometry.Brep brep)
                 {
@@ -216,13 +244,28 @@ namespace rhinomcp_mod.Serializers
                             $"[outline-debug] object={obj.Id} type=BREP plane_source={workingPlaneSource} pose_user_string={hasPoseUserString}"
                         );
                     }
-                    objInfo["geometry"] = SerializeBrepGeometry(brep, includeGeometrySummary, outlineMaxPoints, out brepType, preferredWorkingPlane);
+                    objInfo["geometry"] = SerializeBrepGeometry(
+                        brep,
+                        includeGeometrySummary,
+                        outlineMaxPoints,
+                        out brepType,
+                        preferredWorkingPlane,
+                        includeWorld,
+                        includeOutlines
+                    );
                     objInfo["type"] = brepType;
                 }
                 else if (obj.Geometry is Rhino.Geometry.Mesh mesh)
                 {
                     objInfo["type"] = "MESH";
-                    objInfo["geometry"] = SerializeMeshGeometry(mesh, includeGeometrySummary, outlineMaxPoints, preferredWorkingPlane);
+                    objInfo["geometry"] = SerializeMeshGeometry(
+                        mesh,
+                        includeGeometrySummary,
+                        outlineMaxPoints,
+                        preferredWorkingPlane,
+                        includeWorld,
+                        includeOutlines
+                    );
                 }
 
                 return objInfo;

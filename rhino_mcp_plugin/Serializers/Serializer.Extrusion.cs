@@ -6,7 +6,14 @@ namespace rhinomcp_mod.Serializers;
 
 public static partial class Serializer
 {
-    private static JObject SerializeExtrusionGeometry(Extrusion extrusion, bool includeGeometrySummary, int outlineMaxPoints, Plane? workingPlaneOverride = null)
+    private static JObject SerializeExtrusionGeometry(
+        Extrusion extrusion,
+        bool includeGeometrySummary,
+        int outlineMaxPoints,
+        Plane? workingPlaneOverride = null,
+        bool includeWorld = true,
+        bool includeOutlines = true
+    )
     {
         var geometry = new JObject();
         if (!includeGeometrySummary)
@@ -20,7 +27,13 @@ public static partial class Serializer
             var brep = extrusion.ToBrep();
             if (brep != null)
             {
-                var summary = BuildBrepGeometrySummary(brep, outlineMaxPoints, workingPlaneOverride);
+                var summary = BuildBrepGeometrySummary(
+                    brep,
+                    outlineMaxPoints,
+                    workingPlaneOverride,
+                    includeWorld,
+                    includeOutlines
+                );
                 if (summary["obb"] != null)
                 {
                     geometry["obb"] = summary["obb"];

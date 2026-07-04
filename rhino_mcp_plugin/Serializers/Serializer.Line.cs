@@ -7,7 +7,7 @@ namespace rhinomcp_mod.Serializers;
 
 public static partial class Serializer
 {
-    private static JObject SerializeLineGeometry(Point3d start, Point3d end, bool includeGeometrySummary)
+    private static JObject SerializeLineGeometry(Point3d start, Point3d end, bool includeGeometrySummary, bool includeWorld = true)
     {
         var geometry = new JObject();
         if (!includeGeometrySummary)
@@ -18,8 +18,11 @@ public static partial class Serializer
         }
 
         double length = start.DistanceTo(end);
-        geometry["world_start"] = SerializePoint(start);
-        geometry["world_end"] = SerializePoint(end);
+        if (includeWorld)
+        {
+            geometry["world_start"] = SerializePoint(start);
+            geometry["world_end"] = SerializePoint(end);
+        }
         geometry["local_start"] = new JArray
         {
             Math.Round(-length / 2.0, 2),

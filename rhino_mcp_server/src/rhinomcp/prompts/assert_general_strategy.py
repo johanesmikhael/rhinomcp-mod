@@ -59,6 +59,8 @@ def asset_general_strategy() -> str:
     - Use limit/offset on get_document_info when the scene is large; watch objects_truncated and objects_returned.
     - Use get_object_info / get_objects_info to understand source objects.
     - Prefer get_objects_info for detailed geometry of selected targets after inventory/summary identifies them.
+    - Use geometry_detail="bbox" for lean detail when only coarse location/size matters.
+    - Use geometry_detail="obb_pose" for default detailed geometry; local coordinates + pose come by default, world duplicates only when include_world=true.
     - Avoid get_document_info(detail="full") unless the user explicitly needs legacy full per-object document payloads.
     - Use modify_object(s) first for direct edits.
     - Use copy_object(s) only when:
@@ -81,13 +83,15 @@ def asset_general_strategy() -> str:
     - Always ask for confirmation for delete operation.
 
     GEOMETRY PROTOCOL (OBB + POSE):
+    - geometry_detail="bbox" returns only world AABB bbox and does not include pose.
+    - geometry_detail="obb_pose" is default detailed mode.
     - The oriented bounding box (OBB) is defined in a local frame whose origin is the OBB center.
     - geometry.obb.extents = [x_len, y_len, z_len] are full side lengths in that local frame (not half-extents).
     - Local box corners are at (±x_len/2, ±y_len/2, ±z_len/2).
     - geometry.pose.world_from_local defines the local→world transform:
       - R is a 3x3 rotation matrix.
       - t is the world position of the OBB center (the local origin).
-    - geometry.obb.world_corners are absolute world-space points and must be consistent with pose + extents.
+    - geometry.obb.world_corners are optional absolute world-space points when include_world=true and must be consistent with pose + extents.
 
     POSE CONVENTIONS (R, t):
     - R columns are the local X, Y, Z axes expressed in world coordinates (right-handed).

@@ -8,7 +8,14 @@ namespace rhinomcp_mod.Serializers;
 
 public static partial class Serializer
 {
-    private static JObject SerializeMeshGeometry(Mesh mesh, bool includeGeometrySummary, int outlineMaxPoints, Plane? workingPlaneOverride = null)
+    private static JObject SerializeMeshGeometry(
+        Mesh mesh,
+        bool includeGeometrySummary,
+        int outlineMaxPoints,
+        Plane? workingPlaneOverride = null,
+        bool includeWorld = true,
+        bool includeOutlines = true
+    )
     {
         var geometry = new JObject();
         if (mesh == null)
@@ -71,24 +78,33 @@ public static partial class Serializer
                     Math.Round(obb.X.Length, 2),
                     Math.Round(obb.Y.Length, 2),
                     Math.Round(obb.Z.Length, 2)
-                },
-                ["world_corners"] = obbCorners
+                }
             };
-
-            var projected = BuildProjectedMeshOutline(mesh, workingPlane, tolerance, outlineMaxPoints);
-            if (projected["local"] is JArray local && projected["world"] is JArray world)
+            if (includeWorld)
             {
-                bool closed = projected["closed"]?.ToObject<bool>() ?? true;
-                geometry["proj_outline_local_xy"] = new JObject
+                ((JObject)geometry["obb"])["world_corners"] = obbCorners;
+            }
+
+            if (includeOutlines)
+            {
+                var projected = BuildProjectedMeshOutline(mesh, workingPlane, tolerance, outlineMaxPoints);
+                if (projected["local"] is JArray local && projected["world"] is JArray world)
                 {
-                    ["points"] = local,
-                    ["closed"] = closed
-                };
-                geometry["proj_outline_world"] = new JObject
-                {
-                    ["points"] = world,
-                    ["closed"] = closed
-                };
+                    bool closed = projected["closed"]?.ToObject<bool>() ?? true;
+                    geometry["proj_outline_local_xy"] = new JObject
+                    {
+                        ["points"] = local,
+                        ["closed"] = closed
+                    };
+                    if (includeWorld)
+                    {
+                        geometry["proj_outline_world"] = new JObject
+                        {
+                            ["points"] = world,
+                            ["closed"] = closed
+                        };
+                    }
+                }
             }
 
             geometry["pose"] = new JObject

@@ -12,7 +12,15 @@ namespace rhinomcp_mod.Serializers;
 
 public static partial class Serializer
 {
-    private static JObject SerializeBrepGeometry(Brep brep, bool includeGeometrySummary, int outlineMaxPoints, out string type, Plane? workingPlaneOverride = null)
+    private static JObject SerializeBrepGeometry(
+        Brep brep,
+        bool includeGeometrySummary,
+        int outlineMaxPoints,
+        out string type,
+        Plane? workingPlaneOverride = null,
+        bool includeWorld = true,
+        bool includeOutlines = true
+    )
     {
         type = brep.Faces.Count == 1 ? "SURFACE" : "BREP";
         var geometry = new JObject();
@@ -25,7 +33,7 @@ public static partial class Serializer
 
         try
         {
-            geometry = BuildBrepGeometrySummary(brep, outlineMaxPoints, workingPlaneOverride);
+            geometry = BuildBrepGeometrySummary(brep, outlineMaxPoints, workingPlaneOverride, includeWorld, includeOutlines);
         }
         catch
         {
@@ -320,7 +328,13 @@ public static partial class Serializer
         return primaryArea * 1000.0 + bboxArea * 10.0 + length;
     }
 
-    private static JObject BuildBrepGeometrySummary(Brep brep, int outlineMaxPoints = 16, Plane? workingPlaneOverride = null)
+    private static JObject BuildBrepGeometrySummary(
+        Brep brep,
+        int outlineMaxPoints = 16,
+        Plane? workingPlaneOverride = null,
+        bool includeWorld = true,
+        bool includeOutlines = true
+    )
     {
         if (brep == null)
         {
@@ -620,45 +634,56 @@ public static partial class Serializer
             obbCorners.Add(Serializer.SerializePoint(pt));
         }
 
-        var shape = new JObject
+        var obbJson = new JObject
         {
-            ["obb"] = new JObject
+            ["extents"] = new JArray
             {
-                ["extents"] = new JArray
-                {
-                    Math.Round(obb.X.Length, 2),
-                    Math.Round(obb.Y.Length, 2),
-                    Math.Round(obb.Z.Length, 2)
-                },
-                ["world_corners"] = obbCorners
+                Math.Round(obb.X.Length, 2),
+                Math.Round(obb.Y.Length, 2),
+                Math.Round(obb.Z.Length, 2)
             }
         };
+        if (includeWorld)
+        {
+            obbJson["world_corners"] = obbCorners;
+        }
 
-        if (isSingleFace)
+        var shape = new JObject
+        {
+            ["obb"] = obbJson
+        };
+
+        if (includeOutlines && isSingleFace)
         {
             shape["surface_edges_local"] = new JObject
             {
                 ["points"] = localPoints,
                 ["closed"] = isClosed
             };
-            shape["surface_edges_world"] = new JObject
+            if (includeWorld)
             {
-                ["points"] = worldPoints,
-                ["closed"] = isClosed
-            };
+                shape["surface_edges_world"] = new JObject
+                {
+                    ["points"] = worldPoints,
+                    ["closed"] = isClosed
+                };
+            }
         }
-        else
+        else if (includeOutlines)
         {
             shape["proj_outline_local_xy"] = new JObject
             {
                 ["points"] = localPoints,
                 ["closed"] = isClosed
             };
-            shape["proj_outline_world"] = new JObject
+            if (includeWorld)
             {
-                ["points"] = worldPoints,
-                ["closed"] = isClosed
-            };
+                shape["proj_outline_world"] = new JObject
+                {
+                    ["points"] = worldPoints,
+                    ["closed"] = isClosed
+                };
+            }
         }
 
         return new JObject

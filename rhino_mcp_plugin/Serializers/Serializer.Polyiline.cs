@@ -7,7 +7,7 @@ namespace rhinomcp_mod.Serializers;
 
 public static partial class Serializer
 {
-    private static JObject SerializePolylineGeometry(PolylineCurve polyline, bool includeGeometrySummary, int maxPoints)
+    private static JObject SerializePolylineGeometry(PolylineCurve polyline, bool includeGeometrySummary, int maxPoints, bool includeWorld = true)
     {
         var geometry = new JObject();
         var points = polyline.ToArray();
@@ -117,8 +117,11 @@ public static partial class Serializer
         }
 
         geometry["planar"] = isPlanar;
-        geometry["world_points"] = worldPoints;
         geometry["local_points"] = localPoints;
+        if (includeWorld)
+        {
+            geometry["world_points"] = worldPoints;
+        }
         return geometry;
     }
 }

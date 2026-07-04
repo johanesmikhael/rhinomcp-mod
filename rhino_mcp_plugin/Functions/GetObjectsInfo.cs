@@ -11,6 +11,8 @@ public partial class RhinoMCPModFunctions
     {
         var includeAttributes = parameters["include_attributes"]?.ToObject<bool>() ?? false;
         var outlineMaxPoints = parameters["outline_max_points"]?.ToObject<int>() ?? 0;
+        var geometryDetail = ReadGeometryDetail(parameters);
+        var includeWorld = ReadIncludeWorld(parameters);
         var objectParameters = parameters["objects"] as JArray;
 
         if (objectParameters == null || objectParameters.Count == 0)
@@ -33,9 +35,7 @@ public partial class RhinoMCPModFunctions
             try
             {
                 var obj = getObjectByIdOrName(selector);
-                var data = Serializer.RhinoObject(obj, includeGeometrySummary: true, outlineMaxPoints: outlineMaxPoints);
-                InjectStoredPoseIntoSummary(obj, data);
-                InjectStoredObbIntoSummary(obj, data);
+                var data = BuildGeometryDetailObjectInfo(obj, geometryDetail, includeWorld, outlineMaxPoints);
                 if (includeAttributes)
                 {
                     data["attributes"] = BuildPublicAttributes(obj);
@@ -54,6 +54,8 @@ public partial class RhinoMCPModFunctions
 
         return new JObject
         {
+            ["geometry_detail"] = geometryDetail,
+            ["include_world"] = includeWorld,
             ["objects"] = result
         };
     }

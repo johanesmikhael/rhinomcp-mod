@@ -7,7 +7,7 @@ namespace rhinomcp_mod.Serializers;
 
 public static partial class Serializer
 {
-    private static JObject SerializeCurveGeometry(Curve curve, bool includeGeometrySummary, int maxPoints)
+    private static JObject SerializeCurveGeometry(Curve curve, bool includeGeometrySummary, int maxPoints, bool includeWorld = true)
     {
         if (curve == null)
         {
@@ -66,10 +66,9 @@ public static partial class Serializer
                 });
             }
 
-            return new JObject
+            var geometry = new JObject
             {
                 ["planar"] = true,
-                ["world_points"] = worldPoints,
                 ["local_points"] = localPoints,
                 ["pose"] = new JObject
                 {
@@ -90,6 +89,11 @@ public static partial class Serializer
                     }
                 }
             };
+            if (includeWorld)
+            {
+                geometry["world_points"] = worldPoints;
+            }
+            return geometry;
         }
 
         foreach (JToken token in worldPoints)
@@ -105,10 +109,9 @@ public static partial class Serializer
             });
         }
 
-        return new JObject
+        var nonPlanarGeometry = new JObject
         {
             ["planar"] = false,
-            ["world_points"] = worldPoints,
             ["local_points"] = localPoints,
             ["pose"] = new JObject
             {
@@ -129,5 +132,10 @@ public static partial class Serializer
                 }
             }
         };
+        if (includeWorld)
+        {
+            nonPlanarGeometry["world_points"] = worldPoints;
+        }
+        return nonPlanarGeometry;
     }
 }

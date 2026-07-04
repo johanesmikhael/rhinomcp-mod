@@ -14,7 +14,7 @@ This repository extends Rhino MCP with deeper geometric and topological context 
 Compared to baseline object metadata, this mod exposes richer geometric semantics (via tools like `get_object_info` / `get_objects_info`):
 
 - Compact scene inventory via `get_document_info(detail="inventory")`
-- Local and world representations for supported geometry
+- Local-first detailed geometry with optional world duplicates
 - `pose.world_from_local` frames for lines, curves/polylines, breps, and extrusions
 - Planarity-aware curve/polyline summaries
 - OBB-oriented summaries for complex solids (brep/extrusion)
@@ -63,7 +63,13 @@ Pagination and truncation fields:
 - `spatial_filter`: present when `bbox` is supplied; includes normalized world AABB,
   `bbox_mode`, and matched object count.
 
-For detailed geometry, first identify target ids/names from `inventory` or `summary`, then call `get_objects_info(objects=[...])`. Use `max_geometry_points` with `detail="full"` to cap curve/polyline point output.
+For detailed geometry, first identify target ids/names from `inventory` or `summary`, then call `get_objects_info(objects=[...], geometry_detail="obb_pose")`.
+
+- `geometry_detail="bbox"`: world AABB only, cheapest detailed lookup.
+- `geometry_detail="obb_pose"`: default detailed mode. Curves/lines return local coordinates + pose; solids return OBB extents + pose.
+- `include_world=true`: re-add world-space duplicates such as `world_points`, `world_start`/`world_end`, and `obb.world_corners`.
+
+Use `max_geometry_points` with `detail="full"` only for legacy document payloads.
 
 ### 3. Pose-Aware and Batch Transform Workflows
 

@@ -8,7 +8,9 @@ def get_objects_info(
     ctx: Context,
     objects: List[Dict[str, Any]],
     include_attributes: bool = False,
-    outline_max_points: int = 0
+    outline_max_points: int = 0,
+    geometry_detail: str = "obb_pose",
+    include_world: bool = False,
 ) -> Dict[str, Any]:
     """
     Get detailed information for multiple objects by explicit selectors.
@@ -19,6 +21,8 @@ def get_objects_info(
       - id or name: required selector
     - include_attributes: Optional bool to include user attributes
     - outline_max_points: Optional int for geometry outline simplification
+    - geometry_detail: "bbox" for world AABB only, "obb_pose" for pose-aware detailed geometry.
+    - include_world: Include world-space duplicates such as world points and world corners.
     """
     try:
         if not objects:
@@ -33,7 +37,9 @@ def get_objects_info(
         rhino = get_rhino_connection()
         params: Dict[str, Any] = {
             "objects": objects,
-            "include_attributes": include_attributes
+            "include_attributes": include_attributes,
+            "geometry_detail": geometry_detail,
+            "include_world": include_world,
         }
         if outline_max_points is not None:
             params["outline_max_points"] = outline_max_points
