@@ -1,6 +1,6 @@
 from mcp.server.fastmcp import Context
-import json
 from rhinomcp.server import get_rhino_connection, mcp, logger
+from typing import Any, Dict
 
 
 @mcp.tool()
@@ -9,7 +9,7 @@ def open_file(
     path: str,
     close_current: bool = False,
     save_current: bool = False,
-) -> str:
+) -> Dict[str, Any]:
     """
     Open a Rhino .3dm file.
 
@@ -28,7 +28,7 @@ def open_file(
                 "save_current": save_current,
             },
         )
-        return json.dumps(result, indent=2)
+        return result
     except Exception as e:
         logger.error(f"Error opening file: {str(e)}")
-        return f"Error opening file: {str(e)}"
+        return {"error": str(e)}

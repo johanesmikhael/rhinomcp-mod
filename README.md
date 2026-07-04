@@ -13,6 +13,7 @@ This repository extends Rhino MCP with deeper geometric and topological context 
 
 Compared to baseline object metadata, this mod exposes richer geometric semantics (via tools like `get_object_info` / `get_objects_info`):
 
+- Compact scene inventory via `get_document_info(detail="inventory")`
 - Local and world representations for supported geometry
 - `pose.world_from_local` frames for lines, curves/polylines, breps, and extrusions
 - Planarity-aware curve/polyline summaries
@@ -32,6 +33,29 @@ This mod adds a connectivity graph pipeline:
 - Rhino command: `mcpmodgraph`
 
 The graph returns compact node/edge topology (including representative contact points), so AI can reason about adjacency/connectivity instead of isolated objects.
+
+### Scene Inspection Contract
+
+Use `get_document_info` as the first scene-index call. Its default is intentionally compact:
+
+```text
+get_document_info(detail="inventory", limit=100, offset=0, include_bbox=true)
+```
+
+Supported `detail` values:
+
+- `inventory`: id, name, type, layer, and optional world axis-aligned `bbox`.
+- `summary`: inventory fields plus compact descriptors such as point counts, planarity, face counts, and material/color.
+- `full`: legacy per-object document payload. Use sparingly; prefer `get_objects_info` for detailed geometry of selected targets.
+
+Pagination and truncation fields:
+
+- `object_count`: total object count in the document.
+- `objects_returned`: number of objects in this response.
+- `objects_truncated`: true when more objects are available.
+- `objects_offset` / `objects_limit`: page position and page size.
+
+For detailed geometry, first identify target ids/names from `inventory` or `summary`, then call `get_objects_info(objects=[...])`. Use `max_geometry_points` with `detail="full"` to cap curve/polyline point output.
 
 ### 3. Pose-Aware and Batch Transform Workflows
 

@@ -1,6 +1,6 @@
 from mcp.server.fastmcp import Context
-import json
 from rhinomcp.server import get_rhino_connection, mcp, logger
+from typing import Any, Dict
 
 
 @mcp.tool()
@@ -8,7 +8,7 @@ def close_file(
     ctx: Context,
     save_changes: bool = False,
     save_path: str = None,
-) -> str:
+) -> Dict[str, Any]:
     """
     Close the active Rhino document.
 
@@ -23,7 +23,7 @@ def close_file(
             command_params["save_path"] = save_path
 
         result = rhino.send_command("close_file", command_params)
-        return json.dumps(result, indent=2)
+        return result
     except Exception as e:
         logger.error(f"Error closing file: {str(e)}")
-        return f"Error closing file: {str(e)}"
+        return {"error": str(e)}

@@ -41,7 +41,8 @@ def asset_general_strategy() -> str:
     - Avoid object-count explosion from unnecessary duplication.
 
     ALWAYS START:
-    0) Before anything, always check the document from get_document_info().
+    0) Before anything, check the scene with get_document_info(detail="inventory").
+       Treat this as a compact scene index, not as a detailed geometry carrier.
 
     DEFAULT DESIGN OPERATORS:
     - Inspect and select target objects.
@@ -52,7 +53,12 @@ def asset_general_strategy() -> str:
     - Assemble configurations with the smallest required set of objects.
 
     TOOL USAGE GUIDELINES:
+    - Use get_document_info(detail="inventory") for the first scene scan: id, name, type, layer, and world AABB bbox.
+    - Use get_document_info(detail="summary") when compact per-object descriptors are needed without coordinate arrays.
+    - Use limit/offset on get_document_info when the scene is large; watch objects_truncated and objects_returned.
     - Use get_object_info / get_objects_info to understand source objects.
+    - Prefer get_objects_info for detailed geometry of selected targets after inventory/summary identifies them.
+    - Avoid get_document_info(detail="full") unless the user explicitly needs legacy full per-object document payloads.
     - Use modify_object(s) first for direct edits.
     - Use copy_object(s) only when:
     - the user asks for duplication/patterning, or

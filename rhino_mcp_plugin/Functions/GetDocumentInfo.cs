@@ -1,11 +1,20 @@
 using Newtonsoft.Json.Linq;
 using Rhino;
+using Rhino.DocObjects;
+using Rhino.Geometry;
 using rhinomcp_mod.Serializers;
+using System;
+using System.Linq;
 
 namespace RhinoMCPModPlugin.Functions;
 
 public partial class RhinoMCPModFunctions
 {
+    private const int DefaultDocumentInfoLimit = 100;
+    private const int MaxDocumentInfoLimit = 1000;
+    private const int DefaultDocumentInfoFullLimit = 300;
+    private const int DefaultDocumentInfoGeometryPointCap = 64;
+
     private static JToken SafeLayerProperty(System.Func<JToken> getter, JToken fallback = null)
     {
         try
@@ -18,11 +27,148 @@ public partial class RhinoMCPModFunctions
         }
     }
 
+    private static int ReadBoundedInt(JObject parameters, string name, int fallback, int min, int max)
+    {
+        int value = parameters?[name]?.ToObject<int>() ?? fallback;
+        if (value < min)
+        {
+            return min;
+        }
+        if (value > max)
+        {
+            return max;
+        }
+        return value;
+    }
+
+    private static string ReadDocumentInfoDetail(JObject parameters)
+    {
+        string detail = parameters?["detail"]?.ToString()?.Trim().ToLowerInvariant() ?? "inventory";
+        if (detail == "inventory" || detail == "summary" || detail == "full")
+        {
+            return detail;
+        }
+        throw new ArgumentException("detail must be one of: inventory, summary, full.");
+    }
+
+    private static JObject BuildDocumentObjectInventory(RhinoObject obj, string detail, bool includeBbox)
+    {
+        var objectInfo = new JObject
+        {
+            ["id"] = obj.Id.ToString(),
+            ["name"] = obj.Name ?? "(unnamed)",
+            ["type"] = obj.ObjectType.ToString(),
+            ["layer"] = SafeGetLayerName(obj)
+        };
+
+        GeometryBase geometry = obj.Geometry;
+        if (includeBbox && geometry != null)
+        {
+            BoundingBox bbox = geometry.GetBoundingBox(true);
+            if (bbox.IsValid)
+            {
+                objectInfo["bbox"] = Serializer.SerializeBBox(bbox);
+                objectInfo["bbox_frame"] = "world_aabb";
+            }
+        }
+
+        if (detail != "summary" || geometry == null)
+        {
+            return objectInfo;
+        }
+
+        objectInfo["material"] = obj.Attributes.MaterialIndex.ToString();
+        objectInfo["color"] = Serializer.SerializeColor(obj.Attributes.ObjectColor);
+
+        double tolerance = RhinoDoc.ActiveDoc?.ModelAbsoluteTolerance ?? 0.01;
+        var descriptor = new JObject();
+
+        switch (geometry)
+        {
+            case Point:
+                descriptor["kind"] = "point";
+                break;
+            case LineCurve line:
+                descriptor["kind"] = "line";
+                descriptor["point_count"] = 2;
+                descriptor["length"] = Math.Round(line.Line.Length, 2);
+                break;
+            case PolylineCurve polyline:
+                descriptor["kind"] = "polyline";
+                descriptor["point_count"] = polyline.ToArray().Length;
+                descriptor["closed"] = polyline.IsClosed;
+                descriptor["planar"] = polyline.IsPlanar(tolerance);
+                break;
+            case Curve curve:
+                descriptor["kind"] = "curve";
+                descriptor["degree"] = curve.Degree;
+                descriptor["control_point_count"] = curve.ControlPolygon().Count();
+                descriptor["closed"] = curve.IsClosed;
+                descriptor["planar"] = curve.IsPlanar(tolerance);
+                break;
+            case Extrusion extrusion:
+                descriptor["kind"] = "extrusion";
+                descriptor["closed"] = extrusion.IsSolid;
+                break;
+            case Brep brep:
+                descriptor["kind"] = brep.Faces.Count == 1 ? "surface" : "brep";
+                descriptor["face_count"] = brep.Faces.Count;
+                descriptor["edge_count"] = brep.Edges.Count;
+                descriptor["solid"] = brep.IsSolid;
+                break;
+            case Mesh mesh:
+                descriptor["kind"] = "mesh";
+                descriptor["vertex_count"] = mesh.Vertices.Count;
+                descriptor["face_count"] = mesh.Faces.Count;
+                descriptor["closed"] = mesh.IsClosed;
+                break;
+            default:
+                descriptor["kind"] = geometry.ObjectType.ToString();
+                break;
+        }
+
+        objectInfo["geometry_summary"] = descriptor;
+        return objectInfo;
+    }
+
+    private static string SafeGetLayerName(RhinoObject obj)
+    {
+        try
+        {
+            var doc = RhinoDoc.ActiveDoc;
+            int layerIndex = obj.Attributes.LayerIndex;
+            if (doc != null && layerIndex >= 0)
+            {
+                var layer = doc.Layers[layerIndex];
+                if (layer != null)
+                {
+                    return layer.FullPath ?? layer.Name ?? "(unknown)";
+                }
+            }
+        }
+        catch
+        {
+        }
+
+        return "(unknown)";
+    }
+
     public JObject GetDocumentInfo(JObject parameters)
     {
-        const int LIMIT = 300;
-                
-        RhinoApp.WriteLine("Getting document info...");
+        string detail = ReadDocumentInfoDetail(parameters);
+        int defaultLimit = detail == "full" ? DefaultDocumentInfoFullLimit : DefaultDocumentInfoLimit;
+        int limit = ReadBoundedInt(parameters, "limit", defaultLimit, 1, MaxDocumentInfoLimit);
+        int offset = ReadBoundedInt(parameters, "offset", 0, 0, int.MaxValue);
+        bool includeBbox = parameters?["include_bbox"]?.ToObject<bool>() ?? true;
+        int maxGeometryPoints = ReadBoundedInt(
+            parameters,
+            "max_geometry_points",
+            DefaultDocumentInfoGeometryPointCap,
+            2,
+            1000
+        );
+
+        RhinoApp.WriteLine($"Getting document info detail={detail} limit={limit} offset={offset}...");
 
         var doc = RhinoDoc.ActiveDoc;
 
@@ -39,30 +185,34 @@ public partial class RhinoMCPModFunctions
 
         var objectData = new JArray();
 
-        // Collect minimal object information (limit to first 10 objects)
-        int count = 0;
-        foreach (var docObject in doc.Objects)
-        {
-            if (count >= LIMIT) break;
+        var objects = doc.Objects
+            .Where(docObject => docObject != null)
+            .OrderBy(docObject => docObject.Id)
+            .ToList();
 
+        int skippedObjectErrors = 0;
+        foreach (var docObject in objects.Skip(offset).Take(limit))
+        {
             try
             {
-                objectData.Add(Serializer.RhinoObject(docObject));
+                objectData.Add(
+                    detail == "full"
+                        ? Serializer.RhinoObject(docObject, includeGeometrySummary: false, outlineMaxPoints: maxGeometryPoints)
+                        : BuildDocumentObjectInventory(docObject, detail, includeBbox)
+                );
             }
             catch (System.Exception ex)
             {
                 RhinoApp.WriteLine($"Skipping object in get_document_info ({docObject?.Id}): {ex}");
+                skippedObjectErrors++;
             }
-            count++;
         }
 
         var layerData = new JArray();
 
-        count = 0;
-        foreach (var docLayer in doc.Layers)
+        int skippedLayerErrors = 0;
+        foreach (var docLayer in doc.Layers.Take(limit))
         {
-            if (count >= LIMIT) break;
-
             try
             {
                 layerData.Add(new JObject
@@ -77,21 +227,30 @@ public partial class RhinoMCPModFunctions
             catch (System.Exception ex)
             {
                 RhinoApp.WriteLine($"Skipping layer in get_document_info ({docLayer?.Id}): {ex.Message}");
+                skippedLayerErrors++;
             }
-            count++;
         }
-
 
         var result = new JObject
         {
             ["meta_data"] = metaData,
-            ["object_count"] = doc.Objects.Count,
+            ["detail"] = detail,
+            ["object_count"] = objects.Count,
+            ["objects_returned"] = objectData.Count,
+            ["objects_offset"] = offset,
+            ["objects_limit"] = limit,
+            ["objects_truncated"] = (long)offset + limit < objects.Count,
+            ["objects_skipped_errors"] = skippedObjectErrors,
             ["objects"] = objectData,
             ["layer_count"] = doc.Layers.Count,
+            ["layers_returned"] = layerData.Count,
+            ["layers_limit"] = limit,
+            ["layers_truncated"] = doc.Layers.Count > limit,
+            ["layers_skipped_errors"] = skippedLayerErrors,
             ["layers"] = layerData
         };
 
-        RhinoApp.WriteLine($"Document info collected: {count} objects");
+        RhinoApp.WriteLine($"Document info collected: {objectData.Count} objects");
         return result;
     }
 }

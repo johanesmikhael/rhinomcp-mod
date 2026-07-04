@@ -16,8 +16,20 @@ public static partial class Serializer
 
         if (!includeGeometrySummary)
         {
-            var crv = SerializeCurve(curve);
-            return (JObject)crv["geometry"];
+            if (maxPoints <= 0)
+            {
+                var crv = SerializeCurve(curve);
+                return (JObject)crv["geometry"];
+            }
+
+            var points = SerializeCurvePoints(curve, maxPoints);
+            return new JObject
+            {
+                ["points"] = points,
+                ["degree"] = curve.Degree.ToString(),
+                ["points_cap"] = maxPoints,
+                ["points_returned"] = points.Count
+            };
         }
 
         if (maxPoints <= 0)

@@ -7,13 +7,38 @@ namespace rhinomcp_mod.Serializers;
 
 public static partial class Serializer
 {
-    private static JObject SerializePolylineGeometry(PolylineCurve polyline, bool includeGeometrySummary)
+    private static JObject SerializePolylineGeometry(PolylineCurve polyline, bool includeGeometrySummary, int maxPoints)
     {
         var geometry = new JObject();
         var points = polyline.ToArray();
         if (!includeGeometrySummary)
         {
-            geometry["points"] = SerializePoints(points);
+            if (maxPoints > 0 && points.Length > maxPoints)
+            {
+                var sampled = new JArray();
+                int step = Math.Max(1, (int)Math.Ceiling(points.Length / (double)maxPoints));
+                int lastAddedIndex = -1;
+                for (int i = 0; i < points.Length; i += step)
+                {
+                    sampled.Add(SerializePoint(points[i]));
+                    lastAddedIndex = i;
+                }
+                if (points.Length > 0 && lastAddedIndex != points.Length - 1)
+                {
+                    sampled.Add(SerializePoint(points[points.Length - 1]));
+                }
+                geometry["points"] = sampled;
+                geometry["points_truncated"] = true;
+                geometry["point_count"] = points.Length;
+                geometry["points_returned"] = sampled.Count;
+            }
+            else
+            {
+                geometry["points"] = SerializePoints(points);
+                geometry["points_truncated"] = false;
+                geometry["point_count"] = points.Length;
+                geometry["points_returned"] = points.Length;
+            }
             return geometry;
         }
 

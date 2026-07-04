@@ -80,7 +80,7 @@ namespace rhinomcp_mod.Serializers
                 return result;
             }
 
-            double[] t = crv.DivideByCount(Math.Max(2, maxPoints), true);
+            double[] t = crv.DivideByCount(Math.Max(1, maxPoints - 1), true);
             if (t == null)
             {
                 return new JArray();
@@ -189,7 +189,7 @@ namespace rhinomcp_mod.Serializers
                 else if (obj.Geometry is Rhino.Geometry.PolylineCurve polyline)
                 {
                     objInfo["type"] = "POLYLINE";
-                    objInfo["geometry"] = SerializePolylineGeometry(polyline, includeGeometrySummary);
+                    objInfo["geometry"] = SerializePolylineGeometry(polyline, includeGeometrySummary, outlineMaxPoints);
                 }
                 else if (obj.Geometry is Rhino.Geometry.Curve curve)
                 {
