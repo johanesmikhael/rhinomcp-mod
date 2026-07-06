@@ -141,18 +141,12 @@ public static partial class Serializer
         }
     }
 
-    private static List<Point2d> SimplifyPolyline(List<Point2d> points, double tolerance, int maxPoints)
+    private static List<Point2d> RunRdp(List<Point2d> points, double tolerance)
     {
-        if (points.Count <= 2)
-        {
-            return points;
-        }
-
         bool[] keep = new bool[points.Count];
         keep[0] = true;
         keep[points.Count - 1] = true;
-        double tolSq = tolerance * tolerance;
-        RdpRecursive(points, 0, points.Count - 1, tolSq, keep);
+        RdpRecursive(points, 0, points.Count - 1, tolerance * tolerance, keep);
 
         var simplified = new List<Point2d>();
         for (int i = 0; i < points.Count; i++)
@@ -162,37 +156,70 @@ public static partial class Serializer
                 simplified.Add(points[i]);
             }
         }
-
-        if (maxPoints > 1 && simplified.Count > maxPoints)
-        {
-            int step = (int)Math.Ceiling((simplified.Count - 1) / (double)(maxPoints - 1));
-            var sampled = new List<Point2d>();
-            for (int i = 0; i < simplified.Count; i += step)
-            {
-                sampled.Add(simplified[i]);
-            }
-            if (!sampled.Last().Equals(simplified.Last()))
-            {
-                sampled.Add(simplified.Last());
-            }
-            return sampled;
-        }
-
         return simplified;
     }
 
-    private static List<Point3d> SimplifyPolyline3d(List<Point3d> points, double tolerance, int maxPoints)
+    private static double BBoxDiagonal(List<Point2d> points)
+    {
+        double minX = double.MaxValue, minY = double.MaxValue, maxX = double.MinValue, maxY = double.MinValue;
+        foreach (Point2d p in points)
+        {
+            if (p.X < minX) minX = p.X;
+            if (p.X > maxX) maxX = p.X;
+            if (p.Y < minY) minY = p.Y;
+            if (p.Y > maxY) maxY = p.Y;
+        }
+        double dx = maxX - minX, dy = maxY - minY;
+        return Math.Sqrt(dx * dx + dy * dy);
+    }
+
+    private static List<Point2d> SimplifyPolyline(List<Point2d> points, double tolerance, int maxPoints)
     {
         if (points.Count <= 2)
         {
             return points;
         }
 
+        List<Point2d> simplified = RunRdp(points, tolerance);
+
+        // Over budget: escalate RDP tolerance so reduction stays geometry-aware
+        // (keeps the most significant corners). Uniform subsampling would destroy
+        // the silhouette of a complex/concave mesh, so use it only as a last resort.
+        if (maxPoints > 1 && simplified.Count > maxPoints)
+        {
+            double diag = BBoxDiagonal(points);
+            double eps = Math.Max(tolerance, diag * 0.005);
+            for (int iter = 0; iter < 32 && simplified.Count > maxPoints; iter++)
+            {
+                simplified = RunRdp(points, eps);
+                eps *= 1.5;
+            }
+
+            if (simplified.Count > maxPoints)
+            {
+                int step = (int)Math.Ceiling((simplified.Count - 1) / (double)(maxPoints - 1));
+                var sampled = new List<Point2d>();
+                for (int i = 0; i < simplified.Count; i += step)
+                {
+                    sampled.Add(simplified[i]);
+                }
+                if (!sampled.Last().Equals(simplified.Last()))
+                {
+                    sampled.Add(simplified.Last());
+                }
+                return sampled;
+            }
+        }
+
+        return simplified;
+    }
+
+    private static List<Point3d> RunRdp3d(List<Point3d> points, double tolerance)
+    {
         bool[] keep = new bool[points.Count];
         keep[0] = true;
         keep[points.Count - 1] = true;
-        double tolSq = tolerance * tolerance;
-        RdpRecursive(points, 0, points.Count - 1, tolSq, keep);
+        RdpRecursive(points, 0, points.Count - 1, tolerance * tolerance, keep);
 
         var simplified = new List<Point3d>();
         for (int i = 0; i < points.Count; i++)
@@ -202,20 +229,61 @@ public static partial class Serializer
                 simplified.Add(points[i]);
             }
         }
+        return simplified;
+    }
 
+    private static double BBoxDiagonal(List<Point3d> points)
+    {
+        double minX = double.MaxValue, minY = double.MaxValue, minZ = double.MaxValue;
+        double maxX = double.MinValue, maxY = double.MinValue, maxZ = double.MinValue;
+        foreach (Point3d p in points)
+        {
+            if (p.X < minX) minX = p.X;
+            if (p.X > maxX) maxX = p.X;
+            if (p.Y < minY) minY = p.Y;
+            if (p.Y > maxY) maxY = p.Y;
+            if (p.Z < minZ) minZ = p.Z;
+            if (p.Z > maxZ) maxZ = p.Z;
+        }
+        double dx = maxX - minX, dy = maxY - minY, dz = maxZ - minZ;
+        return Math.Sqrt(dx * dx + dy * dy + dz * dz);
+    }
+
+    private static List<Point3d> SimplifyPolyline3d(List<Point3d> points, double tolerance, int maxPoints)
+    {
+        if (points.Count <= 2)
+        {
+            return points;
+        }
+
+        List<Point3d> simplified = RunRdp3d(points, tolerance);
+
+        // Geometry-aware reduction: escalate RDP tolerance to hit the budget while
+        // keeping significant corners, rather than blind uniform subsampling.
         if (maxPoints > 1 && simplified.Count > maxPoints)
         {
-            int step = (int)Math.Ceiling((simplified.Count - 1) / (double)(maxPoints - 1));
-            var sampled = new List<Point3d>();
-            for (int i = 0; i < simplified.Count; i += step)
+            double diag = BBoxDiagonal(points);
+            double eps = Math.Max(tolerance, diag * 0.005);
+            for (int iter = 0; iter < 32 && simplified.Count > maxPoints; iter++)
             {
-                sampled.Add(simplified[i]);
+                simplified = RunRdp3d(points, eps);
+                eps *= 1.5;
             }
-            if (!sampled.Last().Equals(simplified.Last()))
+
+            if (simplified.Count > maxPoints)
             {
-                sampled.Add(simplified.Last());
+                int step = (int)Math.Ceiling((simplified.Count - 1) / (double)(maxPoints - 1));
+                var sampled = new List<Point3d>();
+                for (int i = 0; i < simplified.Count; i += step)
+                {
+                    sampled.Add(simplified[i]);
+                }
+                if (!sampled.Last().Equals(simplified.Last()))
+                {
+                    sampled.Add(simplified.Last());
+                }
+                return sampled;
             }
-            return sampled;
         }
 
         return simplified;

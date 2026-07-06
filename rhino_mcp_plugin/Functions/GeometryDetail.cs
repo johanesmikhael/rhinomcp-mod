@@ -192,6 +192,13 @@ public partial class RhinoMCPModFunctions
             return fallback;
         }
 
+        // 16 is too thin for a complex mesh/brep silhouette across three views;
+        // default to a richer per-view budget when the caller did not set one.
+        if (outlineMaxPoints <= 0)
+        {
+            outlineMaxPoints = 40;
+        }
+
         var data = BuildDetailedObjectBaseInfo(obj);
         var geometry = new JObject();
 
