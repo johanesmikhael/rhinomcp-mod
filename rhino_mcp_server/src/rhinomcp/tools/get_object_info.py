@@ -33,11 +33,20 @@ def get_object_info(
             - Lines: local endpoints + pose; world endpoints only when include_world=True
             - Curves/Polylines: local points + pose; world points only when include_world=True
             - Breps/Extrusions/Meshes: OBB extents + pose; world corners only when include_world=True
-    
+        - geometry_detail="ortho3" (solids/meshes; others fall back to obb_pose):
+            - "geometry.obb.extents", "geometry.pose"
+            - "geometry.views_frame": axis mapping string (top=[X,Y] front=[X,Z] right=[Y,Z], shared origin, silhouette)
+            - "geometry.views": list of {axis: "top"|"front"|"right", points: closed 2D [u,v] outer outline};
+              add include_world=True for points_world ([x,y,z]) per view
+            - "geometry.views_dropped": optional {dropped_axis: kept_axis} meaning the dropped view is
+              ~identical to the kept one (object symmetric there), NOT missing data
+
     Parameters:
     - id: The id of the object to get information about
     - name: The name of the object to get information about
-    - geometry_detail: "bbox" for world AABB only, "obb_pose" for pose-aware detailed geometry.
+    - geometry_detail: "bbox" (world AABB only) | "obb_pose" (pose-aware detailed geometry) |
+      "ortho3" (up to three orthographic outline views to disambiguate shapes with equal OBB extents,
+      e.g. cone vs cylinder vs tapered box).
     - include_world: Include world-space duplicates such as world points and world corners.
     """
     try:
