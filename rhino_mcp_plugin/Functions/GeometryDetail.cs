@@ -289,8 +289,64 @@ public partial class RhinoMCPModFunctions
             geometry["views_dropped"] = dropped;
         }
 
+        // Cache OBB corners + the kept views (world coords) so the mcpmodobb viewport
+        // conduit can draw the box and all three ortho outlines without recomputing.
+        WriteOrtho3Cache(obj, posePlane, obbBox, eX, eY, eZ, kept);
+
         data["geometry"] = geometry;
         return data;
+    }
+
+    private void WriteOrtho3Cache(
+        RhinoObject obj, Plane posePlane, BoundingBox obbBox,
+        double eX, double eY, double eZ, List<Ortho3Candidate> kept)
+    {
+        try
+        {
+            if (obj?.Geometry == null || !obbBox.IsValid)
+            {
+                return;
+            }
+
+            var worldCorners = new JArray();
+            foreach (Point3d pt in new Box(posePlane, obbBox).GetCorners())
+            {
+                worldCorners.Add(new JArray { Math.Round(pt.X, 2), Math.Round(pt.Y, 2), Math.Round(pt.Z, 2) });
+            }
+
+            var orthoWorld = new JArray();
+            foreach (Ortho3Candidate c in kept)
+            {
+                if (c?.World == null)
+                {
+                    continue;
+                }
+                orthoWorld.Add(new JObject
+                {
+                    ["axis"] = c.Axis,
+                    ["points"] = c.World.DeepClone(),
+                    ["closed"] = true
+                });
+            }
+
+            var payload = new JObject
+            {
+                ["bbox_world"] = BuildBboxSnapshot(obj.Geometry.GetBoundingBox(true)),
+                ["obb"] = new JObject
+                {
+                    ["extents"] = new JArray { Math.Round(eX, 2), Math.Round(eY, 2), Math.Round(eZ, 2) },
+                    ["world_corners"] = worldCorners
+                },
+                ["ortho3_world"] = orthoWorld
+            };
+
+            obj.Attributes.SetUserString(ObbStorageKey, payload.ToString(Newtonsoft.Json.Formatting.None));
+            obj.CommitChanges();
+        }
+        catch
+        {
+            // Cache write is best-effort; never fail the query over it.
+        }
     }
 
     private sealed class Ortho3Candidate

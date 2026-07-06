@@ -42,32 +42,48 @@ internal sealed class MCPOBBConduit : DisplayConduit
 
             checkedCount++;
 
-            if (!TryGetCachedGeometryWithPose(
-                    obj,
-                    out var corners,
-                    out var outlinePoints,
-                    out var outlineClosed,
-                    out var origin,
-                    out var xAxis,
-                    out var yAxis,
-                    out var zAxis))
+            // Box drawing depends only on cached OBB corners, not on any outline.
+            if (!TryReadCachedObbCorners(obj, out var corners))
             {
                 continue;
             }
 
             eligible++;
             DrawBoxEdges(e.Display, corners, _boxColor, 2);
-            DrawProjectedOutline(e.Display, outlinePoints, outlineClosed, _outlineColor, 3);
-            DrawPoseAxes(e.Display, corners, origin, xAxis, yAxis, zAxis);
+
+            // Draw all cached ortho3 views if present, else fall back to the single outline.
+            foreach (var outline in ReadCachedOutlines(obj))
+            {
+                DrawProjectedOutline(e.Display, outline.Points, outline.Closed, _outlineColor, 3);
+            }
+
+            // Pose axes are optional: only drawn when a pose frame is cached.
+            if (TryReadCachedPoseFrame(obj, out var origin, out var xAxis, out var yAxis, out var zAxis))
+            {
+                DrawPoseAxes(e.Display, corners, origin, xAxis, yAxis, zAxis);
+            }
+
             drawn++;
         }
 
         e.Display.Draw2dText(
-            $"MCP OBB ON | cached+pose: {drawn}/{eligible}" + (checkedCount >= MaxObjects ? $" (max {MaxObjects})" : string.Empty),
+            $"MCP OBB ON | drawn: {drawn}/{eligible}" + (checkedCount >= MaxObjects ? $" (max {MaxObjects})" : string.Empty),
             Color.White,
             new Point2d(20, 60),
             false,
             14);
+    }
+
+    private readonly struct CachedOutline
+    {
+        public CachedOutline(Point3d[] points, bool closed)
+        {
+            Points = points;
+            Closed = closed;
+        }
+
+        public Point3d[] Points { get; }
+        public bool Closed { get; }
     }
 
     private static bool IsVisibleObject(RhinoObject obj)
@@ -78,32 +94,6 @@ internal sealed class MCPOBBConduit : DisplayConduit
         }
 
         return true;
-    }
-
-    private static bool TryGetCachedGeometryWithPose(
-        RhinoObject obj,
-        out Point3d[] corners,
-        out Point3d[] outlinePoints,
-        out bool outlineClosed,
-        out Point3d origin,
-        out Vector3d xAxis,
-        out Vector3d yAxis,
-        out Vector3d zAxis)
-    {
-        corners = null;
-        outlinePoints = null;
-        outlineClosed = false;
-        origin = Point3d.Unset;
-        xAxis = Vector3d.Unset;
-        yAxis = Vector3d.Unset;
-        zAxis = Vector3d.Unset;
-
-        if (!TryReadCachedPoseFrame(obj, out origin, out xAxis, out yAxis, out zAxis))
-        {
-            return false;
-        }
-
-        return TryReadCachedObbAndOutline(obj, out corners, out outlinePoints, out outlineClosed);
     }
 
     private static bool TryReadCachedPoseFrame(
@@ -175,15 +165,9 @@ internal sealed class MCPOBBConduit : DisplayConduit
         }
     }
 
-    private static bool TryReadCachedObbAndOutline(
-        RhinoObject obj,
-        out Point3d[] corners,
-        out Point3d[] outlinePoints,
-        out bool outlineClosed)
+    private static bool TryReadCachedObbCorners(RhinoObject obj, out Point3d[] corners)
     {
         corners = null;
-        outlinePoints = null;
-        outlineClosed = false;
 
         string raw = obj?.Attributes?.GetUserString(ObbStorageKey);
         if (string.IsNullOrWhiteSpace(raw))
@@ -215,11 +199,6 @@ internal sealed class MCPOBBConduit : DisplayConduit
                 parsedCorners[i] = point;
             }
 
-            if (!TryReadOutline(payload, out outlinePoints, out outlineClosed))
-            {
-                return false;
-            }
-
             corners = parsedCorners;
             return true;
         }
@@ -229,13 +208,58 @@ internal sealed class MCPOBBConduit : DisplayConduit
         }
     }
 
-    private static bool TryReadOutline(JObject payload, out Point3d[] points, out bool closed)
+    // Reads cached world-space outlines: all ortho3 views if present, otherwise the
+    // single projected/surface outline. Returns empty when nothing is cached.
+    private static System.Collections.Generic.List<CachedOutline> ReadCachedOutlines(RhinoObject obj)
     {
-        points = null;
-        closed = false;
+        var result = new System.Collections.Generic.List<CachedOutline>();
 
-        JObject outline = payload["proj_outline_world"] as JObject ?? payload["surface_edges_world"] as JObject;
-        if (outline? ["points"] is not JArray arr || arr.Count < 2)
+        string raw = obj?.Attributes?.GetUserString(ObbStorageKey);
+        if (string.IsNullOrWhiteSpace(raw))
+        {
+            return result;
+        }
+
+        try
+        {
+            if (JObject.Parse(raw) is not JObject payload)
+            {
+                return result;
+            }
+
+            if (payload["ortho3_world"] is JArray views && views.Count > 0)
+            {
+                foreach (JToken view in views)
+                {
+                    if (view is JObject v && TryParseOutlineObject(v, out var outline))
+                    {
+                        result.Add(outline);
+                    }
+                }
+                if (result.Count > 0)
+                {
+                    return result;
+                }
+            }
+
+            JObject single = payload["proj_outline_world"] as JObject ?? payload["surface_edges_world"] as JObject;
+            if (single != null && TryParseOutlineObject(single, out var singleOutline))
+            {
+                result.Add(singleOutline);
+            }
+        }
+        catch
+        {
+            // Ignore malformed cache; nothing to draw.
+        }
+
+        return result;
+    }
+
+    private static bool TryParseOutlineObject(JObject outline, out CachedOutline result)
+    {
+        result = default;
+        if (outline?["points"] is not JArray arr || arr.Count < 2)
         {
             return false;
         }
@@ -251,8 +275,7 @@ internal sealed class MCPOBBConduit : DisplayConduit
             parsed[i] = p;
         }
 
-        points = parsed;
-        closed = outline["closed"]?.ToObject<bool>() ?? false;
+        result = new CachedOutline(parsed, outline["closed"]?.ToObject<bool>() ?? false);
         return true;
     }
 
