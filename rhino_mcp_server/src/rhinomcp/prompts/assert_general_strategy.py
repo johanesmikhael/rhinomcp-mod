@@ -61,6 +61,7 @@ def asset_general_strategy() -> str:
     - Prefer get_objects_info for detailed geometry of selected targets after inventory/summary identifies them.
     - Use geometry_detail="bbox" for lean detail when only coarse location/size matters.
     - Use geometry_detail="obb_pose" for default detailed geometry; local coordinates + pose come by default, world duplicates only when include_world=true.
+    - Use geometry_detail="ortho3" (solids/meshes) to disambiguate 3D shape when obb extents + one silhouette are ambiguous (cone vs cylinder vs tapered box share the same footprint and extents). Returns up to three orthographic outlines (top/front/right).
     - Avoid get_document_info(detail="full") unless the user explicitly needs legacy full per-object document payloads.
     - Use modify_object(s) first for direct edits.
     - Use copy_object(s) only when:
@@ -92,6 +93,12 @@ def asset_general_strategy() -> str:
       - R is a 3x3 rotation matrix.
       - t is the world position of the OBB center (the local origin).
     - geometry.obb.world_corners are optional absolute world-space points when include_world=true and must be consistent with pose + extents.
+
+    ORTHO3 PROTOCOL (geometry_detail="ortho3"):
+    - Returns up to 3 orthographic outline views in the pose local frame, each {axis, points}. points are 2D [u,v] pairs of a single closed outer loop.
+    - geometry.views_frame states the axis mapping: top=[X,Y], front=[X,Z], right=[Y,Z]. All views share the pose origin t and use the same units as obb.extents, so they are aligned like an engineering drawing (top's u-extent == front's u-extent == the object's X size).
+    - geometry.views_dropped maps a dropped view tag to a kept one, e.g. {"right":"front"} means the right silhouette is ~identical to front (object is symmetric across that pair). It is NOT missing data.
+    - Silhouettes are direction-agnostic: top==bottom, front==back, right==left. Views are always closed outer loops; edge-on/degenerate planes are dropped. Inner loops/holes are not represented (a washer reads as a solid disc).
 
     POSE CONVENTIONS (R, t):
     - R columns are the local X, Y, Z axes expressed in world coordinates (right-handed).

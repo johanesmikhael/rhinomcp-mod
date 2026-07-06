@@ -149,8 +149,21 @@ public static partial class Serializer
         return geometry;
     }
 
-    private static JObject BuildProjectedMeshOutline(Mesh mesh, Plane workingPlane, double tolerance, int outlineMaxPoints)
+    internal static JObject BuildProjectedMeshOutline(Mesh mesh, Plane workingPlane, double tolerance, int outlineMaxPoints)
     {
+        if (outlineMaxPoints <= 0)
+        {
+            outlineMaxPoints = 16;
+        }
+
+        // Preferred path: true silhouette via Mesh.GetOutlines (keeps concavity, holes-as-outer).
+        // Falls back to the convex-hull footprint below when it returns nothing usable.
+        JObject silhouette = TryBuildMeshSilhouetteOutline(mesh, workingPlane, tolerance, outlineMaxPoints);
+        if (silhouette != null)
+        {
+            return silhouette;
+        }
+
         var points2d = new List<Point2d>();
         var vertices = mesh.Vertices;
         for (int i = 0; i < vertices.Count; i++)
@@ -184,11 +197,13 @@ public static partial class Serializer
                 SerializePoint(workingPlane.PointAt(bbox.Min.X, bbox.Max.Y, 0.0)),
                 SerializePoint(workingPlane.PointAt(bbox.Min.X, bbox.Min.Y, 0.0))
             };
+            double rectArea = Math.Abs((bbox.Max.X - bbox.Min.X) * (bbox.Max.Y - bbox.Min.Y));
             return new JObject
             {
                 ["local"] = localRect,
                 ["world"] = worldRect,
-                ["closed"] = true
+                ["closed"] = true,
+                ["area"] = rectArea
             };
         }
 
@@ -241,11 +256,116 @@ public static partial class Serializer
             world.Add(SerializePoint(workingPlane.PointAt(pt.X, pt.Y, 0.0)));
         }
 
+        double hullArea = GetCurveAreaOrBboxArea(hullCurve, tolerance);
         return new JObject
         {
             ["local"] = local,
             ["world"] = world,
-            ["closed"] = closed
+            ["closed"] = closed,
+            ["area"] = hullArea
         };
+    }
+
+    // True silhouette outline via Mesh.GetOutlines(plane). Picks the largest-area loop,
+    // simplifies it, and returns { local, world, closed, area } in the plane's UV frame.
+    // Returns null when GetOutlines yields nothing usable so the caller falls back to hull.
+    private static JObject TryBuildMeshSilhouetteOutline(Mesh mesh, Plane workingPlane, double tolerance, int outlineMaxPoints)
+    {
+        Polyline[] outlines;
+        try
+        {
+            outlines = mesh.GetOutlines(workingPlane);
+        }
+        catch
+        {
+            return null;
+        }
+
+        if (outlines == null || outlines.Length == 0)
+        {
+            return null;
+        }
+
+        // Choose the largest-area loop (outer silhouette). Inner loops/holes dropped in v1.
+        List<Point2d> best2d = null;
+        double bestArea = -1.0;
+        foreach (Polyline pl in outlines)
+        {
+            if (pl == null || pl.Count < 3)
+            {
+                continue;
+            }
+
+            var pts = new List<Point2d>();
+            foreach (Point3d p in pl)
+            {
+                if (!workingPlane.ClosestParameter(p, out double u, out double v))
+                {
+                    u = p.X;
+                    v = p.Y;
+                }
+                pts.Add(new Point2d(u, v));
+            }
+
+            double area = Math.Abs(PolygonSignedArea(pts));
+            if (area > bestArea)
+            {
+                bestArea = area;
+                best2d = pts;
+            }
+        }
+
+        if (best2d == null || best2d.Count < 3)
+        {
+            return null;
+        }
+
+        if (best2d.Count > 1 && best2d[0].DistanceTo(best2d[best2d.Count - 1]) <= tolerance)
+        {
+            best2d.RemoveAt(best2d.Count - 1);
+        }
+
+        List<Point2d> simplified = SimplifyPolyline(best2d, tolerance, outlineMaxPoints);
+        if (simplified.Count < 3)
+        {
+            return null;
+        }
+        if (simplified[0].DistanceTo(simplified[simplified.Count - 1]) > tolerance)
+        {
+            simplified.Add(simplified[0]);
+        }
+
+        var local = new JArray();
+        var world = new JArray();
+        foreach (Point2d pt in simplified)
+        {
+            local.Add(SerializePoint2(pt.X, pt.Y));
+            world.Add(SerializePoint(workingPlane.PointAt(pt.X, pt.Y, 0.0)));
+        }
+
+        return new JObject
+        {
+            ["local"] = local,
+            ["world"] = world,
+            ["closed"] = true,
+            ["area"] = bestArea
+        };
+    }
+
+    private static double PolygonSignedArea(List<Point2d> pts)
+    {
+        if (pts == null || pts.Count < 3)
+        {
+            return 0.0;
+        }
+
+        double sum = 0.0;
+        for (int i = 0; i < pts.Count; i++)
+        {
+            Point2d a = pts[i];
+            Point2d b = pts[(i + 1) % pts.Count];
+            sum += a.X * b.Y - b.X * a.Y;
+        }
+        return sum * 0.5;
     }
 }

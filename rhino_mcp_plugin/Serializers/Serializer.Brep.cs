@@ -328,6 +328,204 @@ public static partial class Serializer
         return primaryArea * 1000.0 + bboxArea * 10.0 + length;
     }
 
+    // Projects a brep's visible outline onto an arbitrary plane via hidden-line drawing.
+    // Returns { local:JArray[u,v], world:JArray[x,y,z], closed:bool, area:double }.
+    // area/closed are used by ortho3 for the degenerate gate and dedup signature.
+    internal static JObject ProjectBrepOutlineOntoPlane(
+        Brep brep, Plane plane, double tolerance, int outlineMaxPoints)
+    {
+        if (brep == null)
+        {
+            throw new ArgumentNullException(nameof(brep));
+        }
+        if (outlineMaxPoints <= 0)
+        {
+            outlineMaxPoints = 16;
+        }
+
+        BoundingBox bbox3d = brep.GetBoundingBox(true);
+        double diag = bbox3d.Diagonal.Length;
+        if (diag <= RhinoMath.ZeroTolerance)
+        {
+            diag = 1.0;
+        }
+
+        Vector3d camDir = -plane.ZAxis;
+        Point3d camLoc = plane.Origin - camDir * (diag * 2.0);
+        Point3d target = plane.Origin;
+
+        var viewport = new RhinoViewport();
+        viewport.ChangeToParallelProjection(true);
+        viewport.SetCameraLocations(target, camLoc);
+        viewport.CameraUp = plane.YAxis;
+
+        var hldParams = new HiddenLineDrawingParameters
+        {
+            AbsoluteTolerance = tolerance,
+            Flatten = true
+        };
+        hldParams.SetViewport(viewport);
+        hldParams.AddGeometry(brep, tag: null, occluding_sections: true);
+
+        HiddenLineDrawing hld = HiddenLineDrawing.Compute(hldParams, false);
+        if (hld == null)
+        {
+            throw new InvalidOperationException("Hidden line drawing failed.");
+        }
+
+        var segments = new List<Curve>();
+        foreach (var segment in hld.Segments)
+        {
+            if (segment.SegmentVisibility == HiddenLineDrawingSegment.Visibility.Visible &&
+                segment.CurveGeometry != null)
+            {
+                segments.Add(segment.CurveGeometry.DuplicateCurve());
+            }
+        }
+
+        if (segments.Count == 0)
+        {
+            throw new InvalidOperationException("No visible outline segments found.");
+        }
+
+        Curve[] joined = Curve.JoinCurves(segments, tolerance) ?? Array.Empty<Curve>();
+        Curve[] joinedLoose = Curve.JoinCurves(segments, tolerance * 10.0) ?? Array.Empty<Curve>();
+
+        var closed = new List<Curve>();
+        closed.AddRange(joined.Where(c => c != null && c.IsClosed));
+        closed.AddRange(joinedLoose.Where(c => c != null && c.IsClosed));
+
+        Curve outlineCurve = null;
+        if (closed.Count > 0)
+        {
+            outlineCurve = closed
+                .OrderByDescending(c => ScoreClosedOutlineCurve(c, tolerance))
+                .FirstOrDefault();
+        }
+
+        Curve hullCurve = null;
+        var pts2d = new List<Point2d>();
+        foreach (var c in segments)
+        {
+            if (c == null)
+            {
+                continue;
+            }
+
+            Point3d p0 = c.PointAtStart;
+            Point3d p1 = c.PointAtEnd;
+            Point3d pm = c.PointAtNormalizedLength(0.5);
+
+            pts2d.Add(new Point2d(p0.X, p0.Y));
+            pts2d.Add(new Point2d(p1.X, p1.Y));
+            pts2d.Add(new Point2d(pm.X, pm.Y));
+        }
+
+        if (pts2d.Count >= 3)
+        {
+            int[] hullIndices;
+            var hull = PolylineCurve.CreateConvexHull2d(
+                pts2d.ToArray(),
+                out hullIndices
+            );
+
+            if (hull != null && hull.IsClosed)
+            {
+                hullCurve = hull;
+            }
+        }
+
+        if (outlineCurve != null && hullCurve != null)
+        {
+            double outlineArea = GetCurveAreaOrBboxArea(outlineCurve, tolerance);
+            double hullArea = GetCurveAreaOrBboxArea(hullCurve, tolerance);
+            if (hullArea > outlineArea * 1.25)
+            {
+                outlineCurve = hullCurve;
+            }
+        }
+
+        if (outlineCurve == null)
+        {
+            outlineCurve = hullCurve;
+        }
+
+        if (outlineCurve == null)
+        {
+            BoundingBox bbox = brep.GetBoundingBox(plane);
+            if (!bbox.IsValid)
+            {
+                throw new InvalidOperationException("Failed to compute bbox in canonical plane.");
+            }
+
+            var rect = new Rectangle3d(
+                Plane.WorldXY,
+                new Interval(bbox.Min.X, bbox.Max.X),
+                new Interval(bbox.Min.Y, bbox.Max.Y)
+            );
+
+            outlineCurve = rect.ToNurbsCurve();
+        }
+
+        if (outlineCurve == null)
+        {
+            throw new InvalidOperationException("Unable to select outline curve.");
+        }
+
+        double area = GetCurveAreaOrBboxArea(outlineCurve, tolerance);
+
+        Polyline outlinePolyline;
+        if (!outlineCurve.TryGetPolyline(out outlinePolyline))
+        {
+            PolylineCurve polylineCurve = outlineCurve.ToPolyline(
+                tolerance,
+                RhinoMath.ToRadians(2.0),
+                0.0,
+                0.0
+            );
+            if (polylineCurve == null || !polylineCurve.TryGetPolyline(out outlinePolyline))
+            {
+                throw new InvalidOperationException("Unable to convert outline to polyline.");
+            }
+        }
+
+        bool isClosed = outlineCurve.IsClosed;
+        var planePoints = new List<Point2d>();
+        foreach (var pt in outlinePolyline)
+        {
+            planePoints.Add(new Point2d(pt.X, pt.Y));
+        }
+
+        if (isClosed && planePoints.Count > 1 &&
+            planePoints[0].DistanceTo(planePoints[planePoints.Count - 1]) <= tolerance)
+        {
+            planePoints.RemoveAt(planePoints.Count - 1);
+        }
+
+        List<Point2d> simplified = SimplifyPolyline(planePoints, tolerance, outlineMaxPoints);
+        if (isClosed && simplified.Count > 0 &&
+            simplified[0].DistanceTo(simplified[simplified.Count - 1]) > tolerance)
+        {
+            simplified.Add(simplified[0]);
+        }
+
+        var local = new JArray();
+        var world = new JArray();
+        foreach (var pt in simplified)
+        {
+            local.Add(SerializePoint2(pt.X, pt.Y));
+            world.Add(Serializer.SerializePoint(plane.PointAt(pt.X, pt.Y, 0.0)));
+        }
+
+        return new JObject
+        {
+            ["local"] = local,
+            ["world"] = world,
+            ["closed"] = isClosed,
+            ["area"] = area
+        };
+    }
+
     private static JObject BuildBrepGeometrySummary(
         Brep brep,
         int outlineMaxPoints = 16,
@@ -449,177 +647,10 @@ public static partial class Serializer
         }
         else
         {
-            BoundingBox bbox3d = brep.GetBoundingBox(true);
-            double diag = bbox3d.Diagonal.Length;
-            if (diag <= RhinoMath.ZeroTolerance)
-            {
-                diag = 1.0;
-            }
-
-            Vector3d camDir = -workingPlane.ZAxis;
-            Point3d camLoc = workingPlane.Origin - camDir * (diag * 2.0);
-            Point3d target = workingPlane.Origin;
-
-            var viewport = new RhinoViewport();
-            viewport.ChangeToParallelProjection(true);
-            viewport.SetCameraLocations(target, camLoc);
-            viewport.CameraUp = workingPlane.YAxis;
-
-            var hldParams = new HiddenLineDrawingParameters
-            {
-                AbsoluteTolerance = tolerance,
-                Flatten = true
-            };
-            hldParams.SetViewport(viewport);
-            hldParams.AddGeometry(brep, tag: null, occluding_sections: true);
-
-            HiddenLineDrawing hld = HiddenLineDrawing.Compute(hldParams, false);
-            if (hld == null)
-            {
-                throw new InvalidOperationException("Hidden line drawing failed.");
-            }
-
-            var segments = new List<Curve>();
-            foreach (var segment in hld.Segments)
-            {
-                if (segment.SegmentVisibility == HiddenLineDrawingSegment.Visibility.Visible &&
-                    segment.CurveGeometry != null)
-                {
-                    segments.Add(segment.CurveGeometry.DuplicateCurve());
-                }
-            }
-
-            if (segments.Count == 0)
-            {
-                throw new InvalidOperationException("No visible outline segments found.");
-            }
-
-            Curve[] joined = Curve.JoinCurves(segments, tolerance) ?? Array.Empty<Curve>();
-            Curve[] joinedLoose = Curve.JoinCurves(segments, tolerance * 10.0) ?? Array.Empty<Curve>();
-
-            var closed = new List<Curve>();
-            closed.AddRange(joined.Where(c => c != null && c.IsClosed));
-            closed.AddRange(joinedLoose.Where(c => c != null && c.IsClosed));
-
-            Curve outlineCurve = null;
-            if (closed.Count > 0)
-            {
-                outlineCurve = closed
-                    .OrderByDescending(c => ScoreClosedOutlineCurve(c, tolerance))
-                    .FirstOrDefault();
-            }
-
-            Curve hullCurve = null;
-            var pts2d = new List<Point2d>();
-            foreach (var c in segments)
-            {
-                if (c == null)
-                {
-                    continue;
-                }
-
-                Point3d p0 = c.PointAtStart;
-                Point3d p1 = c.PointAtEnd;
-                Point3d pm = c.PointAtNormalizedLength(0.5);
-
-                pts2d.Add(new Point2d(p0.X, p0.Y));
-                pts2d.Add(new Point2d(p1.X, p1.Y));
-                pts2d.Add(new Point2d(pm.X, pm.Y));
-            }
-
-            if (pts2d.Count >= 3)
-            {
-                int[] hullIndices;
-                var hull = PolylineCurve.CreateConvexHull2d(
-                    pts2d.ToArray(),
-                    out hullIndices
-                );
-
-                if (hull != null && hull.IsClosed)
-                {
-                    hullCurve = hull;
-                }
-            }
-
-            if (outlineCurve != null && hullCurve != null)
-            {
-                double outlineArea = GetCurveAreaOrBboxArea(outlineCurve, tolerance);
-                double hullArea = GetCurveAreaOrBboxArea(hullCurve, tolerance);
-                if (hullArea > outlineArea * 1.25)
-                {
-                    outlineCurve = hullCurve;
-                }
-            }
-
-            if (outlineCurve == null)
-            {
-                outlineCurve = hullCurve;
-            }
-
-            if (outlineCurve == null)
-            {
-                BoundingBox bbox = brep.GetBoundingBox(workingPlane);
-                if (!bbox.IsValid)
-                {
-                    throw new InvalidOperationException("Failed to compute bbox in canonical plane.");
-                }
-
-                var rect = new Rectangle3d(
-                    Plane.WorldXY,
-                    new Interval(bbox.Min.X, bbox.Max.X),
-                    new Interval(bbox.Min.Y, bbox.Max.Y)
-                );
-
-                outlineCurve = rect.ToNurbsCurve();
-            }
-
-            if (outlineCurve == null)
-            {
-                throw new InvalidOperationException("Unable to select outline curve.");
-            }
-
-            Polyline outlinePolyline;
-            if (!outlineCurve.TryGetPolyline(out outlinePolyline))
-            {
-                PolylineCurve polylineCurve = outlineCurve.ToPolyline(
-                    tolerance,
-                    RhinoMath.ToRadians(2.0),
-                    0.0,
-                    0.0
-                );
-                if (!polylineCurve.TryGetPolyline(out outlinePolyline))
-                {
-                    throw new InvalidOperationException("Unable to convert outline to polyline.");
-                }
-            }
-
-            isClosed = outlineCurve.IsClosed;
-            var planePoints = new List<Point2d>();
-            foreach (var pt in outlinePolyline)
-            {
-                planePoints.Add(new Point2d(pt.X, pt.Y));
-            }
-
-            if (isClosed && planePoints.Count > 1 &&
-                planePoints[0].DistanceTo(planePoints[planePoints.Count - 1]) <= tolerance)
-            {
-                planePoints.RemoveAt(planePoints.Count - 1);
-            }
-
-            List<Point2d> simplified = SimplifyPolyline(planePoints, tolerance, outlineMaxPoints);
-            if (isClosed && simplified.Count > 0 &&
-                simplified[0].DistanceTo(simplified[simplified.Count - 1]) > tolerance)
-            {
-                simplified.Add(simplified[0]);
-            }
-
-            localPoints = new JArray();
-            worldPoints = new JArray();
-            foreach (var pt in simplified)
-            {
-                localPoints.Add(SerializePoint2(pt.X, pt.Y));
-                worldPoints.Add(Serializer.SerializePoint(workingPlane.PointAt(pt.X, pt.Y, 0.0)));
-            }
+            JObject projected = ProjectBrepOutlineOntoPlane(brep, workingPlane, tolerance, outlineMaxPoints);
+            localPoints = projected["local"] as JArray ?? new JArray();
+            worldPoints = projected["world"] as JArray ?? new JArray();
+            isClosed = projected["closed"]?.ToObject<bool>() ?? false;
         }
 
         BoundingBox obbBox = brep.GetBoundingBox(workingPlane);

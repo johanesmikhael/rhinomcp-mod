@@ -21,7 +21,11 @@ def get_objects_info(
       - id or name: required selector
     - include_attributes: Optional bool to include user attributes
     - outline_max_points: Optional int for geometry outline simplification
-    - geometry_detail: "bbox" for world AABB only, "obb_pose" for pose-aware detailed geometry.
+    - geometry_detail: "bbox" for world AABB only, "obb_pose" for pose-aware detailed geometry,
+      "ortho3" for up to three orthographic outline views (top/front/right) of a solid/mesh.
+      Use "ortho3" to disambiguate shapes with equal OBB extents (cone vs cylinder vs tapered box);
+      redundant and edge-on views are dropped, and views_dropped maps each dropped view to its kept twin.
+      For non-solid/mesh objects "ortho3" falls back to "obb_pose".
     - include_world: Include world-space duplicates such as world points and world corners.
     """
     try:
