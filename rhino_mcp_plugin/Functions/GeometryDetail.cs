@@ -314,19 +314,27 @@ public partial class RhinoMCPModFunctions
                 worldCorners.Add(new JArray { Math.Round(pt.X, 2), Math.Round(pt.Y, 2), Math.Round(pt.Z, 2) });
             }
 
+            // One entry per disjoint loop so the viewport conduit draws every part.
             var orthoWorld = new JArray();
             foreach (Ortho3Candidate c in kept)
             {
-                if (c?.World == null)
+                if (c?.Loops == null)
                 {
                     continue;
                 }
-                orthoWorld.Add(new JObject
+                foreach (JToken t in c.Loops)
                 {
-                    ["axis"] = c.Axis,
-                    ["points"] = c.World.DeepClone(),
-                    ["closed"] = true
-                });
+                    if (t is not JObject loop || loop["world"] is not JArray worldPts || worldPts.Count < 2)
+                    {
+                        continue;
+                    }
+                    orthoWorld.Add(new JObject
+                    {
+                        ["axis"] = c.Axis,
+                        ["points"] = worldPts.DeepClone(),
+                        ["closed"] = true
+                    });
+                }
             }
 
             var payload = new JObject
@@ -360,6 +368,7 @@ public partial class RhinoMCPModFunctions
         public int PointCount;
         public JArray Local;
         public JArray World;
+        public JArray Loops; // all disjoint closed loops: each {local, world, closed, area}
     }
 
     private Ortho3Candidate BuildOrtho3Candidate(
@@ -434,6 +443,10 @@ public partial class RhinoMCPModFunctions
         candidate.PointCount = pts.Count;
         candidate.Local = local;
         candidate.World = projected["world"] as JArray;
+        candidate.Loops = projected["loops"] as JArray ?? new JArray
+        {
+            new JObject { ["local"] = local, ["world"] = projected["world"] as JArray ?? new JArray() }
+        };
         return candidate;
     }
 
@@ -458,14 +471,30 @@ public partial class RhinoMCPModFunctions
 
     private static JObject BuildOrtho3ViewJson(Ortho3Candidate c, bool includeWorld)
     {
+        // A view holds one or more disjoint closed outlines (separate silhouette parts).
+        var loops = new JArray();
+        var loopsWorld = new JArray();
+        foreach (JToken t in c.Loops ?? new JArray())
+        {
+            if (t is not JObject loop || loop["local"] is not JArray localPts)
+            {
+                continue;
+            }
+            loops.Add(localPts);
+            if (includeWorld)
+            {
+                loopsWorld.Add(loop["world"] as JArray ?? new JArray());
+            }
+        }
+
         var view = new JObject
         {
             ["axis"] = c.Axis,
-            ["points"] = c.Local
+            ["loops"] = loops
         };
-        if (includeWorld && c.World != null)
+        if (includeWorld)
         {
-            view["points_world"] = c.World;
+            view["loops_world"] = loopsWorld;
         }
         return view;
     }

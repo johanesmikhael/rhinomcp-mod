@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using Newtonsoft.Json.Linq;
 using Rhino;
 using Rhino.Geometry;
@@ -203,7 +204,17 @@ public static partial class Serializer
                 ["local"] = localRect,
                 ["world"] = worldRect,
                 ["closed"] = true,
-                ["area"] = rectArea
+                ["area"] = rectArea,
+                ["loops"] = new JArray
+                {
+                    new JObject
+                    {
+                        ["local"] = localRect.DeepClone(),
+                        ["world"] = worldRect.DeepClone(),
+                        ["closed"] = true,
+                        ["area"] = rectArea
+                    }
+                }
             };
         }
 
@@ -262,7 +273,17 @@ public static partial class Serializer
             ["local"] = local,
             ["world"] = world,
             ["closed"] = closed,
-            ["area"] = hullArea
+            ["area"] = hullArea,
+            ["loops"] = new JArray
+            {
+                new JObject
+                {
+                    ["local"] = local.DeepClone(),
+                    ["world"] = world.DeepClone(),
+                    ["closed"] = closed,
+                    ["area"] = hullArea
+                }
+            }
         };
     }
 
@@ -286,9 +307,9 @@ public static partial class Serializer
             return null;
         }
 
-        // Choose the largest-area loop (outer silhouette). Inner loops/holes dropped in v1.
-        List<Point2d> best2d = null;
-        double bestArea = -1.0;
+        // Collect every silhouette loop as 2D points in the plane. GetOutlines can return
+        // multiple disjoint loops (separate parts) - keep all significant ones, not just one.
+        var loops2d = new List<List<Point2d>>();
         foreach (Polyline pl in outlines)
         {
             if (pl == null || pl.Count < 3)
@@ -306,26 +327,82 @@ public static partial class Serializer
                 }
                 pts.Add(new Point2d(u, v));
             }
-
-            double area = Math.Abs(PolygonSignedArea(pts));
-            if (area > bestArea)
-            {
-                bestArea = area;
-                best2d = pts;
-            }
+            loops2d.Add(pts);
         }
 
-        if (best2d == null || best2d.Count < 3)
+        if (loops2d.Count == 0)
         {
             return null;
         }
 
-        if (best2d.Count > 1 && best2d[0].DistanceTo(best2d[best2d.Count - 1]) <= tolerance)
+        double maxArea = loops2d.Max(l => Math.Abs(PolygonSignedArea(l)));
+        if (maxArea <= 0.0)
         {
-            best2d.RemoveAt(best2d.Count - 1);
+            return null;
         }
 
-        List<Point2d> simplified = SimplifyPolyline(best2d, tolerance, outlineMaxPoints);
+        var candidates = loops2d
+            .Select(l => new { Pts = l, Area = Math.Abs(PolygonSignedArea(l)) })
+            .Where(x => x.Area >= 0.05 * maxArea)
+            .OrderByDescending(x => x.Area)
+            .Take(12)
+            .ToList();
+
+        // Keep disjoint outer loops; drop loops contained in a larger one (holes).
+        var kept = new List<(List<Point2d> Pts, double Area)>();
+        foreach (var c in candidates)
+        {
+            Point2d probe = c.Pts[0];
+            bool isHole = kept.Any(outer => IsPointInPolygon(probe, outer.Pts));
+            if (!isHole)
+            {
+                kept.Add((c.Pts, c.Area));
+            }
+        }
+
+        var loops = new JArray();
+        JObject primary = null;
+        foreach (var k in kept)
+        {
+            JObject o = LoopToJson(k.Pts, workingPlane, tolerance, outlineMaxPoints, k.Area);
+            if (o == null)
+            {
+                continue;
+            }
+            loops.Add(o);
+            primary ??= o;
+        }
+
+        if (primary == null)
+        {
+            return null;
+        }
+
+        return new JObject
+        {
+            ["local"] = primary["local"],
+            ["world"] = primary["world"],
+            ["closed"] = true,
+            ["area"] = maxArea,
+            ["loops"] = loops
+        };
+    }
+
+    // Simplifies one 2D loop and serializes it to { local, world, closed, area }.
+    private static JObject LoopToJson(List<Point2d> pts, Plane workingPlane, double tolerance, int outlineMaxPoints, double area)
+    {
+        if (pts == null || pts.Count < 3)
+        {
+            return null;
+        }
+
+        var work = new List<Point2d>(pts);
+        if (work.Count > 1 && work[0].DistanceTo(work[work.Count - 1]) <= tolerance)
+        {
+            work.RemoveAt(work.Count - 1);
+        }
+
+        List<Point2d> simplified = SimplifyPolyline(work, tolerance, outlineMaxPoints);
         if (simplified.Count < 3)
         {
             return null;
@@ -348,8 +425,30 @@ public static partial class Serializer
             ["local"] = local,
             ["world"] = world,
             ["closed"] = true,
-            ["area"] = bestArea
+            ["area"] = area
         };
+    }
+
+    private static bool IsPointInPolygon(Point2d p, List<Point2d> poly)
+    {
+        if (poly == null || poly.Count < 3)
+        {
+            return false;
+        }
+
+        bool inside = false;
+        int n = poly.Count;
+        for (int i = 0, j = n - 1; i < n; j = i++)
+        {
+            Point2d a = poly[i];
+            Point2d b = poly[j];
+            if (((a.Y > p.Y) != (b.Y > p.Y)) &&
+                (p.X < (b.X - a.X) * (p.Y - a.Y) / (b.Y - a.Y) + a.X))
+            {
+                inside = !inside;
+            }
+        }
+        return inside;
     }
 
     private static double PolygonSignedArea(List<Point2d> pts)

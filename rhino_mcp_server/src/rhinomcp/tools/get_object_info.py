@@ -36,8 +36,8 @@ def get_object_info(
         - geometry_detail="ortho3" (solids/meshes; others fall back to obb_pose):
             - "geometry.obb.extents", "geometry.pose"
             - "geometry.views_frame": axis mapping string (top=[X,Y] front=[X,Z] right=[Y,Z], shared origin, silhouette)
-            - "geometry.views": list of {axis: "top"|"front"|"right", points: closed 2D [u,v] outer outline};
-              add include_world=True for points_world ([x,y,z]) per view
+            - "geometry.views": list of {axis: "top"|"front"|"right", loops: list of closed 2D [u,v]
+              rings (usually one; more for disjoint silhouette parts)}; add include_world=True for loops_world
             - "geometry.views_dropped": optional {dropped_axis: kept_axis} meaning the dropped view is
               ~identical to the kept one (object symmetric there), NOT missing data
 

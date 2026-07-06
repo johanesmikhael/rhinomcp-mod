@@ -95,10 +95,10 @@ def asset_general_strategy() -> str:
     - geometry.obb.world_corners are optional absolute world-space points when include_world=true and must be consistent with pose + extents.
 
     ORTHO3 PROTOCOL (geometry_detail="ortho3"):
-    - Returns up to 3 orthographic outline views in the pose local frame, each {axis, points}. points are 2D [u,v] pairs of a single closed outer loop.
+    - Returns up to 3 orthographic outline views in the pose local frame, each {axis, loops}. loops is a list of closed outlines (usually one; more when the silhouette splits into disjoint parts), each a ring of 2D [u,v] pairs.
     - geometry.views_frame states the axis mapping: top=[X,Y], front=[X,Z], right=[Y,Z]. All views share the pose origin t and use the same units as obb.extents, so they are aligned like an engineering drawing (top's u-extent == front's u-extent == the object's X size).
     - geometry.views_dropped maps a dropped view tag to a kept one, e.g. {"right":"front"} means the right silhouette is ~identical to front (object is symmetric across that pair). It is NOT missing data.
-    - Silhouettes are direction-agnostic: top==bottom, front==back, right==left. Views are always closed outer loops; edge-on/degenerate planes are dropped. Inner loops/holes are not represented (a washer reads as a solid disc).
+    - Silhouettes are direction-agnostic: top==bottom, front==back, right==left. Each loop is closed; edge-on/degenerate planes are dropped. Multiple loops in one view mean disjoint parts (separate lumps), NOT holes: inner loops contained in a larger loop are dropped (a washer reads as a solid disc). Tiny specks below 5% of the largest loop's area are dropped.
 
     POSE CONVENTIONS (R, t):
     - R columns are the local X, Y, Z axes expressed in world coordinates (right-handed).

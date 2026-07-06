@@ -457,21 +457,84 @@ public static partial class Serializer
         }
 
         Curve[] joined = Curve.JoinCurves(segments, tolerance) ?? Array.Empty<Curve>();
-        Curve[] joinedLoose = Curve.JoinCurves(segments, tolerance * 10.0) ?? Array.Empty<Curve>();
 
-        var closed = new List<Curve>();
-        closed.AddRange(joined.Where(c => c != null && c.IsClosed));
-        closed.AddRange(joinedLoose.Where(c => c != null && c.IsClosed));
+        // All disjoint closed loops from the tolerance join = separate silhouette parts.
+        var closedLoops = joined.Where(c => c != null && c.IsClosed).ToList();
 
-        Curve outlineCurve = null;
-        if (closed.Count > 0)
+        Curve hullCurve = BuildSegmentsHull(segments);
+
+        if (closedLoops.Count == 1 && hullCurve != null)
         {
-            outlineCurve = closed
-                .OrderByDescending(c => ScoreClosedOutlineCurve(c, tolerance))
-                .FirstOrDefault();
+            // Single under-covering loop: repair with the hull. (Never merge disjoint parts.)
+            double outlineArea = GetCurveAreaOrBboxArea(closedLoops[0], tolerance);
+            double hullArea = GetCurveAreaOrBboxArea(hullCurve, tolerance);
+            if (hullArea > outlineArea * 1.25)
+            {
+                closedLoops[0] = hullCurve;
+            }
+        }
+        else if (closedLoops.Count == 0)
+        {
+            Curve fallback = hullCurve ?? BuildPlaneBboxRect(brep, plane);
+            if (fallback == null)
+            {
+                throw new InvalidOperationException("Unable to select outline curve.");
+            }
+            closedLoops.Add(fallback);
         }
 
-        Curve hullCurve = null;
+        // Keep significant loops (drop specks), largest first.
+        double maxArea = closedLoops.Max(c => GetCurveAreaOrBboxArea(c, tolerance));
+        var candidateLoops = closedLoops
+            .Select(c => new { Curve = c, Area = GetCurveAreaOrBboxArea(c, tolerance) })
+            .Where(x => maxArea <= 0.0 || x.Area >= 0.05 * maxArea)
+            .OrderByDescending(x => x.Area)
+            .Take(12)
+            .ToList();
+
+        // Keep disjoint outer loops; drop loops contained in a larger one (holes).
+        var keptLoops = new List<Curve>();
+        foreach (var k in candidateLoops)
+        {
+            Point3d probe = k.Curve.PointAtStart;
+            bool isHole = keptLoops.Any(outer =>
+                outer.Contains(probe, Plane.WorldXY, tolerance) == PointContainment.Inside);
+            if (!isHole)
+            {
+                keptLoops.Add(k.Curve);
+            }
+        }
+
+        var loops = new JArray();
+        JObject primary = null;
+        foreach (Curve loopCurve in keptLoops)
+        {
+            JObject o = CurveToPlaneOutline(loopCurve, plane, tolerance, outlineMaxPoints);
+            if (o == null)
+            {
+                continue;
+            }
+            loops.Add(o);
+            primary ??= o;
+        }
+
+        if (primary == null)
+        {
+            throw new InvalidOperationException("Unable to build outline polyline.");
+        }
+
+        return new JObject
+        {
+            ["local"] = primary["local"],
+            ["world"] = primary["world"],
+            ["closed"] = primary["closed"],
+            ["area"] = maxArea,
+            ["loops"] = loops
+        };
+    }
+
+    private static Curve BuildSegmentsHull(List<Curve> segments)
+    {
         var pts2d = new List<Point2d>();
         foreach (var c in segments)
         {
@@ -489,58 +552,39 @@ public static partial class Serializer
             pts2d.Add(new Point2d(pm.X, pm.Y));
         }
 
-        if (pts2d.Count >= 3)
+        if (pts2d.Count < 3)
         {
-            int[] hullIndices;
-            var hull = PolylineCurve.CreateConvexHull2d(
-                pts2d.ToArray(),
-                out hullIndices
-            );
-
-            if (hull != null && hull.IsClosed)
-            {
-                hullCurve = hull;
-            }
+            return null;
         }
 
-        if (outlineCurve != null && hullCurve != null)
+        var hull = PolylineCurve.CreateConvexHull2d(pts2d.ToArray(), out _);
+        return (hull != null && hull.IsClosed) ? hull : null;
+    }
+
+    private static Curve BuildPlaneBboxRect(Brep brep, Plane plane)
+    {
+        BoundingBox bbox = brep.GetBoundingBox(plane);
+        if (!bbox.IsValid)
         {
-            double outlineArea = GetCurveAreaOrBboxArea(outlineCurve, tolerance);
-            double hullArea = GetCurveAreaOrBboxArea(hullCurve, tolerance);
-            if (hullArea > outlineArea * 1.25)
-            {
-                outlineCurve = hullCurve;
-            }
+            return null;
         }
 
+        var rect = new Rectangle3d(
+            Plane.WorldXY,
+            new Interval(bbox.Min.X, bbox.Max.X),
+            new Interval(bbox.Min.Y, bbox.Max.Y)
+        );
+        return rect.ToNurbsCurve();
+    }
+
+    // Converts a single closed outline curve (in the flattened projection plane) into
+    // { local:[u,v], world:[x,y,z], closed, area } after polyline + adaptive simplify.
+    private static JObject CurveToPlaneOutline(Curve outlineCurve, Plane plane, double tolerance, int outlineMaxPoints)
+    {
         if (outlineCurve == null)
         {
-            outlineCurve = hullCurve;
+            return null;
         }
-
-        if (outlineCurve == null)
-        {
-            BoundingBox bbox = brep.GetBoundingBox(plane);
-            if (!bbox.IsValid)
-            {
-                throw new InvalidOperationException("Failed to compute bbox in canonical plane.");
-            }
-
-            var rect = new Rectangle3d(
-                Plane.WorldXY,
-                new Interval(bbox.Min.X, bbox.Max.X),
-                new Interval(bbox.Min.Y, bbox.Max.Y)
-            );
-
-            outlineCurve = rect.ToNurbsCurve();
-        }
-
-        if (outlineCurve == null)
-        {
-            throw new InvalidOperationException("Unable to select outline curve.");
-        }
-
-        double area = GetCurveAreaOrBboxArea(outlineCurve, tolerance);
 
         Polyline outlinePolyline;
         if (!outlineCurve.TryGetPolyline(out outlinePolyline))
@@ -553,7 +597,7 @@ public static partial class Serializer
             );
             if (polylineCurve == null || !polylineCurve.TryGetPolyline(out outlinePolyline))
             {
-                throw new InvalidOperationException("Unable to convert outline to polyline.");
+                return null;
             }
         }
 
@@ -590,7 +634,7 @@ public static partial class Serializer
             ["local"] = local,
             ["world"] = world,
             ["closed"] = isClosed,
-            ["area"] = area
+            ["area"] = GetCurveAreaOrBboxArea(outlineCurve, tolerance)
         };
     }
 

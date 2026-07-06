@@ -34,9 +34,10 @@ def get_objects_info(
       - pose.world_from_local: {R (3x3), t} local->world transform.
       - views_frame: string stating the axis mapping and that views are silhouettes, e.g.
         "local pose; top=[X,Y] front=[X,Z] right=[Y,Z]; shared origin; silhouette (direction-agnostic)".
-      - views: list of {axis, points} where axis is "top"|"front"|"right" and points is a
-        closed outer outline as 2D [u,v] pairs in that view's plane (units match obb.extents).
-        Add include_world=true to also get points_world ([x,y,z]) per view.
+      - views: list of {axis, loops} where axis is "top"|"front"|"right" and loops is a list
+        of closed outlines (usually one; more when the silhouette has disjoint parts). Each
+        loop is a closed ring of 2D [u,v] pairs in that view's plane (units match obb.extents).
+        Add include_world=true to also get loops_world (list of [x,y,z] rings, same order).
       - views_dropped: optional map {dropped_axis: kept_axis}, e.g. {"right":"front"} meaning
         the right silhouette is ~identical to front (object symmetric there) - NOT missing data.
       Views share the pose origin and are aligned like an engineering drawing, so a given axis
