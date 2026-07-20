@@ -110,10 +110,23 @@ namespace RhinoMCPModPlugin.Functions
             if (selected.Count == 0) return new JObject { ["error"] = "No objects to zoom to" };
 
             var bbox = BoundingBox.Empty;
-            foreach (var obj in selected) { bbox = BoundingBox.Union(bbox, obj.Geometry.GetBoundingBox(false)); }
+            foreach (var obj in selected)
+            {
+                var objBbox = obj.Geometry?.GetBoundingBox(true) ?? BoundingBox.Empty;
+                if (!objBbox.IsValid) continue;
+                bbox = BoundingBox.Union(bbox, objBbox);
+            }
+
+            if (!bbox.IsValid) return new JObject { ["error"] = "Selected objects do not have valid bounds" };
+
+            // Rhino does not visibly change the view for zero-size or near-flat boxes.
+            if (bbox.Diagonal.Length < doc.ModelAbsoluteTolerance)
+            {
+                bbox.Inflate(Math.Max(doc.ModelAbsoluteTolerance * 10.0, 1.0));
+            }
 
             view.ActiveViewport.ZoomBoundingBox(bbox);
-            view.Redraw();
+            doc.Views.Redraw();
             return new JObject { ["message"] = $"Zoomed to {selected.Count} object(s)." };
         }
 

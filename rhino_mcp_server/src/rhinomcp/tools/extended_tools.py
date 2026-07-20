@@ -49,7 +49,7 @@ async def zoom_to_objects(ids: list[str] | None = None) -> str:
     rhino = get_rhino_connection()
     params = {"ids": ids} if ids else {}
     result = rhino.send_command("zoom_to_objects", params)
-    return result.get("message", "Zoom complete.")
+    return result.get("message") or result.get("error", "Zoom complete.")
 
 @mcp.tool()
 async def get_viewport_info() -> str:
