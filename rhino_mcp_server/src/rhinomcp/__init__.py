@@ -36,6 +36,7 @@ from .tools.extended_tools import (
     select_objects,
     deselect_all,
     zoom_to_objects,
+    capture_view,
     get_viewport_info,
     rename_layer,
     move_objects_to_layer,

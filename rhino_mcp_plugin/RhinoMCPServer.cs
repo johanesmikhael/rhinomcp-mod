@@ -350,6 +350,7 @@ namespace RhinoMCPModPlugin
                 ["select_objects_by_filter"] = this.handler.SelectObjectsByFilter,
                 ["deselect_all"] = this.handler.DeselectAll,
                 ["zoom_to_objects"] = this.handler.ZoomToObjects,
+                ["capture_view"] = this.handler.CaptureView,
                 ["get_viewport_info"] = this.handler.GetViewportInfo,
                 // Layers
                 ["rename_layer"] = this.handler.RenameLayer,

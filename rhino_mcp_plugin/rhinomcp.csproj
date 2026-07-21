@@ -21,6 +21,9 @@
   <ItemGroup>
     <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
     <PackageReference Include="RhinoCommon" Version="8.17.25066.7001" ExcludeAssets="runtime" />
+    <Reference Include="System.Drawing.Common">
+      <HintPath>/Applications/Rhino 8.app/Contents/Frameworks/RhCore.framework/Versions/A/Resources/System.Drawing.Common.dll</HintPath>
+    </Reference>
   </ItemGroup>
 
   <Target Name="PostBuild" AfterTargets="PostBuildEvent" Condition="$([MSBuild]::IsOSPlatform('OSX'))">

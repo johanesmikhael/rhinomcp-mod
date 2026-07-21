@@ -1,4 +1,8 @@
-"""Extended Rhino MCP tools for selection, layers, and materials."""
+"""Extended Rhino MCP tools for selection, layers, materials, and view capture."""
+import base64
+import json
+
+from mcp.server.fastmcp import Image
 from rhinomcp.server import mcp
 
 @mcp.tool()
@@ -50,6 +54,79 @@ async def zoom_to_objects(ids: list[str] | None = None) -> str:
     params = {"ids": ids} if ids else {}
     result = rhino.send_command("zoom_to_objects", params)
     return result.get("message") or result.get("error", "Zoom complete.")
+
+@mcp.tool()
+async def capture_view(
+    view: str = "perspective",
+    ids: list[str] | None = None,
+    selected: bool = False,
+    all_visible: bool = False,
+    fit: bool = True,
+    padding: float = 1.15,
+    display_mode: str = "Shaded",
+    resolution: str = "medium",
+    width: int | None = None,
+    height: int | None = None,
+    camera_location: list[float] | None = None,
+    camera_target: list[float] | None = None,
+    camera_up: list[float] | None = None,
+    lens_mm: float | None = None,
+    draw_grid: bool = False,
+    draw_axes: bool = False,
+) -> list:
+    """Set Rhino active viewport, frame targets, capture PNG, and return image plus compact metadata.
+
+    Args:
+        view: perspective, isometric, top, front, or right.
+        ids: Explicit object GUIDs to frame.
+        selected: Frame currently selected objects.
+        all_visible: Frame all visible objects.
+        fit: Zoom/frustum-fit target bounds before capture.
+        padding: Target bounds padding multiplier.
+        display_mode: Rhino display mode name, for example Shaded, Rendered, Wireframe, Technical.
+        resolution: low (640x480), medium (960x720), or high (1280x900).
+        width: Optional explicit width override, clamped by plugin.
+        height: Optional explicit height override, clamped by plugin.
+        camera_location: Optional explicit camera location [x, y, z].
+        camera_target: Optional explicit camera target [x, y, z].
+        camera_up: Optional camera up vector [x, y, z].
+        lens_mm: Optional perspective lens length.
+        draw_grid: Include grid in capture.
+        draw_axes: Include axes in capture.
+    """
+    from rhinomcp.server import get_rhino_connection
+
+    rhino = get_rhino_connection()
+    params = {
+        "view": view,
+        "selected": selected,
+        "all_visible": all_visible,
+        "fit": fit,
+        "padding": padding,
+        "display_mode": display_mode,
+        "resolution": resolution,
+        "draw_grid": draw_grid,
+        "draw_axes": draw_axes,
+    }
+    if ids: params["ids"] = ids
+    if width is not None: params["width"] = width
+    if height is not None: params["height"] = height
+    if camera_location is not None: params["camera_location"] = camera_location
+    if camera_target is not None: params["camera_target"] = camera_target
+    if camera_up is not None: params["camera_up"] = camera_up
+    if lens_mm is not None: params["lens_mm"] = lens_mm
+
+    result = rhino.send_command("capture_view", params)
+    if "error" in result:
+        return [result["error"]]
+
+    png_base64 = result.get("png_base64")
+    if not png_base64:
+        return ["Capture failed: missing PNG data"]
+
+    metadata = result.get("metadata", {})
+    image = Image(data=base64.b64decode(png_base64), format="png")
+    return [image, json.dumps(metadata, separators=(",", ":"))]
 
 @mcp.tool()
 async def get_viewport_info() -> str:
