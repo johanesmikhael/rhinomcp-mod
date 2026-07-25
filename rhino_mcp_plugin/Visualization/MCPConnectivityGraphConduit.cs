@@ -1,7 +1,10 @@
 using System;
 using System.Collections.Generic;
 using System.Drawing;
+using System.Globalization;
 using System.Linq;
+using System.Security.Cryptography;
+using System.Text;
 using Rhino;
 using Rhino.Display;
 using Rhino.DocObjects;
@@ -23,7 +26,7 @@ internal sealed class MCPConnectivityGraphConduit : DisplayConduit
             return;
         }
 
-        var graph = MCPConnectivityGraphController.GetOrComputeGraph(doc);
+        var graph = MCPConnectivityGraphController.GetOrComputeGraph(doc, persist: false);
         if (graph.Nodes.Count == 0)
         {
             e.Display.Draw2dText("MCP Graph ON | no visible objects", Color.White, new Point2d(20, 40), false, 14);
@@ -62,26 +65,11 @@ internal static class MCPConnectivityGraphBuilder
         var tolerance = doc.ModelAbsoluteTolerance * 5.0;
         var nodes = new List<Node>(MaxNodes);
 
-        foreach (var obj in doc.Objects)
+        foreach (var (obj, bbox) in EnumerateCandidates(doc))
         {
             if (nodes.Count >= MaxNodes)
             {
                 break;
-            }
-
-            if (obj == null || obj.IsDeleted || !obj.Visible || obj.Geometry == null)
-            {
-                continue;
-            }
-            if (!IsGraphSupportedGeometry(obj.Geometry))
-            {
-                continue;
-            }
-
-            var bbox = obj.Geometry.GetBoundingBox(true);
-            if (!bbox.IsValid)
-            {
-                continue;
             }
 
             nodes.Add(new Node
@@ -111,6 +99,77 @@ internal static class MCPConnectivityGraphBuilder
 
         var nearbyDistance = tolerance * NearbyDistanceFactor;
         return FilterByComponentProximity(nodes, edges, nearbyDistance, MinComponentSize, tolerance);
+    }
+
+    /// <summary>
+    /// Cheap digest of everything <see cref="Compute"/> reads from the document.
+    /// Same fingerprint =&gt; recomputing would produce the same graph, so a stored
+    /// graph can be reused instead of re-running the geometry intersections.
+    /// </summary>
+    public static string ComputeFingerprint(RhinoDoc doc)
+    {
+        if (doc == null)
+        {
+            return null;
+        }
+
+        var tolerance = doc.ModelAbsoluteTolerance * 5.0;
+        var quantum = Math.Max(tolerance * 0.1, 1e-9);
+
+        var builder = new StringBuilder();
+        builder.Append("v1|").Append(tolerance.ToString("R", CultureInfo.InvariantCulture));
+
+        var count = 0;
+        foreach (var (obj, bbox) in EnumerateCandidates(doc))
+        {
+            if (count >= MaxNodes)
+            {
+                break;
+            }
+
+            count++;
+            builder.Append('|').Append(obj.Id.ToString("N"));
+            AppendQuantized(builder, bbox.Min, quantum);
+            AppendQuantized(builder, bbox.Max, quantum);
+        }
+
+        builder.Append("|#").Append(count);
+
+        using var sha = SHA256.Create();
+        var hash = sha.ComputeHash(Encoding.UTF8.GetBytes(builder.ToString()));
+        return Convert.ToHexString(hash);
+    }
+
+    private static IEnumerable<(RhinoObject Object, BoundingBox BoundingBox)> EnumerateCandidates(RhinoDoc doc)
+    {
+        foreach (var obj in doc.Objects)
+        {
+            if (obj == null || obj.IsDeleted || !obj.Visible || obj.Geometry == null)
+            {
+                continue;
+            }
+
+            if (!IsGraphSupportedGeometry(obj.Geometry))
+            {
+                continue;
+            }
+
+            var bbox = obj.Geometry.GetBoundingBox(true);
+            if (!bbox.IsValid)
+            {
+                continue;
+            }
+
+            yield return (obj, bbox);
+        }
+    }
+
+    private static void AppendQuantized(StringBuilder builder, Point3d point, double quantum)
+    {
+        builder.Append(':')
+            .Append((long)Math.Round(point.X / quantum)).Append(',')
+            .Append((long)Math.Round(point.Y / quantum)).Append(',')
+            .Append((long)Math.Round(point.Z / quantum));
     }
 
     private static MCPConnectivityGraph FilterByComponentProximity(
@@ -513,6 +572,13 @@ internal struct Edge
     public Point3d ContactPoint;
 }
 
+internal enum GraphCacheSource
+{
+    None,
+    Computed,
+    DocumentText
+}
+
 internal static class MCPConnectivityGraphController
 {
     private static readonly MCPConnectivityGraphConduit Conduit = new();
@@ -522,8 +588,14 @@ internal static class MCPConnectivityGraphController
     private static bool _dirty = true;
     private static uint _cachedDocRuntimeSerial;
     private static MCPConnectivityGraph _cachedGraph;
+    private static GraphCacheSource _cachedSource = GraphCacheSource.None;
+    private static string _cachedFingerprint;
+    private static bool _cachedGraphPersisted;
 
     public static bool IsEnabled => _enabled;
+
+    /// <summary>Where the graph currently held in memory came from.</summary>
+    public static GraphCacheSource LastSource => _cachedSource;
 
     public static void SetEnabled(bool enabled)
     {
@@ -549,24 +621,75 @@ internal static class MCPConnectivityGraphController
         SetEnabled(!_enabled);
     }
 
-    public static MCPConnectivityGraph GetOrComputeGraph(RhinoDoc doc)
+    /// <param name="persist">
+    /// When true (default) a freshly computed graph is written to document user text.
+    /// Callers running inside a display pipeline pass false: modifying the document
+    /// during a redraw is not safe.
+    /// </param>
+    public static MCPConnectivityGraph GetOrComputeGraph(RhinoDoc doc, bool persist = true)
     {
         lock (SyncRoot)
         {
             if (doc == null)
             {
+                _cachedSource = GraphCacheSource.None;
                 return new MCPConnectivityGraph(Array.Empty<Node>(), Array.Empty<Edge>(), 0.0);
             }
 
             if (_cachedGraph != null && !_dirty && _cachedDocRuntimeSerial == doc.RuntimeSerialNumber)
             {
+                // A graph first computed for the display conduit was intentionally not
+                // written to the document; persist it now that a caller allows it.
+                if (persist && !_cachedGraphPersisted && _cachedFingerprint != null)
+                {
+                    MCPConnectivityGraphStore.Save(doc, _cachedGraph, _cachedFingerprint);
+                    _cachedGraphPersisted = true;
+                }
+
+                return _cachedGraph;
+            }
+
+            var fingerprint = MCPConnectivityGraphBuilder.ComputeFingerprint(doc);
+
+            if (MCPConnectivityGraphStore.TryLoad(doc, fingerprint, out var storedGraph))
+            {
+                _cachedGraph = storedGraph;
+                _cachedDocRuntimeSerial = doc.RuntimeSerialNumber;
+                _dirty = false;
+                _cachedSource = GraphCacheSource.DocumentText;
+                _cachedFingerprint = fingerprint;
+                _cachedGraphPersisted = true;
                 return _cachedGraph;
             }
 
             _cachedGraph = MCPConnectivityGraphBuilder.Compute(doc);
             _cachedDocRuntimeSerial = doc.RuntimeSerialNumber;
             _dirty = false;
+            _cachedSource = GraphCacheSource.Computed;
+            _cachedFingerprint = fingerprint;
+            _cachedGraphPersisted = false;
+
+            if (persist)
+            {
+                MCPConnectivityGraphStore.Save(doc, _cachedGraph, fingerprint);
+                _cachedGraphPersisted = true;
+            }
+
             return _cachedGraph;
+        }
+    }
+
+    /// <summary>Drops the in-memory cache and the stored document-text copy.</summary>
+    public static void ClearStoredGraph(RhinoDoc doc)
+    {
+        lock (SyncRoot)
+        {
+            MCPConnectivityGraphStore.Clear(doc);
+            _cachedGraph = null;
+            _cachedSource = GraphCacheSource.None;
+            _cachedFingerprint = null;
+            _cachedGraphPersisted = false;
+            _dirty = true;
         }
     }
 

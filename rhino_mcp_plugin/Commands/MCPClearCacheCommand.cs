@@ -100,6 +100,12 @@ namespace RhinoMCPModPlugin.Commands
                 return Result.Nothing;
             }
 
+            if (!selectedOnly)
+            {
+                MCPConnectivityGraphController.ClearStoredGraph(doc);
+                RhinoApp.WriteLine("mcpmodclearcache: cleared stored connectivity graph.");
+            }
+
             RhinoApp.WriteLine(
                 $"mcpmodclearcache: cleared cache on {cleared} object(s)" +
                 (failed > 0 ? $", failed {failed}" : string.Empty) +

@@ -39,7 +39,13 @@ public partial class RhinoMCPModFunctions
             ["e"] = edges,
             ["node_count"] = graph.Nodes.Count,
             ["edge_count"] = graph.Edges.Count,
-            ["tolerance"] = graph.Tolerance
+            ["tolerance"] = graph.Tolerance,
+            ["source"] = MCPConnectivityGraphController.LastSource switch
+            {
+                GraphCacheSource.DocumentText => "document_text_cache",
+                GraphCacheSource.Computed => "computed",
+                _ => "none"
+            }
         };
     }
 
