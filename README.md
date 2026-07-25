@@ -31,6 +31,7 @@ This mod adds a connectivity graph pipeline:
 
 - MCP tool: `get_connectivity_graph`
 - Rhino command: `mcpmodgraph`
+- Rhino command: `mcpmodgraphexport` (write the computed graph to a JSON file)
 
 The graph returns compact node/edge topology (including representative contact points), so AI can reason about adjacency/connectivity instead of isolated objects.
 
@@ -171,9 +172,10 @@ Keep only one server enabled at a time (`rhino` or `rhino-dev`) to avoid duplica
 1. Start Rhino and run `mcpmodstart`.
 2. Optional: run `mcpmodobb` to toggle OBB + projection profile visualization.
 3. Optional: run `mcpmodgraph` to toggle connectivity graph display.
-4. Optional: run `mcpmodclearcache` to clear cached pose/OBB user strings.
-5. Open Claude Desktop.
-6. Confirm Rhino tools appear in Claude (hammer/tools icon).
+4. Optional: run `mcpmodgraphexport` to save the computed connectivity graph as JSON.
+5. Optional: run `mcpmodclearcache` to clear cached pose/OBB user strings.
+6. Open Claude Desktop.
+7. Confirm Rhino tools appear in Claude (hammer/tools icon).
 
 
 ## Credits
