@@ -591,6 +591,8 @@ internal static class MCPConnectivityGraphController
     private static GraphCacheSource _cachedSource = GraphCacheSource.None;
     private static string _cachedFingerprint;
     private static bool _cachedGraphPersisted;
+    private static bool _persistQueued;
+    private static RhinoDoc _pendingPersistDoc;
 
     public static bool IsEnabled => _enabled;
 
@@ -611,6 +613,7 @@ internal static class MCPConnectivityGraphController
         {
             EnsureEventsHooked();
             MarkDirty();
+            QueueGraphPersistence(RhinoDoc.ActiveDoc);
         }
         RhinoDoc.ActiveDoc?.Views.Redraw();
         RhinoApp.WriteLine($"MCP connectivity graph {(enabled ? "enabled" : "disabled")}.");
@@ -650,8 +653,11 @@ internal static class MCPConnectivityGraphController
             }
 
             var fingerprint = MCPConnectivityGraphBuilder.ComputeFingerprint(doc);
+            var currentDocumentWasInvalidated =
+                _dirty && _cachedDocRuntimeSerial == doc.RuntimeSerialNumber;
 
-            if (MCPConnectivityGraphStore.TryLoad(doc, fingerprint, out var storedGraph))
+            if (!currentDocumentWasInvalidated &&
+                MCPConnectivityGraphStore.TryLoad(doc, fingerprint, out var storedGraph))
             {
                 _cachedGraph = storedGraph;
                 _cachedDocRuntimeSerial = doc.RuntimeSerialNumber;
@@ -728,7 +734,58 @@ internal static class MCPConnectivityGraphController
         MarkDirty();
         if (_enabled)
         {
-            (doc ?? RhinoDoc.ActiveDoc)?.Views.Redraw();
+            var activeDoc = doc ?? RhinoDoc.ActiveDoc;
+            QueueGraphPersistence(activeDoc);
+            activeDoc?.Views.Redraw();
+        }
+    }
+
+    private static void QueueGraphPersistence(RhinoDoc doc)
+    {
+        if (doc == null)
+        {
+            return;
+        }
+
+        lock (SyncRoot)
+        {
+            _pendingPersistDoc = doc;
+            if (_persistQueued)
+            {
+                return;
+            }
+
+            _persistQueued = true;
+            RhinoApp.Idle += OnPersistGraphIdle;
+        }
+    }
+
+    private static void OnPersistGraphIdle(object sender, EventArgs e)
+    {
+        RhinoDoc doc;
+        lock (SyncRoot)
+        {
+            RhinoApp.Idle -= OnPersistGraphIdle;
+            _persistQueued = false;
+            doc = _pendingPersistDoc;
+            _pendingPersistDoc = null;
+        }
+
+        if (doc == null)
+        {
+            return;
+        }
+
+        try
+        {
+            // Object add/delete/replace events can fire while Rhino is still editing
+            // its document tables. Persist on Idle, after that operation completes.
+            GetOrComputeGraph(doc, persist: true);
+            doc.Views.Redraw();
+        }
+        catch (Exception ex)
+        {
+            RhinoApp.WriteLine($"Failed to refresh connectivity graph: {ex.Message}");
         }
     }
 

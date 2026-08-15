@@ -1,9 +1,62 @@
 """Extended Rhino MCP tools for selection, layers, materials, and view capture."""
 import base64
 import json
+from typing import Any
 
 from mcp.server.fastmcp import Image
 from rhinomcp.server import mcp
+@mcp.tool()
+async def evaluate_stability(
+    current_step: int = 50,
+    stability_threshold: float = 10.0,
+    rigid_strength: float = 1000.0,
+    floor_strength: float = 100.0,
+    floor_z: float = 0.0,
+    gravity: float = 9.81,
+    assign_tol: float = 1e-6,
+    threshold: float = 0.05,
+    solver_substeps: int = 6,
+    display: bool = False,
+    graph: str | dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Evaluate the active Rhino model's physical stability.
+
+    The model must have a connectivity graph and positive mass assigned to
+    every graph node. By default the graph is read from the active document.
+
+    Args:
+        current_step: Number of solver steps to run.
+        stability_threshold: Maximum displacement considered stable.
+        rigid_strength: Kangaroo rigid-body goal strength.
+        floor_strength: Kangaroo floor-collision goal strength.
+        floor_z: World Z elevation of the collision floor.
+        gravity: Downward gravitational acceleration.
+        assign_tol: Kangaroo particle assignment tolerance.
+        threshold: Solver convergence threshold.
+        solver_substeps: Kangaroo substeps per solver step.
+        display: Cache evaluated geometry in Rhino for display when true.
+        graph: Optional connectivity graph JSON. When omitted, use the graph
+            stored in the active Rhino document.
+    """
+    from rhinomcp.server import get_rhino_connection
+
+    params: dict[str, Any] = {
+        "current_step": current_step,
+        "stability_threshold": stability_threshold,
+        "rigid_strength": rigid_strength,
+        "floor_strength": floor_strength,
+        "floor_z": floor_z,
+        "gravity": gravity,
+        "assign_tol": assign_tol,
+        "threshold": threshold,
+        "solver_substeps": solver_substeps,
+        "display": display,
+    }
+    if graph is not None:
+        params["graph"] = json.dumps(graph, separators=(",", ":")) if isinstance(graph, dict) else graph
+
+    rhino = get_rhino_connection()
+    return rhino.send_command("evaluate_stability", params)
 
 @mcp.tool()
 async def get_selected_objects() -> str:

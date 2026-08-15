@@ -13,10 +13,7 @@ async def get_rhino_log(ctx: Context, lines: int = 20) -> str:
         Recent command history entries as a formatted string.
     """
     try:
-        from rhinomcp.server import rhino_connected, send_to_rhino
-        
-        if not rhino_connected():
-            return "Error: Not connected to Rhino. Start Rhino and run mcpmodstart first."
+        from rhinomcp.server import send_to_rhino
         
         lines = min(max(1, lines), 100)
         

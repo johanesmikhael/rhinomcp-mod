@@ -101,7 +101,7 @@ internal static class MCPConnectivityGraphStore
         var nodes = new JArray();
         foreach (var node in graph.Nodes)
         {
-            nodes.Add(new JObject
+            var nodePayload = new JObject
             {
                 ["g"] = node.ObjectId.ToString(),
                 ["nm"] = node.Name ?? string.Empty,
@@ -109,7 +109,28 @@ internal static class MCPConnectivityGraphStore
                 ["bb"] = new JArray(
                     node.BoundingBox.Min.X, node.BoundingBox.Min.Y, node.BoundingBox.Min.Z,
                     node.BoundingBox.Max.X, node.BoundingBox.Max.Y, node.BoundingBox.Max.Z)
-            });
+            };
+
+            var rhinoObject = doc.Objects.FindId(node.ObjectId);
+            var stabilityText = rhinoObject?.Attributes?.GetUserString(
+                Functions.RhinoMCPModFunctions.StabilityKey);
+            if (!string.IsNullOrWhiteSpace(stabilityText))
+            {
+                try
+                {
+                    var mass = JObject.Parse(stabilityText).Value<double?>("mass");
+                    if (mass.HasValue)
+                    {
+                        nodePayload["mass"] = mass.Value;
+                    }
+                }
+                catch (Exception)
+                {
+                    // Ignore malformed per-object stability data.
+                }
+            }
+
+            nodes.Add(nodePayload);
         }
 
         var edges = new JArray();

@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Net;
@@ -327,6 +327,7 @@ namespace RhinoMCPModPlugin
                 ["get_objects_info"] = this.handler.GetObjectsInfo,
                 ["get_selected_objects_info"] = this.handler.GetSelectedObjectsInfo,
                 ["get_connectivity_graph"] = this.handler.GetConnectivityGraph,
+                ["evaluate_stability"] = this.handler.EvaluateStability,
                 ["delete_objects"] = this.handler.DeleteObjects,
                 ["modify_object"] = this.handler.ModifyObject,
                 ["modify_objects"] = this.handler.ModifyObjects,

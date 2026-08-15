@@ -188,6 +188,88 @@ Keep only one server enabled at a time (`rhino` or `rhino-dev`) to avoid duplica
 7. Confirm Rhino tools appear in Claude (hammer/tools icon).
 
 
+## 20260815 Update
+
+This release introduces an initial assembly stability workflow. All objects represented by the connectivity graph are combined into a single rigid body and evaluated as one assembly. This provides a simple whole-assembly stability test; it does not yet simulate relative movement between individual parts.
+
+### 1. Identify and Maintain the Connectivity Graph
+
+Run the following Rhino command to enable connectivity-graph mode:
+
+```text
+mcpmodgraph
+```
+
+While this mode is on, supported Rhino object changes—including adding, copying, deleting, restoring, replacing, transforming, and changing object attributes—automatically invalidate and rebuild the graph. The latest graph is stored in the Rhino document under `rhinomcp-mod:connectivity-graph`
+
+
+This automatic document update was missing in earlier builds and has now been fixed. Turning `mcpmodgraph` off stops automatic graph rebuilding and persistence until the mode is enabled again.
+
+### 2. Assign Mass for Stability Evaluation
+
+The mass-assignment workflow iterates over the nodes stored in `rhinomcp-mod:connectivity-graph`. Mass can be assigned in either of the following ways.
+
+#### Option A: Assign Mass Directly
+
+Run:
+
+```text
+mcpmodassignmass
+```
+
+This command iterates over every graph node and prompts for the mass of its corresponding Rhino object.
+
+To assign mass only to nodes that do not already have a positive mass, run:
+
+```text
+mcpmodassignmissingmass
+```
+
+#### Option B: Calculate Mass from Layer Density
+
+First, assign a material density to each relevant layer:
+
+```text
+mcpmodassignlayerdensity
+```
+
+Then place each object on the appropriate material layer and run:
+
+```text
+mcpmodmassfromlayerdensity
+```
+
+The command calculates each object's volume and derives its mass from the density stored on its layer.
+
+Unit handling is important:
+
+- For a Rhino model in feet, density is entered in `lb/ft³`, volume is evaluated in `ft³`, and mass is stored in `lb`.
+- For other Rhino model units, density is entered in `kg/m³`. The calculated model-space volume—for example, `mm³` in a millimetre model—is converted to `m³` before mass is calculated in `kg`.
+
+### 3. Evaluate Assembly Stability
+
+Run:
+
+```text
+mcpmodevalutatestablity
+```
+
+The command combines the graph assembly into one rigid body and runs the stability solver. Parameters such as rigid-body strength, floor strength, stability threshold, solver threshold, and solver iterations may need to be adjusted for each model.
+
+Choose a stability threshold that is appropriate for the model's scale and units. The assembly is classified as stable when its maximum simulated displacement does not exceed this threshold.
+
+The MCP `evaluate_stability` tool exposes the same solver parameters, allowing an AI client such as Claude to adjust them for a particular case.
+
+### 4. Display the Evaluated Result
+
+Run the following command and choose `On` or `Off` to control the evaluated-geometry display:
+
+```text
+mcpmodstablilitydisplay
+```
+
+The display visualizes the geometry cached from the latest stability evaluation. It does not modify the original Rhino objects.
+
 ## Credits
 
 - Original project and concept: [Jingcheng Chen](https://github.com/jingcheng-chen/rhinomcp)

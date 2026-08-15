@@ -44,11 +44,11 @@ class RhinoConnection:
             finally:
                 self.sock = None
 
-    def receive_full_response(self, sock, buffer_size=8192):
+    def receive_full_response(self, sock, buffer_size=8192, timeout=15.0):
         """Receive the complete response, potentially in multiple chunks"""
         chunks = []
         # Use a consistent timeout value that matches the addon's timeout
-        sock.settimeout(15.0)  # Match the addon's timeout
+        sock.settimeout(timeout)
         
         try:
             while True:
@@ -100,7 +100,7 @@ class RhinoConnection:
         else:
             raise Exception("No data received")
 
-    def send_command(self, command_type: str, params: Dict[str, Any] = {}) -> Dict[str, Any]:
+    def send_command(self, command_type: str, params: Dict[str, Any] = {}, retry: bool = True) -> Dict[str, Any]:
         """Send a command to Rhino and return the response"""
         if not self.sock and not self.connect():
             raise ConnectionError("Not connected to Rhino")
@@ -121,11 +121,11 @@ class RhinoConnection:
             self.sock.sendall(json.dumps(command).encode('utf-8'))
             logger.info(f"Command sent, waiting for response...")
             
-            # Set a timeout for receiving - use the same timeout as in receive_full_response
-            self.sock.settimeout(15.0)  # Match the addon's timeout
+            response_timeout = 120.0 if command_type == "evaluate_stability" else 15.0
+            self.sock.settimeout(response_timeout)
             
             # Receive the response using the improved receive_full_response method
-            response_data = self.receive_full_response(self.sock)
+            response_data = self.receive_full_response(self.sock, timeout=response_timeout)
             logger.info(f"Received {len(response_data)} bytes of data")
             
             response = json.loads(response_data.decode('utf-8'))
@@ -154,8 +154,10 @@ class RhinoConnection:
             raise Exception(f"Invalid response from Rhino: {str(e)}")
         except Exception as e:
             logger.error(f"Error communicating with Rhino: {str(e)}")
-            # Don't try to reconnect here - let the get_rhino_connection handle reconnection
             self.sock = None
+            if retry and str(e) in {"No data received", "Connection closed before receiving any data"}:
+                logger.info("Retrying Rhino command after empty response")
+                return self.send_command(command_type, params, retry=False)
             raise Exception(f"Communication error with Rhino: {str(e)}")
 
 @asynccontextmanager

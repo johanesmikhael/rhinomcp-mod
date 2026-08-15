@@ -1,0 +1,974 @@
+using System;
+using System.Collections.Generic;
+using Newtonsoft.Json.Linq;
+using Rhino;
+using Rhino.Geometry;
+using KangarooSolver;
+using KangarooSolver.Goals;
+using rhinomcp_mod.Serializers;
+using Rhino.DocObjects;
+
+namespace RhinoMCPModPlugin.Functions;
+
+public partial class RhinoMCPModFunctions
+{
+    public const string GraphKey = "rhinomcp-mod:connectivity-graph";
+    public const string EvaluationGraphKey = "rhinomcp-mod:connectivity-graph-eva";
+    public const string StabilityKey = "rhinomcp.stability.v1";
+    public const string AfterEvaluationKey = "rhinomcp.after_eva.v1";
+
+    public const int DefaultCurrentStep = 50;
+    public const double DefaultStabilityThreshold = 10.0;
+    public const double DefaultRigidStrength = 10000.0;
+    public const double DefaultFloorStrength = 1000.0;
+    public const double DefaultFloorZ = 0.0;
+    public const double DefaultGravity = 9.81;
+    public const double DefaultAssignTol = 1e-6;
+    public const double DefaultThreshold = 0.001;
+    public const int DefaultSolverSubsteps = 1;
+
+    public JObject EvaluateStability(JObject parameters)
+    {
+        try
+        {
+            var doc = RhinoDoc.ActiveDoc;
+            if (doc == null)
+            {
+                throw new Exception("No active Rhino document.");
+            }
+
+            var graph = ReadGraph(parameters?["graph"], doc);
+            var nodes = graph["n"] as JArray;
+            if (nodes == null)
+            {
+                throw new Exception("Connectivity graph does not contain an 'n' array.");
+            }
+
+            var stabilityNodes = new List<StabilityNode>();
+            foreach (var nodeToken in nodes)
+            {
+                if (nodeToken is not JObject node)
+                {
+                    continue;
+                }
+
+                if (node["g"]?.ToString() is not string guidString || !Guid.TryParse(guidString, out var guid))
+                {
+                    continue;
+                }
+
+                var rhinoObject = doc.Objects.FindId(guid);
+                if (rhinoObject == null)
+                {
+                    continue;
+                }
+
+                var geometry = rhinoObject.Geometry;
+                if (geometry == null)
+                {
+                    continue;
+                }
+
+                var mass = 0.0;
+                var userText = rhinoObject.Attributes.GetUserString(StabilityKey);
+                if (!string.IsNullOrWhiteSpace(userText))
+                {
+                    var data = JObject.Parse(userText);
+                    if (data["mass"] != null)
+                    {
+                        mass = data["mass"].Value<double>();
+                        node["mass"] = mass;
+                    }
+                }
+
+                if (node["mass"] != null)
+                {
+                    mass = node["mass"].Value<double>();
+                }
+
+                stabilityNodes.Add(new StabilityNode
+                {
+                    Node = node,
+                    Geometry = geometry,
+                    Mass = mass
+                });
+            }
+
+            var missingMassGuids = new List<string>();
+            foreach (var stabilityNode in stabilityNodes)
+            {
+                if (stabilityNode.Mass <= 0.0)
+                {
+                    missingMassGuids.Add(stabilityNode.Node["g"]?.ToString() ?? "<unknown>");
+                }
+            }
+
+            if (missingMassGuids.Count > 0)
+            {
+                throw new Exception($"Mass is not assigned for node(s): {string.Join(", ", missingMassGuids)}");
+            }
+
+            var currentStep = parameters?["current_step"]?.Value<int>() ?? DefaultCurrentStep;
+            var stabilityThreshold = parameters?["stability_threshold"]?.Value<double>() ?? DefaultStabilityThreshold;
+            var rigidStrength = parameters?["rigid_strength"]?.Value<double>() ?? DefaultRigidStrength;
+            var floorStrength = parameters?["floor_strength"]?.Value<double>() ?? DefaultFloorStrength;
+            var floorZ = parameters?["floor_z"]?.Value<double>() ?? DefaultFloorZ;
+            var gravity = parameters?["gravity"]?.Value<double>() ?? DefaultGravity;
+            var assignTol = parameters?["assign_tol"]?.Value<double>() ?? DefaultAssignTol;
+            var threshold = parameters?["threshold"]?.Value<double>() ?? DefaultThreshold;
+            var solverSubsteps = parameters?["solver_substeps"]?.Value<int>() ?? DefaultSolverSubsteps;
+
+
+            var stable = SolveFromGraph(
+                graph,
+                stabilityNodes,
+                currentStep,
+                stabilityThreshold,
+                rigidStrength,
+                floorStrength,
+                floorZ,
+                gravity,
+                assignTol,
+                threshold,
+                solverSubsteps,
+                out var finalXform);
+
+            graph["stable"] = stable;
+            var evaluationGraph = SerializableGraph(graph);
+            doc.Strings.SetString(EvaluationGraphKey, evaluationGraph.ToString());
+
+            // Always rewrite the evaluated geometry cache with the latest simulation result.
+            var displayRequested = parameters?["display"]?.ToString();
+            var displayOn = string.Equals(displayRequested, "On", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(displayRequested, "on", StringComparison.OrdinalIgnoreCase) ||
+                (parameters?["display"]?.Type == Newtonsoft.Json.Linq.JTokenType.Boolean && parameters["display"].Value<bool>() == true);
+            var displayOff = string.Equals(displayRequested, "Off", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(displayRequested, "off", StringComparison.OrdinalIgnoreCase) ||
+                (parameters?["display"]?.Type == Newtonsoft.Json.Linq.JTokenType.Boolean && parameters["display"].Value<bool>() == false);
+
+            ClearAfterEvaluationCache(doc);
+            {
+                try
+                {
+                    foreach (var sNode in stabilityNodes)
+                    {
+                        var guidStr = sNode.Node["g"]?.ToString();
+                        if (string.IsNullOrWhiteSpace(guidStr) || !Guid.TryParse(guidStr, out var gid))
+                            continue;
+
+                        var obj = doc.Objects.FindId(gid);
+                        if (obj == null || obj.Geometry == null)
+                            continue;
+
+                        // use the finalXform returned by the solver
+
+                        // Duplicate geometry and apply transform
+                        GeometryBase dup = null;
+                        if (obj.Geometry is Brep br)
+                        {
+                            dup = br.DuplicateBrep();
+                        }
+                        else if (obj.Geometry is Mesh ms)
+                        {
+                            dup = ms.DuplicateMesh();
+                        }
+                        else if (obj.Geometry is Curve crv)
+                        {
+                            dup = crv.DuplicateCurve();
+                        }
+                        else if (obj.Geometry is Extrusion ex)
+                        {
+                            dup = ex.Duplicate();
+                        }
+
+                        if (dup == null)
+                            continue;
+
+                        try
+                        {
+                            dup.Transform(finalXform);
+                        }
+                        catch
+                        {
+                            // ignore transform failures
+                        }
+
+                        // Add temporary object to doc so Serializer can build outlines/obb
+                        Guid tempId = Guid.Empty;
+                        try
+                        {
+                            if (dup is Brep b)
+                            {
+                                tempId = doc.Objects.AddBrep(b);
+                            }
+                            else if (dup is Mesh m)
+                            {
+                                tempId = doc.Objects.AddMesh(m);
+                            }
+                            else if (dup is Curve c)
+                            {
+                                tempId = doc.Objects.AddCurve(c);
+                            }
+                            else if (dup is Extrusion ex)
+                            {
+                                tempId = doc.Objects.AddExtrusion(ex);
+                            }
+                            else
+                            {
+                                // fallback: try adding as generic geometry
+                                tempId = doc.Objects.Add(dup);
+                            }
+
+                            if (tempId == Guid.Empty)
+                                continue;
+
+                            var tempObj = doc.Objects.FindId(tempId);
+                            if (tempObj == null)
+                                continue;
+
+                                // Ensure a stored pose user-string exists so the serializer uses it
+                                try
+                                {
+                                    JObject pose = GetOrBootstrapPose(tempObj);
+                                    WriteStoredPose(tempObj, pose, invalidateObbCache: false);
+                                }
+                                catch
+                                {
+                                    // ignore pose caching failures
+                                }
+
+                            // Serialize geometry summary
+                            JObject serial = Serializer.RhinoObject(tempObj, includeGeometrySummary: true, outlineMaxPoints: 64);
+                            if (serial != null && serial["geometry"] is JObject geometry)
+                            {
+                                // build full mesh from transformed geometry and store alongside summary
+                                var meshFull = AsMesh(dup);
+                                if (meshFull != null)
+                                {
+                                    var verts = new JArray();
+                                    foreach (var v in meshFull.Vertices)
+                                    {
+                                        verts.Add(new JArray { v.X, v.Y, v.Z });
+                                    }
+
+                                    var faces = new JArray();
+                                    foreach (var f in meshFull.Faces)
+                                    {
+                                        if (f.IsTriangle)
+                                        {
+                                            faces.Add(new JArray { f.A, f.B, f.C });
+                                        }
+                                        else
+                                        {
+                                            faces.Add(new JArray { f.A, f.B, f.C, f.D });
+                                        }
+                                    }
+
+                                    var fullMesh = new JObject
+                                    {
+                                        ["type"] = "MESH",
+                                        ["vertices"] = verts,
+                                        ["faces"] = faces
+                                    };
+
+                                    WriteAfterEvaluationFullGeometry(obj, geometry, fullMesh);
+                                }
+                                else
+                                {
+                                    // fallback: write only the summary
+                                    WriteAfterEvaluationObb(obj, geometry);
+                                }
+                            }
+                        }
+                        catch
+                        {
+                            // ignore per-object failures
+                        }
+                        finally
+                        {
+                            if (tempId != Guid.Empty)
+                            {
+                                try { doc.Objects.Delete(tempId, true); } catch { }
+                            }
+                        }
+                    }
+
+                    if (displayOn)
+                    {
+                        global::RhinoMCPModPlugin.MCPStabilityController.SetEnabled(true);
+                    }
+                    else if (displayOff)
+                    {
+                        global::RhinoMCPModPlugin.MCPStabilityController.SetEnabled(false);
+                    }
+
+                    doc.Views.Redraw();
+                }
+                catch
+                {
+                    // swallow any caching/display errors
+                }
+            }
+
+            var result = new JObject
+            {
+                ["success"] = true,
+                ["stable"] = stable,
+                ["stability_threshold"] = stabilityThreshold,
+                ["evaluation_graph_key"] = EvaluationGraphKey
+            };
+
+            if (graph["max_displacement"] != null)
+            {
+                result["max_displacement"] = graph["max_displacement"].Value<double?>();
+            }
+
+            return result;
+        }
+        catch (Exception ex)
+        {
+            return new JObject
+            {
+                ["success"] = false,
+                ["message"] = ex.Message
+            };
+        }
+    }
+
+    private static JObject ReadGraph(JToken graphToken, RhinoDoc doc)
+    {
+        if (graphToken is JObject graphObject)
+        {
+            return graphObject;
+        }
+
+        var graphText = graphToken?.Type == JTokenType.String
+            ? graphToken.Value<string>()
+            : graphToken?.ToString();
+
+        if (string.IsNullOrWhiteSpace(graphText))
+        {
+            graphText = doc.Strings.GetValue(GraphKey);
+        }
+
+        if (string.IsNullOrWhiteSpace(graphText))
+        {
+            throw new Exception($"Connectivity graph not found in Rhino document: {GraphKey}");
+        }
+
+        var parsed = JToken.Parse(graphText);
+        if (parsed is JValue value && value.Type == JTokenType.String)
+        {
+            parsed = JToken.Parse(value.Value<string>() ?? string.Empty);
+        }
+
+        if (parsed is not JObject graph)
+        {
+            throw new Exception("Connectivity graph JSON must be an object.");
+        }
+
+        return graph;
+    }
+    private static void ClearAfterEvaluationCache(RhinoDoc doc)
+    {
+        if (doc == null)
+        {
+            return;
+        }
+
+        foreach (var obj in doc.Objects)
+        {
+            if (obj == null || obj.IsDeleted)
+            {
+                continue;
+            }
+
+            obj.Attributes.DeleteUserString(AfterEvaluationKey);
+            obj.CommitChanges();
+        }
+    }
+    private static bool SolveFromGraph(
+        JObject graph,
+        List<StabilityNode> nodes,
+        int currentStep,
+        double stabilityThreshold,
+        double rigidStrength,
+        double floorStrength,
+        double floorZ,
+        double gravity,
+        double assignTol,
+        double threshold,
+        int solverSubsteps,
+        out Transform finalXform)
+    {
+        if (nodes.Count == 0)
+        {
+            graph["stable"] = true;
+            graph["stability_threshold"] = stabilityThreshold;
+            graph["max_displacement"] = 0.0;
+            finalXform = Transform.Identity;
+            return true;
+        }
+
+        graph["stable"] = false;
+        graph["stability_threshold"] = stabilityThreshold;
+        graph["max_displacement"] = null;
+
+        var rigidMesh = new Mesh();
+        var vertexPoints = new List<Point3d>();
+        var gravityLoads = new List<(Point3d Point, double MassPerPoint)>();
+        var collisionPoints = new List<Point3d>();
+
+        foreach (var node in nodes)
+        {
+            var mesh = AsMesh(node.Geometry);
+            var points = MeshVerticesAsPoints(mesh);
+            if (points.Count < 3)
+            {
+                continue;
+            }
+
+            rigidMesh.Append(mesh);
+            var massPerPoint = node.Mass / points.Count;
+            foreach (var point in points)
+            {
+                vertexPoints.Add(point);
+                gravityLoads.Add((point, massPerPoint));
+                collisionPoints.Add(point);
+            }
+        }
+
+        if (vertexPoints.Count < 3 || rigidMesh.Vertices.Count == 0)
+        {
+            finalXform = Transform.Identity;
+            return false;
+        }
+
+        rigidMesh.Normals.ComputeNormals();
+        if (rigidMesh.Vertices.Count != vertexPoints.Count)
+        {
+            throw new Exception("Rigid mesh vertices and source points are not one-to-one.");
+        }
+
+        var frameIndices = FrameIndices(vertexPoints);
+        if (frameIndices == null)
+        {
+            finalXform = Transform.Identity;
+            return false;
+        }
+
+        var seedP0 = vertexPoints[frameIndices.Value.Item1];
+        var seedP1 = vertexPoints[frameIndices.Value.Item2];
+        var seedP2 = vertexPoints[frameIndices.Value.Item3];
+        var seedPlane = new Plane(seedP0, seedP1, seedP2);
+        if (!seedPlane.IsValid)
+        {
+            finalXform = Transform.Identity;
+            return false;
+        }
+
+        // RigidBody2 adds solverPlane.Origin as PPos[0]. Keep this origin away
+        // from the mesh reference vertex so it does not collapse onto PPos[1].
+        var combinedBoundingBox = rigidMesh.GetBoundingBox(true);
+        if (!combinedBoundingBox.IsValid)
+        {
+            finalXform = Transform.Identity;
+            return false;
+        }
+
+        var solverPlane = new Plane(
+            combinedBoundingBox.Center,
+            seedPlane.XAxis,
+            seedPlane.YAxis);
+
+        var bodyBrep = Brep.CreateFromMesh(rigidMesh, true);
+        if (bodyBrep == null)
+        {
+            finalXform = Transform.Identity;
+            return false;
+        }
+
+        // All source vertices intentionally form one welded rigid body.
+        var rigidGoalPoints = new List<Point3d>(vertexPoints);
+        var rbGoal = new RigidBody2(bodyBrep, solverPlane, rigidGoalPoints, rigidStrength);
+        var goals = new List<IGoal> { rbGoal };
+
+        foreach (var (point, massPerPoint) in gravityLoads)
+        {
+            goals.Add(new Unary(point, new Vector3d(0.0, 0.0, -gravity * massPerPoint)));
+        }
+
+        if (collisionPoints.Count > 0)
+        {
+            goals.Add(new Floor2(collisionPoints, floorStrength, floorZ));
+        }
+
+        var physicalSystem = new PhysicalSystem();
+        foreach (var goal in goals)
+        {
+            physicalSystem.AssignPIndex(goal, assignTol);
+        }
+
+        var initialRigidPositions = rbGoal.PPos;
+        var initialRigidIndices = rbGoal.PIndex;
+        if (initialRigidPositions == null || initialRigidIndices == null ||
+            initialRigidPositions.Length != initialRigidIndices.Length ||
+            initialRigidIndices.Length < vertexPoints.Count + 1)
+        {
+            finalXform = Transform.Identity;
+            return false;
+        }
+
+        // PPos[0] is the orientation particle; PPos[1 + vertexIndex] is the
+        // corresponding mesh vertex. Ignore duplicate global particles, then
+        // select three distinct, non-collinear particles for transform recovery.
+        var uniqueVertexRecords = new List<(int VertexIndex, int GlobalIndex, Point3d Point)>();
+        var seenGlobalIndices = new HashSet<int>();
+        for (var vertexIndex = 0; vertexIndex < vertexPoints.Count; vertexIndex++)
+        {
+            var globalIndex = initialRigidIndices[vertexIndex + 1];
+            if (!seenGlobalIndices.Add(globalIndex))
+            {
+                continue;
+            }
+
+            uniqueVertexRecords.Add((vertexIndex, globalIndex, vertexPoints[vertexIndex]));
+        }
+
+        if (uniqueVertexRecords.Count < 3)
+        {
+            finalXform = Transform.Identity;
+            return false;
+        }
+
+        var tracking0 = uniqueVertexRecords[0];
+        var tracking1 = uniqueVertexRecords[1];
+        var farthestDistanceSquared = tracking1.Point.DistanceToSquared(tracking0.Point);
+        for (var i = 2; i < uniqueVertexRecords.Count; i++)
+        {
+            var distanceSquared = uniqueVertexRecords[i].Point.DistanceToSquared(tracking0.Point);
+            if (distanceSquared > farthestDistanceSquared)
+            {
+                farthestDistanceSquared = distanceSquared;
+                tracking1 = uniqueVertexRecords[i];
+            }
+        }
+
+        var trackingAxis = tracking1.Point - tracking0.Point;
+        var tracking2Index = -1;
+        var bestTrackingCrossSquared = -1.0;
+        for (var i = 0; i < uniqueVertexRecords.Count; i++)
+        {
+            var candidate = uniqueVertexRecords[i];
+            if (candidate.GlobalIndex == tracking0.GlobalIndex ||
+                candidate.GlobalIndex == tracking1.GlobalIndex)
+            {
+                continue;
+            }
+
+            var cross = Vector3d.CrossProduct(trackingAxis, candidate.Point - tracking0.Point);
+            if (cross.SquareLength > bestTrackingCrossSquared)
+            {
+                bestTrackingCrossSquared = cross.SquareLength;
+                tracking2Index = i;
+            }
+        }
+
+        if (tracking2Index < 0 || bestTrackingCrossSquared <= 1e-16)
+        {
+            finalXform = Transform.Identity;
+            return false;
+        }
+
+        var tracking2 = uniqueVertexRecords[tracking2Index];
+        var initialTrackingPlane = new Plane(tracking0.Point, tracking1.Point, tracking2.Point);
+        if (!initialTrackingPlane.IsValid)
+        {
+            finalXform = Transform.Identity;
+            return false;
+        }
+
+        var globalP0 = tracking0.GlobalIndex;
+        var globalP1 = tracking1.GlobalIndex;
+        var globalP2 = tracking2.GlobalIndex;
+        for (var step = 0; step < currentStep; step++)
+        {
+            for (var subStep = 0; subStep < solverSubsteps; subStep++)
+            {
+                physicalSystem.Step(goals, true, threshold);
+            }
+        }
+
+        var positions = physicalSystem.GetPositionArray();
+        if (globalP0 < 0 || globalP1 < 0 || globalP2 < 0 ||
+            globalP0 >= positions.Length || globalP1 >= positions.Length || globalP2 >= positions.Length)
+        {
+            finalXform = Transform.Identity;
+            return false;
+        }
+
+        var nowP0 = positions[globalP0];
+        var nowP1 = positions[globalP1];
+        var nowP2 = positions[globalP2];
+        var finalCross = Vector3d.CrossProduct(nowP1 - nowP0, nowP2 - nowP0);
+        if (finalCross.SquareLength <= 1e-16)
+        {
+            finalXform = Transform.Identity;
+            return false;
+        }
+
+        var nowPlane = new Plane(nowP0, nowP1, nowP2);
+        if (!nowPlane.IsValid)
+        {
+            finalXform = Transform.Identity;
+            return false;
+        }
+
+        var xform = Transform.PlaneToPlane(initialTrackingPlane, nowPlane);
+        finalXform = xform;
+        return RecordNodeTransforms(nodes, xform, stabilityThreshold, graph);
+    }
+
+    private static bool RecordNodeTransforms(
+        List<StabilityNode> nodes,
+        Transform xform,
+        double stabilityThreshold,
+        JObject graph)
+    {
+        var maxDisplacement = 0.0;
+        var rotation = RotationFromTransform(xform);
+        var matrix = TransformMatrix(xform);
+
+        foreach (var node in nodes)
+        {
+            if (!TryGeometryCenter(node.Geometry, out var center))
+            {
+                var displacement = Vector3d.Zero;
+                node.Node["displacement"] = new JObject
+                {
+                    ["x"] = displacement.X,
+                    ["y"] = displacement.Y,
+                    ["z"] = displacement.Z,
+                    ["length"] = 0.0
+                };
+                node.Node.Remove("rotation_degrees");
+                node.Node["rotation"] = rotation;
+                node.Node["transform"] = matrix;
+                continue;
+            }
+
+            var movedCenter = new Point3d(center);
+            movedCenter.Transform(xform);
+            var movedDisplacement = movedCenter - center;
+            var displacementLength = movedDisplacement.Length;
+            maxDisplacement = Math.Max(maxDisplacement, displacementLength);
+
+            node.Node["displacement"] = new JObject
+            {
+                ["x"] = movedDisplacement.X,
+                ["y"] = movedDisplacement.Y,
+                ["z"] = movedDisplacement.Z,
+                ["length"] = displacementLength
+            };
+            node.Node.Remove("rotation_degrees");
+            node.Node["rotation"] = rotation;
+            node.Node["transform"] = matrix;
+        }
+
+        graph["stable"] = maxDisplacement <= stabilityThreshold;
+        graph["stability_threshold"] = stabilityThreshold;
+        graph["max_displacement"] = maxDisplacement;
+        return graph["stable"].Value<bool>();
+    }
+
+    private static JObject RotationFromTransform(Transform xform)
+    {
+        var cosAngle = (xform.M00 + xform.M11 + xform.M22 - 1.0) * 0.5;
+        cosAngle = Math.Max(-1.0, Math.Min(1.0, cosAngle));
+        var angle = Math.Acos(cosAngle);
+
+        var axis = Vector3d.Zero;
+        if (angle <= 1e-10)
+        {
+            axis = Vector3d.Zero;
+        }
+        else if (Math.Abs(Math.PI - angle) <= 1e-6)
+        {
+            var x = Math.Sqrt(Math.Max(0.0, (xform.M00 + 1.0) * 0.5));
+            var y = Math.Sqrt(Math.Max(0.0, (xform.M11 + 1.0) * 0.5));
+            var z = Math.Sqrt(Math.Max(0.0, (xform.M22 + 1.0) * 0.5));
+            if (x >= y && x >= z && x > 1e-10)
+            {
+                y = (xform.M01 + xform.M10) / (4.0 * x);
+                z = (xform.M02 + xform.M20) / (4.0 * x);
+            }
+            else if (y >= z && y > 1e-10)
+            {
+                x = (xform.M01 + xform.M10) / (4.0 * y);
+                z = (xform.M12 + xform.M21) / (4.0 * y);
+            }
+            else if (z > 1e-10)
+            {
+                x = (xform.M02 + xform.M20) / (4.0 * z);
+                y = (xform.M12 + xform.M21) / (4.0 * z);
+            }
+
+            axis = new Vector3d(x, y, z);
+            axis.Unitize();
+        }
+        else
+        {
+            var scale = 2.0 * Math.Sin(angle);
+            axis = new Vector3d(
+                (xform.M21 - xform.M12) / scale,
+                (xform.M02 - xform.M20) / scale,
+                (xform.M10 - xform.M01) / scale);
+            axis.Unitize();
+        }
+
+        return new JObject
+        {
+            ["angle_degrees"] = angle * 180.0 / Math.PI,
+            ["axis"] = new JObject
+            {
+                ["x"] = axis.X,
+                ["y"] = axis.Y,
+                ["z"] = axis.Z
+            }
+        };
+    }
+
+    private static JArray TransformMatrix(Transform xform)
+    {
+        var matrix = new JArray();
+        matrix.Add(new JArray(xform.M00, xform.M01, xform.M02, xform.M03));
+        matrix.Add(new JArray(xform.M10, xform.M11, xform.M12, xform.M13));
+        matrix.Add(new JArray(xform.M20, xform.M21, xform.M22, xform.M23));
+        matrix.Add(new JArray(xform.M30, xform.M31, xform.M32, xform.M33));
+        return matrix;
+    }
+
+    private static JObject SerializableGraph(JObject graph)
+    {
+        var result = (JObject)graph.DeepClone();
+        var nodes = result["n"] as JArray;
+        if (nodes != null)
+        {
+            var serializableNodes = new JArray();
+            foreach (var nodeToken in nodes)
+            {
+                if (nodeToken is not JObject node)
+                {
+                    continue;
+                }
+
+                var storedNode = (JObject)node.DeepClone();
+                storedNode.Remove("geo");
+                serializableNodes.Add(storedNode);
+            }
+
+            result["n"] = serializableNodes;
+        }
+
+        return result;
+    }
+
+    private static List<Point3d> MeshVerticesAsPoints(Mesh mesh)
+    {
+        var points = new List<Point3d>();
+        if (mesh == null)
+        {
+            return points;
+        }
+
+        foreach (var vertex in mesh.Vertices)
+        {
+            points.Add(new Point3d(vertex.X, vertex.Y, vertex.Z));
+        }
+
+        return points;
+    }
+
+    private static bool TryGeometryCenter(GeometryBase geometry, out Point3d center)
+    {
+        center = Point3d.Unset;
+        if (geometry == null)
+        {
+            return false;
+        }
+
+        try
+        {
+            var bbox = geometry.GetBoundingBox(true);
+            if (bbox.IsValid)
+            {
+                center = bbox.Center;
+                return true;
+            }
+        }
+        catch
+        {
+            // ignore and fall back
+        }
+
+        return false;
+    }
+
+    private static Mesh AsMesh(GeometryBase geometry)
+    {
+        if (geometry == null)
+        {
+            return null;
+        }
+
+        if (geometry is Mesh mesh)
+        {
+            return mesh.DuplicateMesh();
+        }
+
+        var brep = AsBrep(geometry);
+        if (brep == null)
+        {
+            return null;
+        }
+
+        var meshes = Mesh.CreateFromBrep(brep, MeshingParameters.Default);
+        if (meshes == null || meshes.Length == 0)
+        {
+            return null;
+        }
+
+        var result = new Mesh();
+        foreach (var part in meshes)
+        {
+            result.Append(part);
+        }
+
+        if (result.Vertices.Count == 0)
+        {
+            return null;
+        }
+
+        result.Normals.ComputeNormals();
+        result.Compact();
+        return result;
+    }
+
+    private static Brep AsBrep(GeometryBase geometry)
+    {
+        if (geometry == null)
+        {
+            return null;
+        }
+
+        switch (geometry)
+        {
+            case Brep brep:
+                return brep.DuplicateBrep();
+            case Extrusion extrusion:
+                return extrusion.ToBrep();
+            case Surface surface:
+                return surface.ToBrep();
+            case Mesh mesh:
+                return Brep.CreateFromMesh(mesh, true);
+            case Curve curve:
+                var planarBreps = Brep.CreatePlanarBreps(curve, 0.001);
+                return planarBreps != null && planarBreps.Length > 0 ? planarBreps[0] : null;
+            default:
+                return null;
+        }
+    }
+
+    private static (int Item1, int Item2, int Item3)? FrameIndices(List<Point3d> points)
+    {
+        if (points.Count < 3)
+        {
+            return null;
+        }
+
+        // Match the Python reference-frame selection exactly.
+        var i0 = 0;
+        var p0 = points[i0];
+        var i1 = 0;
+        var maxDistanceSquared = 0.0;
+        for (var i = 0; i < points.Count; i++)
+        {
+            var distanceSquared = points[i].DistanceToSquared(p0);
+            if (distanceSquared > maxDistanceSquared)
+            {
+                maxDistanceSquared = distanceSquared;
+                i1 = i;
+            }
+        }
+
+        var xAxis = points[i1] - p0;
+        if (xAxis.IsTiny())
+        {
+            return null;
+        }
+
+        var i2 = -1;
+        var maxCross = 0.0;
+        for (var i = 0; i < points.Count; i++)
+        {
+            if (i == i0 || i == i1)
+            {
+                continue;
+            }
+
+            var cross = Vector3d.CrossProduct(xAxis, points[i] - p0);
+            if (cross.SquareLength > maxCross)
+            {
+                maxCross = cross.SquareLength;
+                i2 = i;
+            }
+        }
+
+        if (i2 < 0 || maxCross <= RhinoMath.ZeroTolerance)
+        {
+            return null;
+        }
+
+        return (i0, i1, i2);
+    }
+
+    private static void WriteAfterEvaluationFullGeometry(RhinoObject obj, JObject geometry, JObject fullMesh)
+    {
+        if (obj == null || geometry == null || fullMesh == null)
+        {
+            return;
+        }
+
+        var payload = new JObject
+        {
+            ["geometry"] = geometry,
+            ["full_mesh"] = fullMesh
+        };
+
+        obj.Attributes.SetUserString(AfterEvaluationKey, payload.ToString(Newtonsoft.Json.Formatting.None));
+        obj.CommitChanges();
+    }
+
+    private static void WriteAfterEvaluationObb(RhinoObject obj, JObject geometry)
+    {
+        if (obj == null || geometry == null)
+        {
+            return;
+        }
+
+        var payload = new JObject
+        {
+            ["geometry"] = geometry
+        };
+
+        obj.Attributes.SetUserString(AfterEvaluationKey, payload.ToString(Newtonsoft.Json.Formatting.None));
+        obj.CommitChanges();
+    }
+
+    private sealed class StabilityNode
+    {
+        public JObject Node { get; set; }
+        public GeometryBase Geometry { get; set; }
+        public double Mass { get; set; }
+    }
+}

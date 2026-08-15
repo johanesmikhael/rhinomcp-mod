@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Reflection;
@@ -222,9 +222,9 @@ namespace rhinomcp_mod.Serializers
                     objInfo["type"] = "EXTRUSION";
                     if (includeGeometrySummary)
                     {
-                        RhinoApp.WriteLine(
-                            $"[outline-debug] object={obj.Id} type=EXTRUSION plane_source={workingPlaneSource} pose_user_string={hasPoseUserString}"
-                        );
+                        // RhinoApp.WriteLine(
+                        //     $"[outline-debug] object={obj.Id} type=EXTRUSION plane_source={workingPlaneSource} pose_user_string={hasPoseUserString}"
+                        // );
                     }
                     objInfo["geometry"] = SerializeExtrusionGeometry(
                         extrusion,
@@ -240,9 +240,9 @@ namespace rhinomcp_mod.Serializers
                     string brepType;
                     if (includeGeometrySummary)
                     {
-                        RhinoApp.WriteLine(
-                            $"[outline-debug] object={obj.Id} type=BREP plane_source={workingPlaneSource} pose_user_string={hasPoseUserString}"
-                        );
+                        // RhinoApp.WriteLine(
+                        //     $"[outline-debug] object={obj.Id} type=BREP plane_source={workingPlaneSource} pose_user_string={hasPoseUserString}"
+                        // );
                     }
                     objInfo["geometry"] = SerializeBrepGeometry(
                         brep,
