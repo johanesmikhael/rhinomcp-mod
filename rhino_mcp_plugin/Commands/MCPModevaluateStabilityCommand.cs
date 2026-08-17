@@ -22,8 +22,20 @@ namespace RhinoMCPModPlugin.Commands
 
         protected override Result RunCommand(RhinoDoc doc, RunMode mode)
         {
+            if (!StabilityUnits.TryCreate(doc.ModelUnitSystem, out var unitContext, out var unitError))
+            {
+                RhinoApp.WriteLine($"EvaluateStability failed: {unitError}");
+                return Result.Failure;
+            }
+
             var handler = new RhinoMCPModFunctions();
             var parameters = new JObject();
+            var defaultStabilityThreshold =
+                unitContext.FromMeters(DefaultStabilityThresholdMeters);
+            var defaultAssignTolerance =
+                unitContext.FromMeters(DefaultAssignToleranceMeters);
+            var defaultSolverThreshold =
+                unitContext.FromMeters(DefaultSolverThresholdMeters);
 
             var getOption = new GetOption();
             getOption.SetCommandPrompt("Stability parameter mode");
@@ -42,13 +54,13 @@ namespace RhinoMCPModPlugin.Commands
             if (optionResult == GetResult.Nothing || selectedMode == defaultsOption)
             {
                 parameters["current_step"] = DefaultCurrentStep;
-                parameters["stability_threshold"] = DefaultStabilityThreshold;
+                parameters["stability_threshold"] = defaultStabilityThreshold;
                 parameters["rigid_strength"] = DefaultRigidStrength;
                 parameters["floor_strength"] = DefaultFloorStrength;
                 parameters["floor_z"] = DefaultFloorZ;
                 parameters["gravity"] = DefaultGravity;
-                parameters["assign_tol"] = DefaultAssignTol;
-                parameters["threshold"] = DefaultThreshold;
+                parameters["assign_tol"] = defaultAssignTolerance;
+                parameters["threshold"] = defaultSolverThreshold;
                 parameters["solver_substeps"] = DefaultSolverSubsteps;
             }
             else if (selectedMode == customOption)
@@ -56,26 +68,26 @@ namespace RhinoMCPModPlugin.Commands
                 var parameterLabels = new[]
                 {
                     "Current step",
-                    "Stability threshold",
+                    $"Stability threshold ({doc.ModelUnitSystem})",
                     "Rigid strength",
                     "Floor strength",
-                    "Floor Z",
-                    "Gravity",
-                    "Assign tolerance",
-                    "Displacement threshold",
+                    $"Floor Z ({doc.ModelUnitSystem})",
+                    "Gravity (m/s²)",
+                    $"Assign tolerance ({doc.ModelUnitSystem})",
+                    $"Displacement threshold ({doc.ModelUnitSystem})",
                     "Solver substeps"
                 };
 
                 var values = new double[9]
                 {
                     DefaultCurrentStep,
-                    DefaultStabilityThreshold,
+                    defaultStabilityThreshold,
                     DefaultRigidStrength,
                     DefaultFloorStrength,
                     DefaultFloorZ,
                     DefaultGravity,
-                    DefaultAssignTol,
-                    DefaultThreshold,
+                    defaultAssignTolerance,
+                    defaultSolverThreshold,
                     DefaultSolverSubsteps
                 };
 
@@ -141,7 +153,16 @@ namespace RhinoMCPModPlugin.Commands
             {
                 var stable = result["stable"]?.Value<bool>() == true ? "stable" : "unstable";
                 RhinoApp.WriteLine($"EvaluateStability result: {stable}");
-                RhinoApp.WriteLine($"max_displacement: {result["max_displacement"]}");
+                RhinoApp.WriteLine(
+                    $"max_displacement: {result["max_displacement"]} {result["document_length_unit"]} " +
+                    $"({result["max_displacement_m"]} m)");
+                if (result["unit_warnings"] is JArray warnings)
+                {
+                    foreach (var warning in warnings)
+                    {
+                        RhinoApp.WriteLine($"Unit warning: {warning}");
+                    }
+                }
             }
             else
             {

@@ -18,11 +18,16 @@ namespace RhinoMCPModPlugin.Commands
 
         protected override Result RunCommand(RhinoDoc doc, RunMode mode)
         {
-            var densityUnit = RhinoMCPModFunctions.GetDensityUnit(doc.ModelUnitSystem);
-            var massUnit = doc.ModelUnitSystem == Rhino.UnitSystem.Feet ? "lb" : "kg";
+            if (!StabilityUnits.TryCreate(doc.ModelUnitSystem, out var unitContext, out var unitError))
+            {
+                RhinoApp.WriteLine($"Assign mass from layer density failed: {unitError}");
+                return Result.Failure;
+            }
+
+            var densityUnit = unitContext.DensityInputUnit;
             RhinoApp.WriteLine(
                 $"Density unit is {densityUnit}. Current Rhino model unit: {doc.ModelUnitSystem}. " +
-                $"Object volumes will be converted before calculating mass in {massUnit}.");
+                "Object volumes and density will be normalized before storing mass in kg.");
 
             var handler = new RhinoMCPModFunctions();
             var result = handler.AssignMassFromLayerDensity(new JObject());
@@ -41,6 +46,13 @@ namespace RhinoMCPModPlugin.Commands
                 $"Mass calculation finished. Updated {assignedCount} object(s); " +
                 $"skipped {skippedLayerCount} layer(s) and {skippedObjectCount} object(s). " +
                 $"Model units: {result["model_unit_system"]}.");
+            if (result["unit_warnings"] is JArray warnings)
+            {
+                foreach (var warning in warnings)
+                {
+                    RhinoApp.WriteLine($"Unit warning: {warning}");
+                }
+            }
 
             return Result.Success;
         }

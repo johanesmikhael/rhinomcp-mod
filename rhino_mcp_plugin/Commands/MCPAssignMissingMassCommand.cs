@@ -25,7 +25,15 @@ namespace RhinoMCPModPlugin.Commands
             if (result["success"]?.Value<bool>() == true)
             {
                 RhinoApp.WriteLine(
-                    $"AssignMissingMass completed successfully. Assigned {result["assigned"]?.Count()} objects.");
+                    $"AssignMissingMass completed successfully. Assigned {result["assigned"]?.Count()} objects " +
+                    $"using {result["input_mass_unit"]}; stored internally as kg.");
+                if (result["unit_warnings"] is JArray warnings)
+                {
+                    foreach (var warning in warnings)
+                    {
+                        RhinoApp.WriteLine($"Unit warning: {warning}");
+                    }
+                }
                 return Result.Success;
             }
 

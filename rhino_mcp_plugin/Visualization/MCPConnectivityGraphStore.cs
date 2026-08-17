@@ -118,10 +118,16 @@ internal static class MCPConnectivityGraphStore
             {
                 try
                 {
-                    var mass = JObject.Parse(stabilityText).Value<double?>("mass");
+                    var stability = JObject.Parse(stabilityText);
+                    var mass = stability.Value<double?>("mass");
                     if (mass.HasValue)
                     {
                         nodePayload["mass"] = mass.Value;
+                        var massUnit = stability.Value<string>("mass_unit");
+                        if (!string.IsNullOrWhiteSpace(massUnit))
+                        {
+                            nodePayload["mass_unit"] = massUnit;
+                        }
                     }
                 }
                 catch (Exception)

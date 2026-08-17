@@ -19,13 +19,13 @@ public partial class RhinoMCPModFunctions
     public const string EvaluationMode = "single_rigid_assembly";
 
     public const int DefaultCurrentStep = 50;
-    public const double DefaultStabilityThreshold = 10.0;
+    public const double DefaultStabilityThresholdMeters = 0.01;
     public const double DefaultRigidStrength = 10000.0;
     public const double DefaultFloorStrength = 1000.0;
     public const double DefaultFloorZ = 0.0;
-    public const double DefaultGravity = 9.81;
-    public const double DefaultAssignTol = 1e-6;
-    public const double DefaultThreshold = 0.001;
+    public const double DefaultGravity = 9.80665;
+    public const double DefaultAssignToleranceMeters = 1e-6;
+    public const double DefaultSolverThresholdMeters = 0.001;
     public const int DefaultSolverSubsteps = 1;
     private const int MaxCurrentStep = 10000;
     private const int MaxSolverSubsteps = 1000;
@@ -46,6 +46,8 @@ public partial class RhinoMCPModFunctions
                 throw new Exception("No active Rhino document.");
             }
 
+            var unitContext = StabilityUnits.Create(doc.ModelUnitSystem);
+
             var graph = ReadGraph(parameters?["graph"], doc);
             var nodes = graph["n"] as JArray;
             if (nodes == null)
@@ -59,6 +61,7 @@ public partial class RhinoMCPModFunctions
 
             var stabilityNodes = new List<StabilityNode>();
             var nodeErrors = new List<string>();
+            var unitWarnings = new JArray();
             for (var nodeIndex = 0; nodeIndex < nodes.Count; nodeIndex++)
             {
                 var nodeToken = nodes[nodeIndex];
@@ -88,13 +91,17 @@ public partial class RhinoMCPModFunctions
                     continue;
                 }
 
-                JToken massToken = node["mass"];
+                JObject massSource = node;
                 var userText = rhinoObject.Attributes.GetUserString(StabilityKey);
                 if (!string.IsNullOrWhiteSpace(userText))
                 {
                     try
                     {
-                        massToken = JObject.Parse(userText)["mass"] ?? massToken;
+                        var storedMass = JObject.Parse(userText);
+                        if (storedMass["mass"] != null)
+                        {
+                            massSource = storedMass;
+                        }
                     }
                     catch (Exception ex)
                     {
@@ -104,18 +111,34 @@ public partial class RhinoMCPModFunctions
                     }
                 }
 
-                if (!TryReadFiniteDouble(massToken, out var mass) || mass <= 0.0)
+                if (!TryReadFiniteDouble(massSource["mass"], out var mass) || mass <= 0.0)
                 {
                     nodeErrors.Add($"node[{nodeIndex}] object {guidString} needs a positive finite mass");
                     continue;
                 }
 
-                node["mass"] = mass;
+                var massUnit = massSource["mass_unit"]?.ToString();
+                if (string.IsNullOrWhiteSpace(massUnit))
+                {
+                    massUnit = StabilityUnits.InferLegacyMassUnit(doc.ModelUnitSystem);
+                    unitWarnings.Add(
+                        $"Object {guidString} has untagged legacy mass; interpreted as {massUnit}. Reassign mass to store canonical kg metadata.");
+                }
+
+                if (!StabilityUnits.TryMassToKilograms(mass, massUnit, out var massKilograms))
+                {
+                    nodeErrors.Add(
+                        $"node[{nodeIndex}] object {guidString} has unsupported mass_unit '{massUnit}' or invalid mass");
+                    continue;
+                }
+
+                node["mass"] = massKilograms;
+                node["mass_unit"] = StabilityUnits.KilogramUnit;
                 stabilityNodes.Add(new StabilityNode
                 {
                     Node = node,
                     Geometry = geometry,
-                    Mass = mass
+                    MassKilograms = massKilograms
                 });
             }
 
@@ -127,7 +150,11 @@ public partial class RhinoMCPModFunctions
             var currentStep = ReadIntegerParameter(
                 parameters, "current_step", DefaultCurrentStep, 1, MaxCurrentStep);
             var stabilityThreshold = ReadFiniteParameter(
-                parameters, "stability_threshold", DefaultStabilityThreshold, 0.0, inclusiveMinimum: true);
+                parameters,
+                "stability_threshold",
+                unitContext.FromMeters(DefaultStabilityThresholdMeters),
+                0.0,
+                inclusiveMinimum: true);
             var rigidStrength = ReadFiniteParameter(
                 parameters, "rigid_strength", DefaultRigidStrength, 0.0, inclusiveMinimum: false);
             var floorStrength = ReadFiniteParameter(
@@ -136,9 +163,17 @@ public partial class RhinoMCPModFunctions
             var gravity = ReadFiniteParameter(
                 parameters, "gravity", DefaultGravity, 0.0, inclusiveMinimum: true);
             var assignTol = ReadFiniteParameter(
-                parameters, "assign_tol", DefaultAssignTol, 0.0, inclusiveMinimum: false);
+                parameters,
+                "assign_tol",
+                unitContext.FromMeters(DefaultAssignToleranceMeters),
+                0.0,
+                inclusiveMinimum: false);
             var threshold = ReadFiniteParameter(
-                parameters, "threshold", DefaultThreshold, 0.0, inclusiveMinimum: false);
+                parameters,
+                "threshold",
+                unitContext.FromMeters(DefaultSolverThresholdMeters),
+                0.0,
+                inclusiveMinimum: false);
             var solverSubsteps = ReadIntegerParameter(
                 parameters, "solver_substeps", DefaultSolverSubsteps, 1, MaxSolverSubsteps);
             if ((long)currentStep * solverSubsteps > MaxTotalSolverSteps)
@@ -155,15 +190,22 @@ public partial class RhinoMCPModFunctions
                 stabilityThreshold,
                 rigidStrength,
                 floorStrength,
-                floorZ,
+                unitContext.ToMeters(floorZ),
                 gravity,
-                assignTol,
-                threshold,
+                unitContext.ToMeters(assignTol),
+                unitContext.ToMeters(threshold),
                 solverSubsteps,
+                unitContext.LengthToMeters,
                 out var finalXform);
 
             graph["stable"] = stable;
             graph["evaluation_mode"] = EvaluationMode;
+            graph["document_length_unit"] = doc.ModelUnitSystem.ToString();
+            graph["displacement_unit"] = doc.ModelUnitSystem.ToString();
+            graph["length_to_meters"] = unitContext.LengthToMeters;
+            graph["mass_unit"] = StabilityUnits.KilogramUnit;
+            graph["gravity_m_s2"] = gravity;
+            graph["unit_warnings"] = unitWarnings.DeepClone();
             var evaluationGraph = SerializableGraph(graph);
             doc.Strings.SetString(EvaluationGraphKey, evaluationGraph.ToString());
 
@@ -348,12 +390,22 @@ public partial class RhinoMCPModFunctions
                 ["node_count"] = stabilityNodes.Count,
                 ["solver_iterations"] = currentStep * solverSubsteps,
                 ["stability_threshold"] = stabilityThreshold,
+                ["stability_threshold_m"] = unitContext.ToMeters(stabilityThreshold),
+                ["document_length_unit"] = doc.ModelUnitSystem.ToString(),
+                ["length_to_meters"] = unitContext.LengthToMeters,
+                ["mass_unit"] = StabilityUnits.KilogramUnit,
+                ["gravity_m_s2"] = gravity,
+                ["unit_warnings"] = unitWarnings,
                 ["evaluation_graph_key"] = EvaluationGraphKey
             };
 
             if (graph["max_displacement"] != null)
             {
                 result["max_displacement"] = graph["max_displacement"].Value<double?>();
+            }
+            if (graph["max_displacement_m"] != null)
+            {
+                result["max_displacement_m"] = graph["max_displacement_m"].Value<double?>();
             }
 
             return result;
@@ -512,11 +564,12 @@ public partial class RhinoMCPModFunctions
         double stabilityThreshold,
         double rigidStrength,
         double floorStrength,
-        double floorZ,
+        double floorZMeters,
         double gravity,
-        double assignTol,
-        double threshold,
+        double assignToleranceMeters,
+        double solverThresholdMeters,
         int solverSubsteps,
+        double lengthToMeters,
         out Transform finalXform)
     {
         if (nodes.Count == 0)
@@ -526,7 +579,9 @@ public partial class RhinoMCPModFunctions
 
         graph["stable"] = false;
         graph["stability_threshold"] = stabilityThreshold;
+        graph["stability_threshold_m"] = stabilityThreshold * lengthToMeters;
         graph["max_displacement"] = null;
+        graph["max_displacement_m"] = null;
 
         var rigidMesh = new Mesh();
         var vertexPoints = new List<Point3d>();
@@ -535,7 +590,21 @@ public partial class RhinoMCPModFunctions
 
         foreach (var node in nodes)
         {
-            var mesh = AsMesh(node.Geometry);
+            var solverGeometry = node.Geometry.Duplicate();
+            if (solverGeometry == null ||
+                !solverGeometry.Transform(Transform.Scale(Point3d.Origin, lengthToMeters)))
+            {
+                throw new InvalidOperationException(
+                    $"Object {node.Node["g"]} could not be scaled from document units to meters.");
+            }
+
+            var mesh = AsMesh(solverGeometry);
+            if (mesh == null)
+            {
+                throw new InvalidOperationException(
+                    $"Object {node.Node["g"]} could not be meshed in solver meter space.");
+            }
+
             var points = MeshVerticesAsPoints(mesh);
             if (points.Count < 3)
             {
@@ -544,7 +613,7 @@ public partial class RhinoMCPModFunctions
             }
 
             rigidMesh.Append(mesh);
-            var massPerPoint = node.Mass / points.Count;
+            var massPerPoint = node.MassKilograms / points.Count;
             foreach (var point in points)
             {
                 vertexPoints.Add(point);
@@ -610,13 +679,13 @@ public partial class RhinoMCPModFunctions
 
         if (collisionPoints.Count > 0)
         {
-            goals.Add(new Floor2(collisionPoints, floorStrength, floorZ));
+            goals.Add(new Floor2(collisionPoints, floorStrength, floorZMeters));
         }
 
         var physicalSystem = new PhysicalSystem();
         foreach (var goal in goals)
         {
-            physicalSystem.AssignPIndex(goal, assignTol);
+            physicalSystem.AssignPIndex(goal, assignToleranceMeters);
         }
 
         var initialRigidPositions = rbGoal.PPos;
@@ -682,7 +751,8 @@ public partial class RhinoMCPModFunctions
             }
         }
 
-        if (tracking2Index < 0 || bestTrackingCrossSquared <= 1e-16)
+        if (tracking2Index < 0 ||
+            IsDegenerateCross(bestTrackingCrossSquared, trackingAxis.SquareLength))
         {
             throw new InvalidOperationException("The solver could not select a non-collinear tracking frame.");
         }
@@ -701,7 +771,7 @@ public partial class RhinoMCPModFunctions
         {
             for (var subStep = 0; subStep < solverSubsteps; subStep++)
             {
-                physicalSystem.Step(goals, true, threshold);
+                physicalSystem.Step(goals, true, solverThresholdMeters);
             }
         }
 
@@ -716,7 +786,11 @@ public partial class RhinoMCPModFunctions
         var nowP1 = positions[globalP1];
         var nowP2 = positions[globalP2];
         var finalCross = Vector3d.CrossProduct(nowP1 - nowP0, nowP2 - nowP0);
-        if (finalCross.SquareLength <= 1e-16)
+        var initialTrackingCross = Vector3d.CrossProduct(
+            tracking1.Point - tracking0.Point,
+            tracking2.Point - tracking0.Point);
+        if (!double.IsFinite(finalCross.SquareLength) ||
+            finalCross.SquareLength <= Math.Max(1e-48, initialTrackingCross.SquareLength * 1e-20))
         {
             throw new InvalidOperationException("The final solver tracking frame collapsed.");
         }
@@ -727,15 +801,21 @@ public partial class RhinoMCPModFunctions
             throw new InvalidOperationException("The solver's final tracking frame is invalid.");
         }
 
-        var xform = Transform.PlaneToPlane(initialTrackingPlane, nowPlane);
-        finalXform = xform;
-        return RecordNodeTransforms(nodes, xform, stabilityThreshold, graph);
+        var solverTransform = Transform.PlaneToPlane(initialTrackingPlane, nowPlane);
+        finalXform = StabilityUnits.SolverTransformToDocument(solverTransform, lengthToMeters);
+        return RecordNodeTransforms(
+            nodes,
+            finalXform,
+            stabilityThreshold,
+            lengthToMeters,
+            graph);
     }
 
     private static bool RecordNodeTransforms(
         List<StabilityNode> nodes,
         Transform xform,
         double stabilityThreshold,
+        double lengthToMeters,
         JObject graph)
     {
         var maxDisplacement = 0.0;
@@ -752,7 +832,8 @@ public partial class RhinoMCPModFunctions
                     ["x"] = displacement.X,
                     ["y"] = displacement.Y,
                     ["z"] = displacement.Z,
-                    ["length"] = 0.0
+                    ["length"] = 0.0,
+                    ["length_m"] = 0.0
                 };
                 node.Node.Remove("rotation_degrees");
                 node.Node["rotation"] = rotation;
@@ -771,16 +852,21 @@ public partial class RhinoMCPModFunctions
                 ["x"] = movedDisplacement.X,
                 ["y"] = movedDisplacement.Y,
                 ["z"] = movedDisplacement.Z,
-                ["length"] = displacementLength
+                ["length"] = displacementLength,
+                ["length_m"] = displacementLength * lengthToMeters
             };
             node.Node.Remove("rotation_degrees");
             node.Node["rotation"] = rotation;
             node.Node["transform"] = matrix;
         }
 
-        graph["stable"] = maxDisplacement <= stabilityThreshold;
+        var maxDisplacementMeters = maxDisplacement * lengthToMeters;
+        var stabilityThresholdMeters = stabilityThreshold * lengthToMeters;
+        graph["stable"] = maxDisplacementMeters <= stabilityThresholdMeters;
         graph["stability_threshold"] = stabilityThreshold;
+        graph["stability_threshold_m"] = stabilityThresholdMeters;
         graph["max_displacement"] = maxDisplacement;
+        graph["max_displacement_m"] = maxDisplacementMeters;
         return graph["stable"].Value<bool>();
     }
 
@@ -1005,7 +1091,7 @@ public partial class RhinoMCPModFunctions
         }
 
         var xAxis = points[i1] - p0;
-        if (xAxis.IsTiny())
+        if (!double.IsFinite(maxDistanceSquared) || maxDistanceSquared <= 1e-30)
         {
             return null;
         }
@@ -1027,12 +1113,29 @@ public partial class RhinoMCPModFunctions
             }
         }
 
-        if (i2 < 0 || maxCross <= RhinoMath.ZeroTolerance)
+        if (i2 < 0 || IsDegenerateCross(maxCross, maxDistanceSquared))
         {
             return null;
         }
 
         return (i0, i1, i2);
+    }
+
+    private static bool IsDegenerateCross(double crossSquareLength, double referenceLengthSquared)
+    {
+        if (!double.IsFinite(crossSquareLength) ||
+            !double.IsFinite(referenceLengthSquared) ||
+            referenceLengthSquared <= 0.0)
+        {
+            return true;
+        }
+
+        // Cross-product squared has units L^4. Use a relative test so meter
+        // normalization does not reject valid small models that were authored
+        // in millimeters or inches.
+        return crossSquareLength <= Math.Max(
+            1e-48,
+            referenceLengthSquared * referenceLengthSquared * 1e-24);
     }
 
     private static void WriteAfterEvaluationFullGeometry(RhinoObject obj, JObject geometry, JObject fullMesh)
@@ -1072,6 +1175,6 @@ public partial class RhinoMCPModFunctions
     {
         public JObject Node { get; set; }
         public GeometryBase Geometry { get; set; }
-        public double Mass { get; set; }
+        public double MassKilograms { get; set; }
     }
 }

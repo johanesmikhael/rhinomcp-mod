@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net7.0</TargetFramework>
+    <RollForward>Major</RollForward>
+    <CheckEolTargetFramework>false</CheckEolTargetFramework>
+    <RunAnalyzers>false</RunAnalyzers>
+    <IsPackable>false</IsPackable>
+    <AssemblyName>rhinomcp-mod.Tests</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="../rhino_mcp_plugin/Functions/StabilityUnitMath.cs" Link="StabilityUnitMath.cs" />
+  </ItemGroup>
+</Project>

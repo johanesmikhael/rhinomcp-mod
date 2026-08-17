@@ -10,10 +10,11 @@ namespace RhinoMCPModPlugin.Functions;
 public partial class RhinoMCPModFunctions
 {
     public const string LayerDensityKey = "density";
+    public const string LayerDensityUnitKey = "density_unit";
 
     public static string GetDensityUnit(UnitSystem modelUnitSystem)
     {
-        return modelUnitSystem == UnitSystem.Feet ? "lb/ft³" : "kg/m³";
+        return StabilityUnits.PreferredDensityInputUnit(modelUnitSystem);
     }
 
     public JObject AssignLayerDensity(JObject parameters)
@@ -24,10 +25,12 @@ public partial class RhinoMCPModFunctions
             if (doc == null)
                 throw new InvalidOperationException("No active Rhino document.");
 
-            var densityUnit = GetDensityUnit(doc.ModelUnitSystem);
+            var unitContext = StabilityUnits.Create(doc.ModelUnitSystem);
+            var densityUnit = unitContext.DensityInputUnit;
 
             var assigned = new JArray();
             var skipped = new JArray();
+            var unitWarnings = new JArray();
             var cancelled = false;
 
             foreach (var layer in doc.Layers)
@@ -45,7 +48,21 @@ public partial class RhinoMCPModFunctions
                 if (double.TryParse(existingText, NumberStyles.Float, CultureInfo.InvariantCulture,
                         out var existingDensity))
                 {
-                    getNumber.SetDefaultNumber(existingDensity);
+                    var existingUnit = layer.GetUserString(LayerDensityUnitKey);
+                    if (string.IsNullOrWhiteSpace(existingUnit))
+                    {
+                        existingUnit = StabilityUnits.InferLegacyDensityUnit(doc.ModelUnitSystem);
+                        unitWarnings.Add(
+                            $"Layer '{layer.FullPath}' has untagged legacy density; interpreted as {existingUnit}.");
+                    }
+
+                    if (StabilityUnits.TryDensityToKilogramsPerCubicMeter(
+                            existingDensity, existingUnit, out var existingDensitySi))
+                    {
+                        getNumber.SetDefaultNumber(
+                            StabilityUnits.KilogramsPerCubicMeterToInputDensity(
+                                existingDensitySi, densityUnit));
+                    }
                 }
 
                 var getResult = getNumber.Get();
@@ -65,6 +82,7 @@ public partial class RhinoMCPModFunctions
                 layer.SetUserString(
                     LayerDensityKey,
                     density.ToString("R", CultureInfo.InvariantCulture));
+                layer.SetUserString(LayerDensityUnitKey, densityUnit);
 
                 if (!doc.Layers.Modify(layer, layer.Index, true))
                 {
@@ -76,7 +94,8 @@ public partial class RhinoMCPModFunctions
                 {
                     ["layer_id"] = layer.Id.ToString(),
                     ["layer_name"] = layer.FullPath,
-                    [LayerDensityKey] = density
+                    [LayerDensityKey] = density,
+                    [LayerDensityUnitKey] = densityUnit
                 });
             }
 
@@ -86,7 +105,9 @@ public partial class RhinoMCPModFunctions
                 ["success"] = true,
                 ["cancelled"] = cancelled,
                 ["assigned"] = assigned,
-                ["skipped"] = skipped
+                ["skipped"] = skipped,
+                ["unit_warnings"] = unitWarnings,
+                ["density_unit"] = densityUnit
             };
         }
         catch (Exception ex)

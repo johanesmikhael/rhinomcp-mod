@@ -41,6 +41,8 @@ public partial class RhinoMCPModFunctions
 
             var assigned = new JArray();
             var skippedExisting = new JArray();
+            var unitWarnings = new JArray();
+            var inputMassUnit = StabilityUnits.PreferredMassInputUnit(doc.ModelUnitSystem);
             foreach (var nodeToken in nodes)
             {
                 if (nodeToken is not JObject node)
@@ -60,25 +62,41 @@ public partial class RhinoMCPModFunctions
                     continue;
                 }
 
-                var mass = 0.0;
+                JObject massSource = null;
                 var userText = rhinoObject.Attributes.GetUserString(StabilityKey);
                 if (!string.IsNullOrWhiteSpace(userText))
                 {
                     var data = JObject.Parse(userText);
                     if (data["mass"] != null)
                     {
-                        mass = data["mass"].Value<double>();
-                        node["mass"] = mass;
+                        massSource = data;
                     }
                 }
 
-                if (node["mass"] != null)
+                if (massSource == null && node["mass"] != null)
                 {
-                    mass = node["mass"].Value<double>();
+                    massSource = node;
                 }
 
-                if (mass > 0.0)
+                if (massSource != null)
                 {
+                    var storedMass = massSource["mass"]?.Value<double>() ?? 0.0;
+                    var storedUnit = massSource["mass_unit"]?.ToString();
+                    if (string.IsNullOrWhiteSpace(storedUnit))
+                    {
+                        storedUnit = StabilityUnits.InferLegacyMassUnit(doc.ModelUnitSystem);
+                        unitWarnings.Add(
+                            $"Object {guidString} has untagged legacy mass; interpreted as {storedUnit}. Reassign mass to store canonical kg metadata.");
+                    }
+
+                    if (!StabilityUnits.TryMassToKilograms(storedMass, storedUnit, out var existingMassKg))
+                    {
+                        throw new InvalidOperationException(
+                            $"Object {guidString} has invalid mass or unsupported mass_unit '{storedUnit}'.");
+                    }
+
+                    node["mass"] = existingMassKg;
+                    node["mass_unit"] = StabilityUnits.KilogramUnit;
                     skippedExisting.Add(guidString);
                     continue;
                 }
@@ -87,7 +105,9 @@ public partial class RhinoMCPModFunctions
                 doc.Objects.Select(rhinoObject.Id);
                 doc.Views.Redraw();
 
-                var prompt = $"Assign missing mass for {rhinoObject.Name ?? guidString} (enter value or press Enter to skip)";
+                var prompt =
+                    $"Assign missing mass for {rhinoObject.Name ?? guidString} in {inputMassUnit} " +
+                    "(enter value or press Enter to skip)";
                 var getNumber = new GetNumber();
                 getNumber.SetCommandPrompt(prompt);
                 getNumber.SetLowerLimit(0.0, true);
@@ -112,17 +132,32 @@ public partial class RhinoMCPModFunctions
                     continue;
                 }
 
-                var payload = new JObject { ["mass"] = assignedMass };
+                if (!StabilityUnits.TryMassToKilograms(
+                        assignedMass, inputMassUnit, out var assignedMassKilograms))
+                {
+                    throw new InvalidOperationException(
+                        $"Mass for {rhinoObject.Name ?? guidString} could not be converted from {inputMassUnit} to kg.");
+                }
+
+                var payload = new JObject
+                {
+                    ["mass"] = assignedMassKilograms,
+                    ["mass_unit"] = StabilityUnits.KilogramUnit
+                };
                 rhinoObject.Attributes.SetUserString(
                     StabilityKey,
                     payload.ToString(Formatting.None));
                 rhinoObject.CommitChanges();
 
-                node["mass"] = assignedMass;
+                node["mass"] = assignedMassKilograms;
+                node["mass_unit"] = StabilityUnits.KilogramUnit;
                 assigned.Add(new JObject
                 {
                     ["guid"] = guidString,
-                    ["mass"] = assignedMass
+                    ["entered_mass"] = assignedMass,
+                    ["entered_mass_unit"] = inputMassUnit,
+                    ["mass"] = assignedMassKilograms,
+                    ["mass_unit"] = StabilityUnits.KilogramUnit
                 });
             }
 
@@ -135,7 +170,10 @@ public partial class RhinoMCPModFunctions
             {
                 ["success"] = true,
                 ["assigned"] = assigned,
-                ["skipped_existing"] = skippedExisting
+                ["skipped_existing"] = skippedExisting,
+                ["unit_warnings"] = unitWarnings,
+                ["input_mass_unit"] = inputMassUnit,
+                ["stored_mass_unit"] = StabilityUnits.KilogramUnit
             };
         }
         catch (Exception ex)

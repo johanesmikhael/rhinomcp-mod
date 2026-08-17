@@ -245,8 +245,10 @@ The command calculates each object's volume and derives its mass from the densit
 
 Unit handling is important:
 
-- For a Rhino model in feet, density is entered in `lb/ft³`, volume is evaluated in `ft³`, and mass is stored in `lb`.
-- For other Rhino model units, density is entered in `kg/m³`. The calculated model-space volume—for example, `mm³` in a millimetre model—is converted to `m³` before mass is calculated in `kg`.
+- Metric documents accept mass in `kg` and density in `kg/m³`.
+- Imperial documents accept pound-mass (`lbm`, never pound-force) and density in `lbm/ft³`.
+- New object mass is converted immediately and stored as tagged canonical `kg`; layer density retains its explicit input-unit tag. Untagged legacy values remain readable with a warning. To preserve the earlier behavior, only legacy feet documents infer untagged values as imperial; other legacy documents infer metric values.
+- Documents with `None`, `Unset`, or custom units cannot be normalized reliably and are rejected by stability and density-derived mass evaluation.
 
 ### 3. Evaluate Assembly Stability
 
@@ -256,11 +258,15 @@ Run:
 mcpmodevaluatestability
 ```
 
-The command combines the graph assembly into one rigid body and runs the stability solver. Parameters such as rigid-body strength, floor strength, stability threshold, solver threshold, and solver iterations may need to be adjusted for each model. Invalid graph nodes, missing or non-positive mass, non-finite values, and invalid iteration counts fail explicitly rather than being classified as instability.
+The command combines the graph assembly into one rigid body and runs the stability solver. Solver geometry, floor elevation, tolerances, and mass are normalized internally to meters and kilograms, and gravity defaults to standard gravity (`9.80665 m/s²`). The returned displacement, transform, floor elevation, and explicit length parameters remain in the active Rhino document's units.
 
-Choose a stability threshold that is appropriate for the model's scale and units. The assembly is classified as stable when its maximum simulated displacement does not exceed this threshold.
+When omitted, the stability threshold (`0.01 m`), solver threshold (`0.001 m`), and particle-assignment tolerance (`0.000001 m`) are converted into document units at runtime. Rigid and floor strengths remain Kangaroo tuning weights. Invalid graph nodes, missing or non-positive mass, unsupported or non-finite units/values, and invalid iteration counts fail explicitly rather than being classified as instability.
+
+Choose a stability threshold that is appropriate for the model's scale and units. The assembly is classified as stable when its normalized maximum displacement does not exceed the normalized threshold. Results expose displacement in both document units and meters.
 
 The MCP `evaluate_stability` tool exposes the same solver parameters, allowing an AI client such as Claude to adjust them for a particular case.
+
+This normalization makes equivalent metric and imperial models comparable. It does not turn Kangaroo's dynamic-relaxation result into an engineering-certified structural analysis.
 
 ### 4. Display the Evaluated Result
 

@@ -41,6 +41,7 @@ public partial class RhinoMCPModFunctions
             }
 
             var assigned = new JArray();
+            var inputMassUnit = StabilityUnits.PreferredMassInputUnit(doc.ModelUnitSystem);
             foreach (var nodeToken in nodes)
             {
                 if (nodeToken is not JObject node)
@@ -63,7 +64,9 @@ public partial class RhinoMCPModFunctions
                 doc.Objects.Select(rhinoObject.Id);
                 doc.Views.Redraw();
 
-                var prompt = $"Assign mass for {rhinoObject.Name ?? guidString} (enter value or press Enter to skip)";
+                var prompt =
+                    $"Assign mass for {rhinoObject.Name ?? guidString} in {inputMassUnit} " +
+                    "(enter value or press Enter to skip)";
                 var getNumber = new GetNumber();
                 getNumber.SetCommandPrompt(prompt);
                 getNumber.SetLowerLimit(0.0, true);
@@ -90,22 +93,38 @@ public partial class RhinoMCPModFunctions
                     continue;
                 }
 
-                var payload = new JObject { ["mass"] = mass };
+                if (!StabilityUnits.TryMassToKilograms(mass, inputMassUnit, out var massKilograms))
+                {
+                    throw new InvalidOperationException(
+                        $"Mass for {rhinoObject.Name ?? guidString} could not be converted from {inputMassUnit} to kg.");
+                }
+
+                var payload = new JObject
+                {
+                    ["mass"] = massKilograms,
+                    ["mass_unit"] = StabilityUnits.KilogramUnit
+                };
                 rhinoObject.Attributes.SetUserString(StabilityKey, payload.ToString(Formatting.None));
                 rhinoObject.CommitChanges();
 
-                node["mass"] = mass;
+                node["mass"] = massKilograms;
+                node["mass_unit"] = StabilityUnits.KilogramUnit;
                 assigned.Add(new JObject
                 {
                     ["guid"] = guidString,
-                    ["mass"] = mass
+                    ["entered_mass"] = mass,
+                    ["entered_mass_unit"] = inputMassUnit,
+                    ["mass"] = massKilograms,
+                    ["mass_unit"] = StabilityUnits.KilogramUnit
                 });
             }
 
             return new JObject
             {
                 ["success"] = true,
-                ["assigned"] = assigned
+                ["assigned"] = assigned,
+                ["input_mass_unit"] = inputMassUnit,
+                ["stored_mass_unit"] = StabilityUnits.KilogramUnit
             };
         }
         catch (Exception ex)

@@ -6,4 +6,4 @@ Please visit Github for complete information:
 
 [Github](https://github.com/johanesmikhael/rhinomcp-mod)
 
-Version 0.3.0-beta.1 adds experimental whole-assembly stability evaluation. It treats the connectivity graph as one welded rigid body; graph edges are not yet simulated as physical joints.
+Version 0.3.0-beta.1 adds experimental whole-assembly stability evaluation. It treats the connectivity graph as one welded rigid body; graph edges are not yet simulated as physical joints. Rhino-facing lengths stay in document units while the solver normalizes geometry and mass internally to meters and kilograms with SI gravity.

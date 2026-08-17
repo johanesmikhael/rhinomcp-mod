@@ -25,7 +25,9 @@ namespace RhinoMCPModPlugin.Commands
 
             if (result["success"]?.Value<bool>() == true)
             {
-                RhinoApp.WriteLine($"AssignMass completed successfully. Assigned {result["assigned"]?.Count()} objects.");
+                RhinoApp.WriteLine(
+                    $"AssignMass completed successfully. Assigned {result["assigned"]?.Count()} objects " +
+                    $"using {result["input_mass_unit"]}; stored internally as kg.");
             }
             else
             {

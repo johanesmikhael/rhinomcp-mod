@@ -39,22 +39,12 @@ public partial class RhinoMCPModFunctions
             if (doc == null)
                 throw new InvalidOperationException("No active Rhino document.");
 
+            var unitContext = StabilityUnits.Create(doc.ModelUnitSystem);
             var assigned = new JArray();
             var skippedLayers = new JArray();
             var skippedObjects = new JArray();
-            var usesFeetDensity = doc.ModelUnitSystem == UnitSystem.Feet;
-            var densityVolumeUnit = usesFeetDensity ? UnitSystem.Feet : UnitSystem.Meters;
-            var densityUnit = usesFeetDensity ? "lb/ft³" : "kg/m³";
-            var massUnit = usesFeetDensity ? "lb" : "kg";
-            var volumeUnit = usesFeetDensity ? "ft³" : "m³";
-            var linearScaleToDensityUnit = RhinoMath.UnitScale(
-                doc.ModelUnitSystem,
-                densityVolumeUnit);
-            if (!double.IsFinite(linearScaleToDensityUnit) || linearScaleToDensityUnit <= 0.0)
-                throw new InvalidOperationException(
-                    $"Cannot convert model unit '{doc.ModelUnitSystem}' to {densityVolumeUnit}.");
-
-            var volumeScaleToDensityUnit = Math.Pow(linearScaleToDensityUnit, 3.0);
+            var unitWarnings = new JArray();
+            var volumeScaleToCubicMeters = Math.Pow(unitContext.LengthToMeters, 3.0);
 
             foreach (var layer in doc.Layers)
             {
@@ -71,6 +61,26 @@ public partial class RhinoMCPModFunctions
                         ["layer_id"] = layer.Id.ToString(),
                         ["layer_name"] = layer.FullPath,
                         ["reason"] = "Layer has no valid positive density."
+                    });
+                    continue;
+                }
+
+                var densityUnit = layer.GetUserString(LayerDensityUnitKey);
+                if (string.IsNullOrWhiteSpace(densityUnit))
+                {
+                    densityUnit = StabilityUnits.InferLegacyDensityUnit(doc.ModelUnitSystem);
+                    unitWarnings.Add(
+                        $"Layer '{layer.FullPath}' has untagged legacy density; interpreted as {densityUnit}. Reassign density to store unit metadata.");
+                }
+
+                if (!StabilityUnits.TryDensityToKilogramsPerCubicMeter(
+                        density, densityUnit, out var densityKilogramsPerCubicMeter))
+                {
+                    skippedLayers.Add(new JObject
+                    {
+                        ["layer_id"] = layer.Id.ToString(),
+                        ["layer_name"] = layer.FullPath,
+                        ["reason"] = $"Layer has unsupported density unit '{densityUnit}'."
                     });
                     continue;
                 }
@@ -93,9 +103,13 @@ public partial class RhinoMCPModFunctions
                         continue;
                     }
 
-                    var volumeInDensityUnit = volume * volumeScaleToDensityUnit;
-                    var mass = density * volumeInDensityUnit;
-                    var payload = new JObject { ["mass"] = mass };
+                    var volumeCubicMeters = volume * volumeScaleToCubicMeters;
+                    var massKilograms = densityKilogramsPerCubicMeter * volumeCubicMeters;
+                    var payload = new JObject
+                    {
+                        ["mass"] = massKilograms,
+                        ["mass_unit"] = StabilityUnits.KilogramUnit
+                    };
                     rhinoObject.Attributes.SetUserString(
                         StabilityKey,
                         payload.ToString(Formatting.None));
@@ -116,12 +130,12 @@ public partial class RhinoMCPModFunctions
                         ["guid"] = rhinoObject.Id.ToString(),
                         ["layer_name"] = layer.FullPath,
                         ["density"] = density,
-                        ["volume_model_units_cubed"] = volume,
-                        ["volume_in_density_unit"] = volumeInDensityUnit,
-                        ["volume_unit"] = volumeUnit,
                         ["density_unit"] = densityUnit,
-                        ["mass"] = mass,
-                        ["mass_unit"] = massUnit
+                        ["density_kg_m3"] = densityKilogramsPerCubicMeter,
+                        ["volume_model_units_cubed"] = volume,
+                        ["volume_m3"] = volumeCubicMeters,
+                        ["mass"] = massKilograms,
+                        ["mass_unit"] = StabilityUnits.KilogramUnit
                     });
                 }
             }
@@ -133,12 +147,12 @@ public partial class RhinoMCPModFunctions
                 ["assigned"] = assigned,
                 ["skipped_layers"] = skippedLayers,
                 ["skipped_objects"] = skippedObjects,
+                ["unit_warnings"] = unitWarnings,
                 ["model_unit_system"] = doc.ModelUnitSystem.ToString(),
-                ["density_unit"] = densityUnit,
-                ["volume_unit"] = volumeUnit,
-                ["mass_unit"] = massUnit,
-                ["linear_scale_to_density_unit"] = linearScaleToDensityUnit,
-                ["volume_scale_to_density_unit"] = volumeScaleToDensityUnit
+                ["document_length_to_meters"] = unitContext.LengthToMeters,
+                ["volume_unit"] = "m³",
+                ["mass_unit"] = StabilityUnits.KilogramUnit,
+                ["volume_scale_to_m3"] = volumeScaleToCubicMeters
             };
         }
         catch (Exception ex)
