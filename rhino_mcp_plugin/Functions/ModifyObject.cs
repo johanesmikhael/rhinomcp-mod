@@ -18,6 +18,7 @@ public partial class RhinoMCPModFunctions
         BoundingBox bbox = geometry.GetBoundingBox(true);
         Point3d center = bbox.Center;
         var poseBefore = GetOrBootstrapPose(obj);
+        var poseModeBefore = GetStoredPoseMode(obj);
         var xform = Transform.Identity;
         var changedFields = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var explicitUpdated = new JObject();
@@ -129,9 +130,7 @@ public partial class RhinoMCPModFunctions
         var updatedObject = getObjectByIdOrName(new JObject { ["id"] = obj.Id.ToString() });
         if (geometryModified)
         {
-            var poseAfter = ApplyTransformToPose(poseBefore, xform, center);
-            WriteStoredPose(updatedObject, poseAfter);
-            RefreshStoredObbFromObject(updatedObject);
+            UpdateStoredPoseAfterGeometryTransform(updatedObject, poseBefore, poseModeBefore, xform, center);
         }
         else
         {

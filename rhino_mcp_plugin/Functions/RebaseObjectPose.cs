@@ -34,7 +34,12 @@ public partial class RhinoMCPModFunctions
             )
             : BuildPoseByClosestAxisSwap(currentPose, anchor, null, null);
         bool hadCachedObb = TryReadStoredObb(obj, out _);
-        WriteStoredPose(obj, rebasedPose, invalidateObbCache: false);
+        WriteStoredPose(
+            obj,
+            rebasedPose,
+            invalidateObbCache: false,
+            mode: StoredPoseMode.Explicit
+        );
 
         var updatedObject = getObjectByIdOrName(new JObject { ["id"] = obj.Id.ToString() });
         if (!hadCachedObb)

@@ -170,6 +170,116 @@ public static partial class Serializer
         return plane;
     }
 
+    private static void CanonicalizeVectorDirection(ref Vector3d vector)
+    {
+        double ax = Math.Abs(vector.X);
+        double ay = Math.Abs(vector.Y);
+        double az = Math.Abs(vector.Z);
+
+        double dominant = vector.X;
+        if (ay > ax && ay >= az)
+        {
+            dominant = vector.Y;
+        }
+        else if (az > ax && az > ay)
+        {
+            dominant = vector.Z;
+        }
+
+        if (dominant < 0.0)
+        {
+            vector = -vector;
+        }
+    }
+
+    private static Plane CanonicalizeGeometryPlane(Plane plane)
+    {
+        if (!plane.IsValid)
+        {
+            return plane;
+        }
+
+        Vector3d zAxis = plane.ZAxis;
+        if (!zAxis.Unitize())
+        {
+            return plane;
+        }
+        CanonicalizeVectorDirection(ref zAxis);
+
+        Vector3d xAxis = plane.XAxis - (Vector3d.Multiply(plane.XAxis, zAxis) * zAxis);
+        if (!xAxis.Unitize())
+        {
+            return plane;
+        }
+        CanonicalizeVectorDirection(ref xAxis);
+
+        Vector3d yAxis = Vector3d.CrossProduct(zAxis, xAxis);
+        if (!yAxis.Unitize())
+        {
+            return plane;
+        }
+
+        return new Plane(plane.Origin, xAxis, yAxis);
+    }
+
+    private static bool TryAlignBrepPlaneToGeometry(Brep brep, Plane referencePlane, out Plane alignedPlane)
+    {
+        alignedPlane = referencePlane;
+        if (brep == null || !referencePlane.IsValid)
+        {
+            return false;
+        }
+
+        // A planar face fixes the OBB normal, but Rhino's TryGetPlane returns the
+        // underlying surface's UV axes. Those axes may be arbitrarily rotated with
+        // respect to the trimmed face boundary. Project the full Brep into that
+        // plane and derive the in-plane axes from its minimum-area rectangle.
+        var projected = new List<Point2d>();
+
+        foreach (BrepVertex vertex in brep.Vertices)
+        {
+            Point3d point = vertex.Location;
+            if (point.IsValid && referencePlane.ClosestParameter(point, out double u, out double v))
+            {
+                projected.Add(new Point2d(u, v));
+            }
+        }
+
+        // Vertices are sufficient for polygonal walls. Edge samples also capture
+        // extrema on curved trims, preventing a chord-only rectangle for curved Breps.
+        foreach (BrepEdge edge in brep.Edges)
+        {
+            foreach (Point3d point in SampleCurvePoints(edge, 24))
+            {
+                if (point.IsValid && referencePlane.ClosestParameter(point, out double u, out double v))
+                {
+                    projected.Add(new Point2d(u, v));
+                }
+            }
+        }
+
+        if (!TryComputeMinimumAreaRectangleFrame(
+                projected,
+                out Vector2d xAxis2d,
+                out Vector2d yAxis2d,
+                out Point2d center2d))
+        {
+            return false;
+        }
+
+        Vector3d xAxis = (referencePlane.XAxis * xAxis2d.X) + (referencePlane.YAxis * xAxis2d.Y);
+        Vector3d yAxis = (referencePlane.XAxis * yAxis2d.X) + (referencePlane.YAxis * yAxis2d.Y);
+        Point3d origin = referencePlane.PointAt(center2d.X, center2d.Y, 0.0);
+        Plane candidate = new Plane(origin, xAxis, yAxis);
+        if (!candidate.IsValid)
+        {
+            return false;
+        }
+
+        alignedPlane = CanonicalizeGeometryPlane(candidate);
+        return alignedPlane.IsValid;
+    }
+
     private static Plane BuildBrepWorkingPlane(Brep brep)
     {
         if (brep == null)
@@ -218,6 +328,11 @@ public static partial class Serializer
             }
         }
 
+        if (workingPlane.IsValid && TryAlignBrepPlaneToGeometry(brep, workingPlane, out Plane alignedPlane))
+        {
+            workingPlane = alignedPlane;
+        }
+
         BoundingBox bbox0 = brep.GetBoundingBox(workingPlane);
         if (bbox0.IsValid)
         {
@@ -226,7 +341,7 @@ public static partial class Serializer
             workingPlane.Origin = centerWorld;
         }
 
-        workingPlane = StabilizePlane(workingPlane);
+        workingPlane = CanonicalizeGeometryPlane(workingPlane);
         return workingPlane;
     }
 
@@ -265,7 +380,7 @@ public static partial class Serializer
         Vector2d xAxis2d;
         Vector2d yAxis2d;
         Point2d center2d;
-        if (!TryComputeWorldUpFootprintFrame(points2d, out xAxis2d, out yAxis2d, out center2d))
+        if (!TryComputeMinimumAreaRectangleFrame(points2d, out xAxis2d, out yAxis2d, out center2d))
         {
             plane = Plane.WorldXY;
             plane.Origin = bbox.Center;
@@ -285,7 +400,7 @@ public static partial class Serializer
         return true;
     }
 
-    private static bool TryComputeWorldUpFootprintFrame(
+    private static bool TryComputeMinimumAreaRectangleFrame(
         List<Point2d> points,
         out Vector2d xAxis,
         out Vector2d yAxis,
@@ -369,18 +484,25 @@ public static partial class Serializer
             double area = width * height;
             double angle = Math.Abs(Math.Atan2(ux.Y, ux.X));
 
+            double areaTolerance = found
+                ? Math.Max(eps, Math.Max(Math.Abs(area), Math.Abs(bestArea)) * 1e-10)
+                : eps;
+            double widthTolerance = found
+                ? Math.Max(eps, Math.Max(Math.Abs(width), Math.Abs(bestWidth)) * 1e-10)
+                : eps;
+
             bool better = false;
-            if (!found || area < bestArea - eps)
+            if (!found || area < bestArea - areaTolerance)
             {
                 better = true;
             }
-            else if (Math.Abs(area - bestArea) <= eps)
+            else if (Math.Abs(area - bestArea) <= areaTolerance)
             {
-                if (width > bestWidth + eps)
+                if (width > bestWidth + widthTolerance)
                 {
                     better = true;
                 }
-                else if (Math.Abs(width - bestWidth) <= eps && angle < bestAngle - eps)
+                else if (Math.Abs(width - bestWidth) <= widthTolerance && angle < bestAngle - eps)
                 {
                     better = true;
                 }

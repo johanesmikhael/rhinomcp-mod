@@ -10,6 +10,7 @@ namespace RhinoMCPModPlugin.Commands
     public class MCPClearCacheCommand : Command
     {
         private const string PoseStorageKey = "rhinomcp.pose.v1";
+        private const string PoseModeStorageKey = "rhinomcp.pose.mode.v1";
         private const string ObbStorageKey = "rhinomcp.obb.v1";
 
         public MCPClearCacheCommand()
@@ -76,13 +77,15 @@ namespace RhinoMCPModPlugin.Commands
 
                 inspected++;
                 bool hadPose = !string.IsNullOrWhiteSpace(obj.Attributes.GetUserString(PoseStorageKey));
+                bool hadPoseMode = !string.IsNullOrWhiteSpace(obj.Attributes.GetUserString(PoseModeStorageKey));
                 bool hadObb = !string.IsNullOrWhiteSpace(obj.Attributes.GetUserString(ObbStorageKey));
-                if (!hadPose && !hadObb)
+                if (!hadPose && !hadPoseMode && !hadObb)
                 {
                     continue;
                 }
 
                 obj.Attributes.DeleteUserString(PoseStorageKey);
+                obj.Attributes.DeleteUserString(PoseModeStorageKey);
                 obj.Attributes.DeleteUserString(ObbStorageKey);
                 if (obj.CommitChanges())
                 {

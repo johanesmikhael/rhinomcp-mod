@@ -134,13 +134,24 @@ namespace RhinoMCPModPlugin.Functions
         {
             var doc = RhinoDoc.ActiveDoc;
             if (doc == null) return new JObject { ["error"] = "No active document" };
+            var activeViewportId = doc.Views.ActiveView?.ActiveViewport?.Id ?? Guid.Empty;
             var viewports = new JArray();
             foreach (var view in doc.Views)
             {
                 var vp = view.ActiveViewport;
-                viewports.Add(new JObject { ["id"] = vp.Id.ToString(), ["name"] = vp.Name,
+                viewports.Add(new JObject
+                {
+                    ["id"] = vp.Id.ToString(),
+                    ["name"] = vp.Name,
+                    ["active"] = vp.Id == activeViewportId,
+                    ["projection"] = GetProjectionName(vp),
+                    ["lensMm"] = vp.IsPerspectiveProjection
+                        ? JToken.FromObject(Math.Round(vp.Camera35mmLensLength, 6))
+                        : JValue.CreateNull(),
+                    ["displayMode"] = vp.DisplayMode?.EnglishName ?? "(unknown)",
                     ["cameraLocation"] = $"{vp.CameraLocation.X:F2},{vp.CameraLocation.Y:F2},{vp.CameraLocation.Z:F2}",
-                    ["cameraTarget"] = $"{vp.CameraTarget.X:F2},{vp.CameraTarget.Y:F2},{vp.CameraTarget.Z:F2}" });
+                    ["cameraTarget"] = $"{vp.CameraTarget.X:F2},{vp.CameraTarget.Y:F2},{vp.CameraTarget.Z:F2}"
+                });
             }
             return new JObject { ["viewports"] = viewports, ["count"] = viewports.Count };
         }

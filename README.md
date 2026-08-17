@@ -74,6 +74,12 @@ For detailed geometry, first identify target ids/names from `inventory` or `summ
 
 Use `max_geometry_points` with `detail="full"` only for legacy document payloads.
 
+Viewport captures preserve the active Rhino view by default. `capture_view(..., preserve_view=true)`
+temporarily applies the requested camera, projection, lens, fit, and display mode, captures the
+bitmap, then restores the original viewport state. Set `preserve_view=false` only when the capture
+is intentionally meant to become the new active view. Perspective/isometric presets use 50 mm
+unless `lens_mm` is supplied explicitly; they never inherit a lens value from a parallel viewport.
+
 ### 3. Pose-Aware and Batch Transform Workflows
 
 This mod adds stronger pose operations for reliable editing pipelines:
@@ -82,6 +88,8 @@ This mod adds stronger pose operations for reliable editing pipelines:
 - Pose rebasing without moving geometry: `rebase_object_pose`, `rebase_objects_pose`
 - Pose reset controls: `reset_object_pose`, `reset_objects_pose`
 - Rotation helpers such as `invert_rotation_matrix`
+- Geometry-detected poses are recomputed after transforms so OBBs remain minimal; explicitly
+  rebased poses are tagged separately and remain attached to the object through later transforms.
 
 
 ## Basic Installation

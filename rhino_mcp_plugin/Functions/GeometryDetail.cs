@@ -147,6 +147,9 @@ public partial class RhinoMCPModFunctions
 
     private JObject BuildObbPoseObjectInfo(RhinoObject obj, bool includeWorld, int outlineMaxPoints)
     {
+        // Bootstrap/migrate before serialization so a legacy pose cannot override the
+        // geometry-derived working plane for the first detailed query after upgrade.
+        GetOrBootstrapPose(obj);
         var data = Serializer.RhinoObject(
             obj,
             includeGeometrySummary: true,

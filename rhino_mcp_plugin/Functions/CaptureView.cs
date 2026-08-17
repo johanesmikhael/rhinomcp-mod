@@ -14,7 +14,20 @@ namespace RhinoMCPModPlugin.Functions
 {
     public partial class RhinoMCPModFunctions
     {
+        private const double DefaultPerspectiveLensMm = 50.0;
+        private static readonly object CaptureViewSync = new object();
+
         public JObject CaptureView(JObject parameters)
+        {
+            // CaptureView temporarily operates on Rhino's active viewport. Serialize
+            // calls so concurrent MCP requests cannot interleave projection changes.
+            lock (CaptureViewSync)
+            {
+                return CaptureViewCore(parameters);
+            }
+        }
+
+        private JObject CaptureViewCore(JObject parameters)
         {
             var doc = RhinoDoc.ActiveDoc;
             if (doc == null) return new JObject { ["error"] = "No active document" };
@@ -48,97 +61,130 @@ namespace RhinoMCPModPlugin.Functions
             bool hasCameraLocation = TryReadPoint3d(parameters["camera_location"], out Point3d cameraLocation, out string cameraLocationError);
             bool hasCameraTarget = TryReadPoint3d(parameters["camera_target"], out Point3d cameraTarget, out string cameraTargetError);
             bool hasExplicitCamera = hasCameraLocation && hasCameraTarget;
+            bool preserveView = parameters["preserve_view"]?.ToObject<bool>() ?? true;
 
             if (cameraLocationError != null) return new JObject { ["error"] = $"camera_location {cameraLocationError}" };
             if (cameraTargetError != null) return new JObject { ["error"] = $"camera_target {cameraTargetError}" };
             if (hasCameraLocation != hasCameraTarget) return new JObject { ["error"] = "camera_location and camera_target must be provided together" };
-
-            if (hasExplicitCamera)
-            {
-                viewport.ChangeToPerspectiveProjection(true, parameters["lens_mm"]?.ToObject<double>() ?? viewport.Camera35mmLensLength);
-                viewport.SetCameraLocations(cameraTarget, cameraLocation);
-            }
-            else if (bbox.IsValid)
-            {
-                if (!ApplyPresetView(viewport, requestedView, bbox, parameters["lens_mm"]?.ToObject<double>()))
-                {
-                    return new JObject { ["error"] = $"Unsupported view '{requestedView}'" };
-                }
-            }
-            else if (!IsSupportedViewName(requestedView))
+            if (!hasExplicitCamera && !IsSupportedViewName(requestedView))
             {
                 return new JObject { ["error"] = $"Unsupported view '{requestedView}'" };
             }
+            if (!TryReadLensMm(parameters["lens_mm"], out double? requestedLensMm, out string lensError))
+            {
+                return new JObject { ["error"] = lensError };
+            }
 
+            Vector3d? requestedCameraUp = null;
             if (parameters.TryGetValue("camera_up", out JToken upToken) && upToken != null)
             {
                 if (!TryReadVector3d(upToken, out Vector3d cameraUp, out string upError))
                 {
                     return new JObject { ["error"] = $"camera_up {upError}" };
                 }
-                viewport.CameraUp = cameraUp;
+                requestedCameraUp = cameraUp;
             }
 
-            if (parameters["lens_mm"] != null && viewport.IsPerspectiveProjection)
+            DisplayModeDescription originalDisplayMode = viewport.DisplayMode;
+            bool pushedProjection = false;
+            if (preserveView)
             {
-                viewport.Camera35mmLensLength = parameters["lens_mm"].ToObject<double>();
+                viewport.PushViewProjection();
+                pushedProjection = true;
             }
 
-            if (bbox.IsValid && (parameters["fit"]?.ToObject<bool>() ?? true))
+            try
             {
-                double padding = Math.Max(parameters["padding"]?.ToObject<double>() ?? 1.15, 1.0);
-                var fitBox = bbox;
-                double inflate = Math.Max(fitBox.Diagonal.Length * (padding - 1.0) * 0.5, doc.ModelAbsoluteTolerance * 10.0);
-                fitBox.Inflate(inflate);
-                viewport.ZoomBoundingBox(fitBox);
-            }
-
-            viewport.DisplayMode = displayMode;
-            doc.Views.Redraw();
-
-            var size = new Size(width, height);
-            bool drawGrid = parameters["draw_grid"]?.ToObject<bool>() ?? false;
-            bool drawAxes = parameters["draw_axes"]?.ToObject<bool>() ?? false;
-            using var bitmap = view.CaptureToBitmap(size, drawGrid, drawAxes, drawAxes);
-            if (bitmap == null) return new JObject { ["error"] = "View capture failed" };
-
-            string pngBase64;
-            using (var stream = new MemoryStream())
-            {
-#pragma warning disable CA1416
-                bitmap.Save(stream, ImageFormat.Png);
-#pragma warning restore CA1416
-                pngBase64 = Convert.ToBase64String(stream.ToArray());
-            }
-
-            var metadata = new JObject
-            {
-                ["view"] = requestedView,
-                ["target_mode"] = targetMode,
-                ["display_mode"] = displayMode.EnglishName ?? displayModeName,
-                ["width"] = width,
-                ["height"] = height,
-                ["camera_location"] = SerializePoint(viewport.CameraLocation),
-                ["camera_target"] = SerializePoint(viewport.CameraTarget),
-                ["camera_up"] = SerializeVector(viewport.CameraUp),
-                ["lens_mm"] = viewport.Camera35mmLensLength,
-                ["projection"] = viewport.IsPerspectiveProjection ? "perspective" : "parallel",
-                ["object_count"] = targets.Count,
-                ["objects"] = new JArray(targets.Select(o => new JObject
+                if (hasExplicitCamera)
                 {
-                    ["id"] = o.Id.ToString(),
-                    ["name"] = o.Name ?? "",
-                    ["type"] = o.ObjectType.ToString()
-                }))
-            };
+                    double lens = ResolvePerspectiveLens(viewport, requestedLensMm, preserveCurrentPerspective: true);
+                    viewport.ChangeToPerspectiveProjection(true, lens);
+                    viewport.Camera35mmLensLength = lens;
+                    viewport.SetCameraLocations(cameraTarget, cameraLocation);
+                }
+                else if (bbox.IsValid)
+                {
+                    if (!ApplyPresetView(viewport, requestedView, bbox, requestedLensMm))
+                    {
+                        return new JObject { ["error"] = $"Unsupported view '{requestedView}'" };
+                    }
+                }
+                else if (requestedLensMm.HasValue && viewport.IsPerspectiveProjection)
+                {
+                    viewport.Camera35mmLensLength = requestedLensMm.Value;
+                }
 
-            if (bbox.IsValid) metadata["bbox"] = SerializeBoundingBox(bbox);
+                if (requestedCameraUp.HasValue)
+                {
+                    viewport.CameraUp = requestedCameraUp.Value;
+                }
 
-            return new JObject
+                if (bbox.IsValid && (parameters["fit"]?.ToObject<bool>() ?? true))
+                {
+                    double padding = Math.Max(parameters["padding"]?.ToObject<double>() ?? 1.15, 1.0);
+                    var fitBox = bbox;
+                    double inflate = Math.Max(fitBox.Diagonal.Length * (padding - 1.0) * 0.5, doc.ModelAbsoluteTolerance * 10.0);
+                    fitBox.Inflate(inflate);
+                    viewport.ZoomBoundingBox(fitBox);
+                }
+
+                viewport.DisplayMode = displayMode;
+                doc.Views.Redraw();
+
+                var size = new Size(width, height);
+                bool drawGrid = parameters["draw_grid"]?.ToObject<bool>() ?? false;
+                bool drawAxes = parameters["draw_axes"]?.ToObject<bool>() ?? false;
+                using var bitmap = view.CaptureToBitmap(size, drawGrid, drawAxes, drawAxes);
+                if (bitmap == null) return new JObject { ["error"] = "View capture failed" };
+
+                string pngBase64;
+                using (var stream = new MemoryStream())
+                {
+#pragma warning disable CA1416
+                    bitmap.Save(stream, ImageFormat.Png);
+#pragma warning restore CA1416
+                    pngBase64 = Convert.ToBase64String(stream.ToArray());
+                }
+
+                var metadata = new JObject
+                {
+                    ["view"] = requestedView,
+                    ["target_mode"] = targetMode,
+                    ["display_mode"] = displayMode.EnglishName ?? displayModeName,
+                    ["width"] = width,
+                    ["height"] = height,
+                    ["camera_location"] = SerializePoint(viewport.CameraLocation),
+                    ["camera_target"] = SerializePoint(viewport.CameraTarget),
+                    ["camera_up"] = SerializeVector(viewport.CameraUp),
+                    ["lens_mm"] = viewport.IsPerspectiveProjection ? viewport.Camera35mmLensLength : null,
+                    ["projection"] = GetProjectionName(viewport),
+                    ["preserve_view"] = preserveView,
+                    ["object_count"] = targets.Count,
+                    ["objects"] = new JArray(targets.Select(o => new JObject
+                    {
+                        ["id"] = o.Id.ToString(),
+                        ["name"] = o.Name ?? "",
+                        ["type"] = o.ObjectType.ToString()
+                    }))
+                };
+
+                if (bbox.IsValid) metadata["bbox"] = SerializeBoundingBox(bbox);
+
+                return new JObject
+                {
+                    ["png_base64"] = pngBase64,
+                    ["metadata"] = metadata
+                };
+            }
+            finally
             {
-                ["png_base64"] = pngBase64,
-                ["metadata"] = metadata
-            };
+                if (pushedProjection)
+                {
+                    viewport.PopViewProjection();
+                    viewport.DisplayMode = originalDisplayMode;
+                    doc.Views.Redraw();
+                }
+            }
         }
 
         private static bool TryResolveCaptureSize(JObject parameters, out int width, out int height, out string error)
@@ -239,6 +285,74 @@ namespace RhinoMCPModPlugin.Functions
             return bbox;
         }
 
+        private static bool TryReadLensMm(JToken token, out double? lensMm, out string error)
+        {
+            lensMm = null;
+            error = null;
+            if (token == null)
+            {
+                return true;
+            }
+
+            double value;
+            try
+            {
+                value = token.ToObject<double>();
+            }
+            catch
+            {
+                error = "lens_mm must be a positive finite number";
+                return false;
+            }
+
+            if (double.IsNaN(value) || double.IsInfinity(value) || value <= 0.0)
+            {
+                error = "lens_mm must be a positive finite number";
+                return false;
+            }
+
+            lensMm = value;
+            return true;
+        }
+
+        private static double ResolvePerspectiveLens(
+            RhinoViewport viewport,
+            double? requestedLensMm,
+            bool preserveCurrentPerspective)
+        {
+            if (requestedLensMm.HasValue)
+            {
+                return requestedLensMm.Value;
+            }
+
+            if (preserveCurrentPerspective && viewport.IsPerspectiveProjection)
+            {
+                double current = viewport.Camera35mmLensLength;
+                if (!double.IsNaN(current) && !double.IsInfinity(current) && current > 0.0)
+                {
+                    return current;
+                }
+            }
+
+            // RhinoCommon explicitly recommends 50 mm when converting a parallel
+            // projection to perspective. A parallel viewport's lens property is not
+            // a safe perspective value and can be sub-millimetre.
+            return DefaultPerspectiveLensMm;
+        }
+
+        private static string GetProjectionName(RhinoViewport viewport)
+        {
+            if (viewport.IsTwoPointPerspectiveProjection)
+            {
+                return "two_point_perspective";
+            }
+            if (viewport.IsPerspectiveProjection)
+            {
+                return "perspective";
+            }
+            return "parallel";
+        }
+
         private static bool ApplyPresetView(RhinoViewport viewport, string viewName, BoundingBox bbox, double? lensMm)
         {
             var center = bbox.Center;
@@ -279,7 +393,12 @@ namespace RhinoMCPModPlugin.Functions
             direction.Unitize();
             if (perspective)
             {
-                viewport.ChangeToPerspectiveProjection(true, lensMm ?? viewport.Camera35mmLensLength);
+                double resolvedLens = ResolvePerspectiveLens(
+                    viewport,
+                    lensMm,
+                    preserveCurrentPerspective: false);
+                viewport.ChangeToPerspectiveProjection(true, resolvedLens);
+                viewport.Camera35mmLensLength = resolvedLens;
             }
             else
             {

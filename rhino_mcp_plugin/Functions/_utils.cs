@@ -12,7 +12,14 @@ namespace RhinoMCPModPlugin.Functions;
 public partial class RhinoMCPModFunctions
 {
     private const string PoseStorageKey = "rhinomcp.pose.v1";
+    private const string PoseModeStorageKey = "rhinomcp.pose.mode.v1";
     private const string ObbStorageKey = "rhinomcp.obb.v1";
+
+    private enum StoredPoseMode
+    {
+        Detected,
+        Explicit
+    }
 
     private static JArray BuildIdentityRotation()
     {
@@ -354,7 +361,39 @@ public partial class RhinoMCPModFunctions
         }
     }
 
-    private void WriteStoredPose(RhinoObject obj, JObject pose, bool invalidateObbCache = true)
+    private StoredPoseMode GetStoredPoseMode(RhinoObject obj)
+    {
+        string raw = obj?.Attributes?.GetUserString(PoseModeStorageKey);
+        return string.Equals(raw, "explicit", StringComparison.OrdinalIgnoreCase)
+            ? StoredPoseMode.Explicit
+            : StoredPoseMode.Detected;
+    }
+
+    private bool HasStoredPoseMode(RhinoObject obj)
+    {
+        return !string.IsNullOrWhiteSpace(
+            obj?.Attributes?.GetUserString(PoseModeStorageKey)
+        );
+    }
+
+    private void ClearStoredPoseAndObb(RhinoObject obj)
+    {
+        if (obj == null)
+        {
+            return;
+        }
+
+        obj.Attributes.DeleteUserString(PoseStorageKey);
+        obj.Attributes.DeleteUserString(PoseModeStorageKey);
+        obj.Attributes.DeleteUserString(ObbStorageKey);
+        obj.CommitChanges();
+    }
+
+    private void WriteStoredPose(
+        RhinoObject obj,
+        JObject pose,
+        bool invalidateObbCache = true,
+        StoredPoseMode mode = StoredPoseMode.Detected)
     {
         if (obj == null || pose == null)
         {
@@ -364,6 +403,10 @@ public partial class RhinoMCPModFunctions
         BoundingBox bbox = obj.Geometry.GetBoundingBox(true);
         JObject canonical = CanonicalizePose((JObject)pose.DeepClone(), bbox.Center);
         obj.Attributes.SetUserString(PoseStorageKey, canonical.ToString(Newtonsoft.Json.Formatting.None));
+        obj.Attributes.SetUserString(
+            PoseModeStorageKey,
+            mode == StoredPoseMode.Explicit ? "explicit" : "detected"
+        );
         if (invalidateObbCache)
         {
             // Pose changes invalidate pose-dependent OBB/projection cache.
@@ -376,12 +419,44 @@ public partial class RhinoMCPModFunctions
     {
         if (TryReadStoredPose(obj, out JObject stored))
         {
-            return stored;
+            if (HasStoredPoseMode(obj))
+            {
+                return stored;
+            }
+
+            // v1 poses written before provenance existed are automatic in nearly all
+            // documents and may already be stale. Migrate them by detecting once more.
+            ClearStoredPoseAndObb(obj);
         }
 
         JObject canonical = BuildCanonicalPoseFromObject(obj);
-        WriteStoredPose(obj, canonical);
+        WriteStoredPose(obj, canonical, mode: StoredPoseMode.Detected);
         return canonical;
+    }
+
+    private void UpdateStoredPoseAfterGeometryTransform(
+        RhinoObject updatedObject,
+        JObject poseBefore,
+        StoredPoseMode poseModeBefore,
+        Transform xform,
+        Point3d fallbackOrigin)
+    {
+        if (poseModeBefore == StoredPoseMode.Explicit)
+        {
+            // A rebase is an intentional local frame, so rigidly carry it with the object.
+            var poseAfter = ApplyTransformToPose(poseBefore, xform, fallbackOrigin);
+            WriteStoredPose(updatedObject, poseAfter, mode: StoredPoseMode.Explicit);
+        }
+        else
+        {
+            // A detected pose is only a geometry-derived cache. Carrying it through a
+            // transform can freeze a non-minimal OBB frame (notably for asymmetric trusses).
+            // Remove both caches so the serializer derives a fresh minimum-area frame.
+            ClearStoredPoseAndObb(updatedObject);
+            GetOrBootstrapPose(updatedObject);
+        }
+
+        RefreshStoredObbFromObject(updatedObject);
     }
 
     private JObject ApplyTransformToPose(JObject pose, Transform xform, Point3d fallbackOrigin)
@@ -838,6 +913,7 @@ public partial class RhinoMCPModFunctions
     {
         var attributes = Serializer.RhinoObjectAttributes(obj);
         attributes.Remove(PoseStorageKey);
+        attributes.Remove(PoseModeStorageKey);
         attributes.Remove(ObbStorageKey);
         return attributes;
     }

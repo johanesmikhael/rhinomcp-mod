@@ -73,8 +73,9 @@ async def capture_view(
     lens_mm: float | None = None,
     draw_grid: bool = False,
     draw_axes: bool = False,
+    preserve_view: bool = True,
 ) -> list:
-    """Set Rhino active viewport, frame targets, capture PNG, and return image plus compact metadata.
+    """Temporarily frame targets in Rhino, capture PNG, and return image plus compact metadata.
 
     Args:
         view: perspective, isometric, top, front, or right.
@@ -93,6 +94,7 @@ async def capture_view(
         lens_mm: Optional perspective lens length.
         draw_grid: Include grid in capture.
         draw_axes: Include axes in capture.
+        preserve_view: Restore the active camera, projection, lens, frustum, and display mode after capture. Defaults True.
     """
     from rhinomcp.server import get_rhino_connection
 
@@ -107,6 +109,7 @@ async def capture_view(
         "resolution": resolution,
         "draw_grid": draw_grid,
         "draw_axes": draw_axes,
+        "preserve_view": preserve_view,
     }
     if ids: params["ids"] = ids
     if width is not None: params["width"] = width
@@ -130,13 +133,19 @@ async def capture_view(
 
 @mcp.tool()
 async def get_viewport_info() -> str:
-    """Get information about all viewports in the Rhino document."""
+    """Get camera, projection, lens, display mode, and active state for all Rhino viewports."""
     from rhinomcp.server import get_rhino_connection
     rhino = get_rhino_connection()
     result = rhino.send_command("get_viewport_info", {})
     vps = result.get("viewports", [])
     return f"Viewports ({result.get('count', 0)}):\n" + "\n".join(
-        f"  - {v['name']} at {v['cameraLocation']}" for v in vps
+        (
+            f"  - {'* ' if v.get('active') else ''}{v['name']} "
+            f"[{v.get('projection', 'unknown')}, "
+            f"lens={v.get('lensMm') if v.get('lensMm') is not None else 'n/a'} mm, "
+            f"mode={v.get('displayMode', 'unknown')}] at {v['cameraLocation']}"
+        )
+        for v in vps
     )
 
 @mcp.tool()

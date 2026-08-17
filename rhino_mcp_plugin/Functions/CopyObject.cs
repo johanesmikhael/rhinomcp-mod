@@ -14,6 +14,7 @@ public partial class RhinoMCPModFunctions
         var doc = RhinoDoc.ActiveDoc;
         var obj = getObjectByIdOrName(parameters);
         var sourcePose = GetOrBootstrapPose(obj);
+        var sourcePoseMode = GetStoredPoseMode(obj);
         BoundingBox sourceBbox = obj.Geometry.GetBoundingBox(true);
         Point3d sourceCenter = sourceBbox.Center;
         var geometry = obj.Geometry?.Duplicate();
@@ -37,9 +38,7 @@ public partial class RhinoMCPModFunctions
         }
 
         var copiedObject = getObjectByIdOrName(new JObject { ["id"] = newId.ToString() });
-        var copiedPose = ApplyTransformToPose(sourcePose, xform, sourceCenter);
-        WriteStoredPose(copiedObject, copiedPose);
-        RefreshStoredObbFromObject(copiedObject);
+        UpdateStoredPoseAfterGeometryTransform(copiedObject, sourcePose, sourcePoseMode, xform, sourceCenter);
 
         doc.Views.Redraw();
         var data = Serializer.RhinoObject(copiedObject, includeGeometrySummary: true, outlineMaxPoints: 32);
