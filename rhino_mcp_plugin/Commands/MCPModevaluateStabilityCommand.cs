@@ -18,7 +18,7 @@ namespace RhinoMCPModPlugin.Commands
 
         public static MCPModevaluateStabilityCommand Instance { get; private set; }
 
-        public override string EnglishName => "mcpmodevalutatestablity";
+        public override string EnglishName => "mcpmodevaluatestability";
 
         protected override Result RunCommand(RhinoDoc doc, RunMode mode)
         {
@@ -146,6 +146,7 @@ namespace RhinoMCPModPlugin.Commands
             else
             {
                 RhinoApp.WriteLine($"EvaluateStability failed: {result["message"]}");
+                return Result.Failure;
             }
 
             return Result.Success;

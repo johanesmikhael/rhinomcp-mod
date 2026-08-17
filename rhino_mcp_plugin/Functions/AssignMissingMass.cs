@@ -90,7 +90,7 @@ public partial class RhinoMCPModFunctions
                 var prompt = $"Assign missing mass for {rhinoObject.Name ?? guidString} (enter value or press Enter to skip)";
                 var getNumber = new GetNumber();
                 getNumber.SetCommandPrompt(prompt);
-                getNumber.SetDefaultNumber(0.0);
+                getNumber.SetLowerLimit(0.0, true);
                 getNumber.AcceptNothing(true);
 
                 var result = getNumber.Get();

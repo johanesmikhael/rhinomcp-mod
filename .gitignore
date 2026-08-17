@@ -9,8 +9,6 @@ node_modules/
 */agents_db
 */__pycache__
 
-# misc
-test*
 # .NET / Rhino build artifacts
 **/bin/
 **/obj/
@@ -25,7 +23,10 @@ test*
 .venv/
 venv/
 .idea/
+.vs/
 *.code-workspace
+*.3dmbak
+/release/
 
 
 tutorial/

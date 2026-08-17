@@ -30,6 +30,7 @@ namespace RhinoMCPModPlugin.Commands
             else
             {
                 RhinoApp.WriteLine($"AssignMass failed: {result["message"]}");
+                return Result.Failure;
             }
 
             return Result.Success;

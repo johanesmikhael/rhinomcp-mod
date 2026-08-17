@@ -24,6 +24,12 @@ namespace RhinoMCPModPlugin
 
         protected override Rhino.PlugIns.LoadReturnCode OnLoad(ref string errorMessage)
         {
+            KangarooRuntime.InstallResolver();
+            if (!KangarooRuntime.EnsureAvailable(out var kangarooError))
+            {
+                RhinoApp.WriteLine($"RhinoMCP stability unavailable: {kangarooError}");
+            }
+
             RhinoMCPModServerController.StartServer();
             return Rhino.PlugIns.LoadReturnCode.Success;
         }

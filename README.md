@@ -188,9 +188,11 @@ Keep only one server enabled at a time (`rhino` or `rhino-dev`) to avoid duplica
 7. Confirm Rhino tools appear in Claude (hammer/tools icon).
 
 
-## 20260815 Update
+## 0.3.0-beta.1: Experimental Assembly Stability
 
-This release introduces an initial assembly stability workflow. All objects represented by the connectivity graph are combined into a single rigid body and evaluated as one assembly. This provides a simple whole-assembly stability test; it does not yet simulate relative movement between individual parts.
+This prerelease introduces an initial assembly stability workflow. All valid objects represented by the connectivity graph are combined into a single rigid body and evaluated as one assembly. It answers whether the welded whole assembly settles, slides, or tips under gravity; graph edges are not simulated as joints, and individual parts cannot move relative to one another.
+
+Stability evaluation requires Rhino 8 with Grasshopper/Kangaroo installed. The plugin loads Rhino's installed `KangarooSolver.dll` at runtime. Developers can override its build/runtime location with `KangarooSolverPath` and `RHINOMCP_KANGAROO_PATH`, respectively; the Yak package does not ship a private Kangaroo copy.
 
 ### 1. Identify and Maintain the Connectivity Graph
 
@@ -251,10 +253,10 @@ Unit handling is important:
 Run:
 
 ```text
-mcpmodevalutatestablity
+mcpmodevaluatestability
 ```
 
-The command combines the graph assembly into one rigid body and runs the stability solver. Parameters such as rigid-body strength, floor strength, stability threshold, solver threshold, and solver iterations may need to be adjusted for each model.
+The command combines the graph assembly into one rigid body and runs the stability solver. Parameters such as rigid-body strength, floor strength, stability threshold, solver threshold, and solver iterations may need to be adjusted for each model. Invalid graph nodes, missing or non-positive mass, non-finite values, and invalid iteration counts fail explicitly rather than being classified as instability.
 
 Choose a stability threshold that is appropriate for the model's scale and units. The assembly is classified as stable when its maximum simulated displacement does not exceed this threshold.
 
@@ -265,7 +267,7 @@ The MCP `evaluate_stability` tool exposes the same solver parameters, allowing a
 Run the following command and choose `On` or `Off` to control the evaluated-geometry display:
 
 ```text
-mcpmodstablilitydisplay
+mcpmodstabilitydisplay
 ```
 
 The display visualizes the geometry cached from the latest stability evaluation. It does not modify the original Rhino objects.

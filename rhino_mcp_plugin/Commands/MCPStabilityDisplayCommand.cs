@@ -15,7 +15,7 @@ namespace RhinoMCPModPlugin.Commands
 
         public static MCPStabilityDisplayCommand Instance { get; private set; }
 
-        public override string EnglishName => "mcpmodstablilitydisplay";
+        public override string EnglishName => "mcpmodstabilitydisplay";
 
         protected override Result RunCommand(RhinoDoc doc, RunMode mode)
         {

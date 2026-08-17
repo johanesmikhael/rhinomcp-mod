@@ -35,7 +35,7 @@ namespace RhinoMCPModPlugin.Functions
                         "McNeel", "Rhinoceros", "8.0", "CommandHistory.txt"),
                 };
 
-                string? historyPath = null;
+                string historyPath = null;
                 foreach (var path in possiblePaths)
                 {
                     if (File.Exists(path))

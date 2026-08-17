@@ -4,7 +4,8 @@ import socket
 import json
 import asyncio
 import logging
-from dataclasses import dataclass
+import threading
+from dataclasses import dataclass, field
 from contextlib import asynccontextmanager
 from typing import AsyncIterator, Dict, Any, List
 
@@ -18,6 +19,7 @@ class RhinoConnection:
     host: str
     port: int
     sock: socket.socket | None = None  # Changed from 'socket' to 'sock' to avoid naming conflict
+    _command_lock: Any = field(default_factory=threading.Lock, init=False, repr=False)
     
     def connect(self) -> bool:
         """Connect to the Rhino addon socket server"""
@@ -36,13 +38,13 @@ class RhinoConnection:
     
     def disconnect(self):
         """Disconnect from the Rhino addon"""
-        if self.sock:
+        sock = self.sock
+        self.sock = None
+        if sock:
             try:
-                self.sock.close()
+                sock.close()
             except Exception as e:
                 logger.error(f"Error disconnecting from Rhino: {str(e)}")
-            finally:
-                self.sock = None
 
     def receive_full_response(self, sock, buffer_size=8192, timeout=15.0):
         """Receive the complete response, potentially in multiple chunks"""
@@ -100,8 +102,20 @@ class RhinoConnection:
         else:
             raise Exception("No data received")
 
-    def send_command(self, command_type: str, params: Dict[str, Any] = {}, retry: bool = True) -> Dict[str, Any]:
-        """Send a command to Rhino and return the response"""
+    def send_command(
+        self,
+        command_type: str,
+        params: Dict[str, Any] | None = None,
+    ) -> Dict[str, Any]:
+        """Send one command at a time; never replay a command after it was sent."""
+        with self._command_lock:
+            return self._send_command(command_type, params)
+
+    def _send_command(
+        self,
+        command_type: str,
+        params: Dict[str, Any] | None,
+    ) -> Dict[str, Any]:
         if not self.sock and not self.connect():
             raise ConnectionError("Not connected to Rhino")
         
@@ -138,13 +152,11 @@ class RhinoConnection:
             return response.get("result", {})
         except socket.timeout:
             logger.error("Socket timeout while waiting for response from Rhino")
-            # Don't try to reconnect here - let the get_rhino_connection handle reconnection
-            # Just invalidate the current socket so it will be recreated next time
-            self.sock = None
+            self.disconnect()
             raise Exception("Timeout waiting for Rhino response - try simplifying your request")
         except (ConnectionError, BrokenPipeError, ConnectionResetError) as e:
             logger.error(f"Socket connection error: {str(e)}")
-            self.sock = None
+            self.disconnect()
             raise Exception(f"Connection to Rhino lost: {str(e)}")
         except json.JSONDecodeError as e:
             logger.error(f"Invalid JSON response from Rhino: {str(e)}")
@@ -154,10 +166,7 @@ class RhinoConnection:
             raise Exception(f"Invalid response from Rhino: {str(e)}")
         except Exception as e:
             logger.error(f"Error communicating with Rhino: {str(e)}")
-            self.sock = None
-            if retry and str(e) in {"No data received", "Connection closed before receiving any data"}:
-                logger.info("Retrying Rhino command after empty response")
-                return self.send_command(command_type, params, retry=False)
+            self.disconnect()
             raise Exception(f"Communication error with Rhino: {str(e)}")
 
 @asynccontextmanager

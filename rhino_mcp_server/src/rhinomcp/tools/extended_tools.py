@@ -5,24 +5,28 @@ from typing import Any
 
 from mcp.server.fastmcp import Image
 from rhinomcp.server import mcp
+
+
 @mcp.tool()
 async def evaluate_stability(
     current_step: int = 50,
     stability_threshold: float = 10.0,
-    rigid_strength: float = 1000.0,
-    floor_strength: float = 100.0,
+    rigid_strength: float = 10000.0,
+    floor_strength: float = 1000.0,
     floor_z: float = 0.0,
     gravity: float = 9.81,
     assign_tol: float = 1e-6,
-    threshold: float = 0.05,
-    solver_substeps: int = 6,
+    threshold: float = 0.001,
+    solver_substeps: int = 1,
     display: bool = False,
     graph: str | dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Evaluate the active Rhino model's physical stability.
+    """Experimentally evaluate the active model as one welded rigid assembly.
 
     The model must have a connectivity graph and positive mass assigned to
-    every graph node. By default the graph is read from the active document.
+    every graph node. Graph edges are not physical joints in this mode: all
+    nodes receive one shared rigid transform. By default the graph is read
+    from the active document.
 
     Args:
         current_step: Number of solver steps to run.
@@ -57,6 +61,7 @@ async def evaluate_stability(
 
     rhino = get_rhino_connection()
     return rhino.send_command("evaluate_stability", params)
+
 
 @mcp.tool()
 async def get_selected_objects() -> str:

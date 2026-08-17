@@ -1,16 +1,20 @@
 [project]
 name = "rhinomcp-mod"
-version = "0.2.4"
+version = "0.3.0-beta.1"
 description = "Rhino integration through the Model Context Protocol"
 readme = "README.md"
 requires-python = ">=3.10"
 authors = [
+    {name = "Mikhael Johanes"},
     {name = "Jingcheng Chen", email = "mail@jchen.ch"}
 ]
-license = {text = "MIT"}
+maintainers = [
+    {name = "Mikhael Johanes"}
+]
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
 classifiers = [
     "Programming Language :: Python :: 3",
-    "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
 ]
 dependencies = [

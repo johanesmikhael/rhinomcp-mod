@@ -16,6 +16,7 @@ public partial class RhinoMCPModFunctions
     public const string EvaluationGraphKey = "rhinomcp-mod:connectivity-graph-eva";
     public const string StabilityKey = "rhinomcp.stability.v1";
     public const string AfterEvaluationKey = "rhinomcp.after_eva.v1";
+    public const string EvaluationMode = "single_rigid_assembly";
 
     public const int DefaultCurrentStep = 50;
     public const double DefaultStabilityThreshold = 10.0;
@@ -26,11 +27,19 @@ public partial class RhinoMCPModFunctions
     public const double DefaultAssignTol = 1e-6;
     public const double DefaultThreshold = 0.001;
     public const int DefaultSolverSubsteps = 1;
+    private const int MaxCurrentStep = 10000;
+    private const int MaxSolverSubsteps = 1000;
+    private const int MaxTotalSolverSteps = 100000;
 
     public JObject EvaluateStability(JObject parameters)
     {
         try
         {
+            if (!global::RhinoMCPModPlugin.KangarooRuntime.EnsureAvailable(out var kangarooError))
+            {
+                throw new InvalidOperationException($"Kangaroo solver is unavailable. {kangarooError}");
+            }
+
             var doc = RhinoDoc.ActiveDoc;
             if (doc == null)
             {
@@ -43,49 +52,65 @@ public partial class RhinoMCPModFunctions
             {
                 throw new Exception("Connectivity graph does not contain an 'n' array.");
             }
+            if (nodes.Count == 0)
+            {
+                throw new Exception("Connectivity graph contains no nodes to evaluate.");
+            }
 
             var stabilityNodes = new List<StabilityNode>();
-            foreach (var nodeToken in nodes)
+            var nodeErrors = new List<string>();
+            for (var nodeIndex = 0; nodeIndex < nodes.Count; nodeIndex++)
             {
+                var nodeToken = nodes[nodeIndex];
                 if (nodeToken is not JObject node)
                 {
+                    nodeErrors.Add($"node[{nodeIndex}] is not an object");
                     continue;
                 }
 
                 if (node["g"]?.ToString() is not string guidString || !Guid.TryParse(guidString, out var guid))
                 {
+                    nodeErrors.Add($"node[{nodeIndex}] has no valid object GUID");
                     continue;
                 }
 
                 var rhinoObject = doc.Objects.FindId(guid);
                 if (rhinoObject == null)
                 {
+                    nodeErrors.Add($"node[{nodeIndex}] object {guidString} was not found");
                     continue;
                 }
 
                 var geometry = rhinoObject.Geometry;
                 if (geometry == null)
                 {
+                    nodeErrors.Add($"node[{nodeIndex}] object {guidString} has no geometry");
                     continue;
                 }
 
-                var mass = 0.0;
+                JToken massToken = node["mass"];
                 var userText = rhinoObject.Attributes.GetUserString(StabilityKey);
                 if (!string.IsNullOrWhiteSpace(userText))
                 {
-                    var data = JObject.Parse(userText);
-                    if (data["mass"] != null)
+                    try
                     {
-                        mass = data["mass"].Value<double>();
-                        node["mass"] = mass;
+                        massToken = JObject.Parse(userText)["mass"] ?? massToken;
+                    }
+                    catch (Exception ex)
+                    {
+                        nodeErrors.Add(
+                            $"node[{nodeIndex}] object {guidString} has invalid stored mass data: {ex.Message}");
+                        continue;
                     }
                 }
 
-                if (node["mass"] != null)
+                if (!TryReadFiniteDouble(massToken, out var mass) || mass <= 0.0)
                 {
-                    mass = node["mass"].Value<double>();
+                    nodeErrors.Add($"node[{nodeIndex}] object {guidString} needs a positive finite mass");
+                    continue;
                 }
 
+                node["mass"] = mass;
                 stabilityNodes.Add(new StabilityNode
                 {
                     Node = node,
@@ -94,30 +119,34 @@ public partial class RhinoMCPModFunctions
                 });
             }
 
-            var missingMassGuids = new List<string>();
-            foreach (var stabilityNode in stabilityNodes)
+            if (nodeErrors.Count > 0)
             {
-                if (stabilityNode.Mass <= 0.0)
-                {
-                    missingMassGuids.Add(stabilityNode.Node["g"]?.ToString() ?? "<unknown>");
-                }
+                throw new Exception($"Connectivity graph is not evaluable: {string.Join("; ", nodeErrors)}");
             }
 
-            if (missingMassGuids.Count > 0)
+            var currentStep = ReadIntegerParameter(
+                parameters, "current_step", DefaultCurrentStep, 1, MaxCurrentStep);
+            var stabilityThreshold = ReadFiniteParameter(
+                parameters, "stability_threshold", DefaultStabilityThreshold, 0.0, inclusiveMinimum: true);
+            var rigidStrength = ReadFiniteParameter(
+                parameters, "rigid_strength", DefaultRigidStrength, 0.0, inclusiveMinimum: false);
+            var floorStrength = ReadFiniteParameter(
+                parameters, "floor_strength", DefaultFloorStrength, 0.0, inclusiveMinimum: false);
+            var floorZ = ReadFiniteParameter(parameters, "floor_z", DefaultFloorZ);
+            var gravity = ReadFiniteParameter(
+                parameters, "gravity", DefaultGravity, 0.0, inclusiveMinimum: true);
+            var assignTol = ReadFiniteParameter(
+                parameters, "assign_tol", DefaultAssignTol, 0.0, inclusiveMinimum: false);
+            var threshold = ReadFiniteParameter(
+                parameters, "threshold", DefaultThreshold, 0.0, inclusiveMinimum: false);
+            var solverSubsteps = ReadIntegerParameter(
+                parameters, "solver_substeps", DefaultSolverSubsteps, 1, MaxSolverSubsteps);
+            if ((long)currentStep * solverSubsteps > MaxTotalSolverSteps)
             {
-                throw new Exception($"Mass is not assigned for node(s): {string.Join(", ", missingMassGuids)}");
+                throw new ArgumentOutOfRangeException(
+                    "solver_substeps",
+                    $"current_step * solver_substeps must not exceed {MaxTotalSolverSteps}.");
             }
-
-            var currentStep = parameters?["current_step"]?.Value<int>() ?? DefaultCurrentStep;
-            var stabilityThreshold = parameters?["stability_threshold"]?.Value<double>() ?? DefaultStabilityThreshold;
-            var rigidStrength = parameters?["rigid_strength"]?.Value<double>() ?? DefaultRigidStrength;
-            var floorStrength = parameters?["floor_strength"]?.Value<double>() ?? DefaultFloorStrength;
-            var floorZ = parameters?["floor_z"]?.Value<double>() ?? DefaultFloorZ;
-            var gravity = parameters?["gravity"]?.Value<double>() ?? DefaultGravity;
-            var assignTol = parameters?["assign_tol"]?.Value<double>() ?? DefaultAssignTol;
-            var threshold = parameters?["threshold"]?.Value<double>() ?? DefaultThreshold;
-            var solverSubsteps = parameters?["solver_substeps"]?.Value<int>() ?? DefaultSolverSubsteps;
-
 
             var stable = SolveFromGraph(
                 graph,
@@ -134,6 +163,7 @@ public partial class RhinoMCPModFunctions
                 out var finalXform);
 
             graph["stable"] = stable;
+            graph["evaluation_mode"] = EvaluationMode;
             var evaluationGraph = SerializableGraph(graph);
             doc.Strings.SetString(EvaluationGraphKey, evaluationGraph.ToString());
 
@@ -314,6 +344,9 @@ public partial class RhinoMCPModFunctions
             {
                 ["success"] = true,
                 ["stable"] = stable,
+                ["evaluation_mode"] = EvaluationMode,
+                ["node_count"] = stabilityNodes.Count,
+                ["solver_iterations"] = currentStep * solverSubsteps,
                 ["stability_threshold"] = stabilityThreshold,
                 ["evaluation_graph_key"] = EvaluationGraphKey
             };
@@ -333,6 +366,88 @@ public partial class RhinoMCPModFunctions
                 ["message"] = ex.Message
             };
         }
+    }
+
+    private static bool TryReadFiniteDouble(JToken token, out double value)
+    {
+        value = 0.0;
+        if (token == null)
+        {
+            return false;
+        }
+
+        try
+        {
+            value = token.Value<double>();
+            return double.IsFinite(value);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static int ReadIntegerParameter(
+        JObject parameters,
+        string name,
+        int fallback,
+        int minimum,
+        int maximum)
+    {
+        var token = parameters?[name];
+        if (token == null)
+        {
+            return fallback;
+        }
+
+        int value;
+        try
+        {
+            value = token.Value<int>();
+        }
+        catch
+        {
+            throw new ArgumentException($"{name} must be an integer.", name);
+        }
+
+        if (value < minimum || value > maximum)
+        {
+            throw new ArgumentOutOfRangeException(
+                name,
+                $"{name} must be between {minimum} and {maximum}.");
+        }
+
+        return value;
+    }
+
+    private static double ReadFiniteParameter(
+        JObject parameters,
+        string name,
+        double fallback,
+        double? minimum = null,
+        bool inclusiveMinimum = true)
+    {
+        var token = parameters?[name];
+        if (token == null)
+        {
+            return fallback;
+        }
+
+        if (!TryReadFiniteDouble(token, out var value))
+        {
+            throw new ArgumentException($"{name} must be a finite number.", name);
+        }
+
+        if (minimum.HasValue &&
+            (inclusiveMinimum ? value < minimum.Value : value <= minimum.Value))
+        {
+            var comparison = inclusiveMinimum ? "greater than or equal to" : "greater than";
+            throw new ArgumentOutOfRangeException(
+                name,
+                $"{name} must be {comparison} {minimum.Value}.");
+        }
+
+        return value;
     }
 
     private static JObject ReadGraph(JToken graphToken, RhinoDoc doc)
@@ -383,8 +498,11 @@ public partial class RhinoMCPModFunctions
                 continue;
             }
 
-            obj.Attributes.DeleteUserString(AfterEvaluationKey);
-            obj.CommitChanges();
+            if (!string.IsNullOrWhiteSpace(obj.Attributes.GetUserString(AfterEvaluationKey)))
+            {
+                obj.Attributes.DeleteUserString(AfterEvaluationKey);
+                obj.CommitChanges();
+            }
         }
     }
     private static bool SolveFromGraph(
@@ -403,11 +521,7 @@ public partial class RhinoMCPModFunctions
     {
         if (nodes.Count == 0)
         {
-            graph["stable"] = true;
-            graph["stability_threshold"] = stabilityThreshold;
-            graph["max_displacement"] = 0.0;
-            finalXform = Transform.Identity;
-            return true;
+            throw new InvalidOperationException("No valid stability nodes were provided to the solver.");
         }
 
         graph["stable"] = false;
@@ -425,7 +539,8 @@ public partial class RhinoMCPModFunctions
             var points = MeshVerticesAsPoints(mesh);
             if (points.Count < 3)
             {
-                continue;
+                throw new InvalidOperationException(
+                    $"Object {node.Node["g"]} could not be converted to a solver mesh with at least three vertices.");
             }
 
             rigidMesh.Append(mesh);
@@ -440,8 +555,7 @@ public partial class RhinoMCPModFunctions
 
         if (vertexPoints.Count < 3 || rigidMesh.Vertices.Count == 0)
         {
-            finalXform = Transform.Identity;
-            return false;
+            throw new InvalidOperationException("The assembly did not produce a valid solver mesh.");
         }
 
         rigidMesh.Normals.ComputeNormals();
@@ -453,8 +567,7 @@ public partial class RhinoMCPModFunctions
         var frameIndices = FrameIndices(vertexPoints);
         if (frameIndices == null)
         {
-            finalXform = Transform.Identity;
-            return false;
+            throw new InvalidOperationException("The assembly does not contain three non-collinear solver points.");
         }
 
         var seedP0 = vertexPoints[frameIndices.Value.Item1];
@@ -463,8 +576,7 @@ public partial class RhinoMCPModFunctions
         var seedPlane = new Plane(seedP0, seedP1, seedP2);
         if (!seedPlane.IsValid)
         {
-            finalXform = Transform.Identity;
-            return false;
+            throw new InvalidOperationException("The solver could not construct an initial assembly frame.");
         }
 
         // RigidBody2 adds solverPlane.Origin as PPos[0]. Keep this origin away
@@ -472,8 +584,7 @@ public partial class RhinoMCPModFunctions
         var combinedBoundingBox = rigidMesh.GetBoundingBox(true);
         if (!combinedBoundingBox.IsValid)
         {
-            finalXform = Transform.Identity;
-            return false;
+            throw new InvalidOperationException("The assembly solver mesh has no valid bounding box.");
         }
 
         var solverPlane = new Plane(
@@ -484,8 +595,7 @@ public partial class RhinoMCPModFunctions
         var bodyBrep = Brep.CreateFromMesh(rigidMesh, true);
         if (bodyBrep == null)
         {
-            finalXform = Transform.Identity;
-            return false;
+            throw new InvalidOperationException("Kangaroo could not create a rigid body from the assembly mesh.");
         }
 
         // All source vertices intentionally form one welded rigid body.
@@ -515,8 +625,7 @@ public partial class RhinoMCPModFunctions
             initialRigidPositions.Length != initialRigidIndices.Length ||
             initialRigidIndices.Length < vertexPoints.Count + 1)
         {
-            finalXform = Transform.Identity;
-            return false;
+            throw new InvalidOperationException("Kangaroo returned an invalid rigid-body particle mapping.");
         }
 
         // PPos[0] is the orientation particle; PPos[1 + vertexIndex] is the
@@ -537,8 +646,7 @@ public partial class RhinoMCPModFunctions
 
         if (uniqueVertexRecords.Count < 3)
         {
-            finalXform = Transform.Identity;
-            return false;
+            throw new InvalidOperationException("Kangaroo assigned fewer than three unique rigid-body particles.");
         }
 
         var tracking0 = uniqueVertexRecords[0];
@@ -576,16 +684,14 @@ public partial class RhinoMCPModFunctions
 
         if (tracking2Index < 0 || bestTrackingCrossSquared <= 1e-16)
         {
-            finalXform = Transform.Identity;
-            return false;
+            throw new InvalidOperationException("The solver could not select a non-collinear tracking frame.");
         }
 
         var tracking2 = uniqueVertexRecords[tracking2Index];
         var initialTrackingPlane = new Plane(tracking0.Point, tracking1.Point, tracking2.Point);
         if (!initialTrackingPlane.IsValid)
         {
-            finalXform = Transform.Identity;
-            return false;
+            throw new InvalidOperationException("The solver's initial tracking frame is invalid.");
         }
 
         var globalP0 = tracking0.GlobalIndex;
@@ -603,8 +709,7 @@ public partial class RhinoMCPModFunctions
         if (globalP0 < 0 || globalP1 < 0 || globalP2 < 0 ||
             globalP0 >= positions.Length || globalP1 >= positions.Length || globalP2 >= positions.Length)
         {
-            finalXform = Transform.Identity;
-            return false;
+            throw new InvalidOperationException("Kangaroo returned an incomplete final particle array.");
         }
 
         var nowP0 = positions[globalP0];
@@ -613,15 +718,13 @@ public partial class RhinoMCPModFunctions
         var finalCross = Vector3d.CrossProduct(nowP1 - nowP0, nowP2 - nowP0);
         if (finalCross.SquareLength <= 1e-16)
         {
-            finalXform = Transform.Identity;
-            return false;
+            throw new InvalidOperationException("The final solver tracking frame collapsed.");
         }
 
         var nowPlane = new Plane(nowP0, nowP1, nowP2);
         if (!nowPlane.IsValid)
         {
-            finalXform = Transform.Identity;
-            return false;
+            throw new InvalidOperationException("The solver's final tracking frame is invalid.");
         }
 
         var xform = Transform.PlaneToPlane(initialTrackingPlane, nowPlane);

@@ -18,9 +18,11 @@ namespace RhinoMCPModPlugin.Commands
 
         protected override Result RunCommand(RhinoDoc doc, RunMode mode)
         {
+            var densityUnit = RhinoMCPModFunctions.GetDensityUnit(doc.ModelUnitSystem);
+            var massUnit = doc.ModelUnitSystem == Rhino.UnitSystem.Feet ? "lb" : "kg";
             RhinoApp.WriteLine(
-                $"Density unit is kg/m3. Current Rhino model unit: {doc.ModelUnitSystem}. " +
-                "Object volumes will be converted to m3 before calculating mass in kg.");
+                $"Density unit is {densityUnit}. Current Rhino model unit: {doc.ModelUnitSystem}. " +
+                $"Object volumes will be converted before calculating mass in {massUnit}.");
 
             var handler = new RhinoMCPModFunctions();
             var result = handler.AssignMassFromLayerDensity(new JObject());
