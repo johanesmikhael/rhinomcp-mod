@@ -56,11 +56,20 @@ public partial class RhinoMCPModFunctions
     // budget: tying the interval to current_step meant a large budget also postponed the
     // exit that makes the large budget affordable. A sound assembly now leaves after
     // MinSettledSamples * MaxSampleInterval steps whatever the cap is set to.
-    // A settling assembly sinks straight down into the soft floor; a failing one rotates.
-    // Rotation is therefore the signal, and floor penetration is not - which is what lets
-    // the floor stay soft enough for gravity to act. One degree is far above the numerical
-    // noise of a resting body (measured 0.000 deg) and far below a real topple (32.9 deg).
-    public const double DefaultRotationThresholdDegrees = 1.0;
+    // The verdict rests on two complementary signals. The motion trend catches a failure
+    // still in progress; rotation catches one that finished inside the step budget and came
+    // to rest lying down, which reads as "settled" because it genuinely has stopped.
+    //
+    // Rotation therefore only has to separate a completed topple from a resting body, and
+    // the measured gap is wide. A resting assembly still rotates a little, because Floor2 is
+    // a spring per mesh vertex rather than per unit area: where two differently tessellated
+    // elements meet the ground at one support, they seat unevenly and tilt the fitted
+    // transform. That is a property of the contact, not of the weight - a 17.3 t tower whose
+    // slabs alone touch the ground turned 0.23 deg, while a 9.8 t frame whose columns and
+    // slabs both touched turned 1.69 deg. Measured resting values span 0.13 to 2.38 deg; a
+    // real topple measured 40.2 deg. Ten degrees sits between them with roughly 4x margin
+    // either way. One degree did not, and failed sound assemblies outright.
+    public const double DefaultRotationThresholdDegrees = 10.0;
 
     public const int MaxSampleInterval = 25;
     public const int MinSettledSamples = 8;
