@@ -2,9 +2,7 @@ using Newtonsoft.Json.Linq;
 using Rhino;
 using System;
 using System.Collections.Generic;
-using System.IO;
 using System.Linq;
-using System.Text.RegularExpressions;
 
 namespace RhinoMCPModPlugin.Functions
 {
@@ -20,44 +18,29 @@ namespace RhinoMCPModPlugin.Functions
             }
 
             var entries = new List<string>();
-            
+            var truncated = false;
+            var totalLines = 0;
+
             try
             {
-                // Try to find the Rhino command history file
-                // Rhino 8 stores it in various locations depending on version
-                var possiblePaths = new[]
-                {
-                    Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                        "McNeel", "Rhinoceros", "8.0", "settings", "default", "CommandHistory.txt"),
-                    Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                        "McNeel", "Rhinoceros", "8.0", "CommandHistory.txt"),
-                    Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-                        "McNeel", "Rhinoceros", "8.0", "CommandHistory.txt"),
-                };
+                // Read the command line pane directly rather than a history file: Rhino for
+                // Mac never writes CommandHistory.txt, and the pane also carries what
+                // commands printed, which a history file does not.
+                var history = RhinoApp.CommandHistoryWindowText ?? string.Empty;
+                var allLines = history
+                    .Replace("\r\n", "\n")
+                    .Replace('\r', '\n')
+                    .Split('\n')
+                    .Where(line => !string.IsNullOrWhiteSpace(line))
+                    .ToList();
 
-                string historyPath = null;
-                foreach (var path in possiblePaths)
-                {
-                    if (File.Exists(path))
-                    {
-                        historyPath = path;
-                        break;
-                    }
-                }
+                totalLines = allLines.Count;
+                truncated = totalLines > lines;
+                entries = allLines.Skip(Math.Max(0, totalLines - lines)).ToList();
 
-                if (historyPath != null && File.Exists(historyPath))
+                if (entries.Count == 0)
                 {
-                    var historyLines = File.ReadAllLines(historyPath);
-                    entries = historyLines.Reverse().Take(lines).Reverse().ToList();
-                }
-                else
-                {
-                    entries.Add("Command history file not found.");
-                    entries.Add("Searched paths:");
-                    foreach (var p in possiblePaths)
-                    {
-                        entries.Add($"  - {p}");
-                    }
+                    entries.Add("Rhino's command history is empty.");
                 }
             }
             catch (Exception e)
@@ -68,7 +51,9 @@ namespace RhinoMCPModPlugin.Functions
             return new JObject
             {
                 ["entries"] = new JArray(entries.ToArray()),
-                ["count"] = entries.Count
+                ["count"] = entries.Count,
+                ["total_lines"] = totalLines,
+                ["truncated"] = truncated
             };
         }
     }
