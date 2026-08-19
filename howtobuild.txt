@@ -1,0 +1,8 @@
+cd "C:\Users\asdbe\Desktop\rhinomcp-mod-main\rhino_mcp_plugin"
+dotnet build rhinomcp.sln
+
+cd "C:\Users\asdbe\Desktop\rhinomcp-mod-main\rhino_mcp_plugin"
+dotnet build rhinomcp.sln -c Release
+
+C:\Users\asdbe\AppData\Roaming\McNeel\Rhinoceros\packages\8.0\rhinomcp-mod\0.2.4\net7.0
+
