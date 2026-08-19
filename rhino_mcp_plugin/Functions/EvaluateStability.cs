@@ -663,19 +663,13 @@ public partial class RhinoMCPModFunctions
             throw new Exception("Rigid mesh vertices and source points are not one-to-one.");
         }
 
-        var frameIndices = FrameIndices(vertexPoints);
-        if (frameIndices == null)
+        // Validate that the assembly is not degenerate or collinear. The indices are not
+        // used to build the solver frame: deriving axes from assembly vertices made the
+        // frame depend on which node came first in the graph, which changed the settled
+        // transform for identical geometry.
+        if (FrameIndices(vertexPoints) == null)
         {
             throw new InvalidOperationException("The assembly does not contain three non-collinear solver points.");
-        }
-
-        var seedP0 = vertexPoints[frameIndices.Value.Item1];
-        var seedP1 = vertexPoints[frameIndices.Value.Item2];
-        var seedP2 = vertexPoints[frameIndices.Value.Item3];
-        var seedPlane = new Plane(seedP0, seedP1, seedP2);
-        if (!seedPlane.IsValid)
-        {
-            throw new InvalidOperationException("The solver could not construct an initial assembly frame.");
         }
 
         // RigidBody2 adds solverPlane.Origin as PPos[0]. Keep this origin away
@@ -686,10 +680,12 @@ public partial class RhinoMCPModFunctions
             throw new InvalidOperationException("The assembly solver mesh has no valid bounding box.");
         }
 
+        // World-aligned axes about the assembly centre: the frame then depends only on the
+        // geometry, never on graph node order.
         var solverPlane = new Plane(
             combinedBoundingBox.Center,
-            seedPlane.XAxis,
-            seedPlane.YAxis);
+            Vector3d.XAxis,
+            Vector3d.YAxis);
 
         var bodyBrep = Brep.CreateFromMesh(rigidMesh, true);
         if (bodyBrep == null)
@@ -748,18 +744,36 @@ public partial class RhinoMCPModFunctions
             throw new InvalidOperationException("Kangaroo assigned fewer than three unique rigid-body particles.");
         }
 
-        var tracking0 = uniqueVertexRecords[0];
-        var tracking1 = uniqueVertexRecords[1];
-        var farthestDistanceSquared = tracking1.Point.DistanceToSquared(tracking0.Point);
-        for (var i = 2; i < uniqueVertexRecords.Count; i++)
+        // Start from a geometrically determined particle rather than the first one listed,
+        // so that transform recovery does not depend on graph node order either.
+        var tracking0Index = CanonicalPointIndex(uniqueVertexRecords);
+        var tracking0 = uniqueVertexRecords[tracking0Index];
+
+        // Scan every other particle for the farthest one; the seed is no longer guaranteed
+        // to sit at index 0, so the search cannot skip the leading entries.
+        var tracking1Index = -1;
+        var farthestDistanceSquared = -1.0;
+        for (var i = 0; i < uniqueVertexRecords.Count; i++)
         {
+            if (i == tracking0Index)
+            {
+                continue;
+            }
+
             var distanceSquared = uniqueVertexRecords[i].Point.DistanceToSquared(tracking0.Point);
             if (distanceSquared > farthestDistanceSquared)
             {
                 farthestDistanceSquared = distanceSquared;
-                tracking1 = uniqueVertexRecords[i];
+                tracking1Index = i;
             }
         }
+
+        if (tracking1Index < 0)
+        {
+            throw new InvalidOperationException("The solver could not select a second tracking particle.");
+        }
+
+        var tracking1 = uniqueVertexRecords[tracking1Index];
 
         var trackingAxis = tracking1.Point - tracking0.Point;
         var tracking2Index = -1;
@@ -1096,6 +1110,42 @@ public partial class RhinoMCPModFunctions
             default:
                 return null;
         }
+    }
+
+    // Picks the lexicographically smallest point, so the choice follows the assembly's
+    // geometry rather than the order its nodes arrived in. Coordinates are compared with a
+    // tolerance so that float noise cannot flip the winner between otherwise equal runs.
+    private static int CanonicalPointIndex(
+        List<(int VertexIndex, int GlobalIndex, Point3d Point)> records)
+    {
+        const double tolerance = 1e-9;
+        var bestIndex = 0;
+        for (var i = 1; i < records.Count; i++)
+        {
+            var candidate = records[i].Point;
+            var best = records[bestIndex].Point;
+            var dx = candidate.X - best.X;
+            if (Math.Abs(dx) > tolerance)
+            {
+                if (dx < 0.0) bestIndex = i;
+                continue;
+            }
+
+            var dy = candidate.Y - best.Y;
+            if (Math.Abs(dy) > tolerance)
+            {
+                if (dy < 0.0) bestIndex = i;
+                continue;
+            }
+
+            var dz = candidate.Z - best.Z;
+            if (Math.Abs(dz) > tolerance && dz < 0.0)
+            {
+                bestIndex = i;
+            }
+        }
+
+        return bestIndex;
     }
 
     private static (int Item1, int Item2, int Item3)? FrameIndices(List<Point3d> points)
