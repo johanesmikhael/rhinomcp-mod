@@ -33,3 +33,6 @@ tutorial/
 
 # local dev notes
 dev_plan.md
+
+# Local MCP server config (machine-specific absolute paths)
+.mcp.json
