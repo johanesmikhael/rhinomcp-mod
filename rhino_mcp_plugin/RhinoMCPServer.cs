@@ -356,6 +356,10 @@ namespace RhinoMCPModPlugin
                 // Layers
                 ["rename_layer"] = this.handler.RenameLayer,
                 ["move_objects_to_layer"] = this.handler.MoveObjectsToLayer,
+                ["get_named_views"] = this.handler.GetNamedViews,
+                ["save_named_view"] = this.handler.SaveNamedView,
+                ["restore_named_view"] = this.handler.RestoreNamedView,
+                ["delete_named_view"] = this.handler.DeleteNamedView,
                 ["get_layer_states"] = this.handler.GetLayerStates,
                 ["save_layer_state"] = this.handler.SaveLayerState,
                 ["restore_layer_state"] = this.handler.RestoreLayerState,

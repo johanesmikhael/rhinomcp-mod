@@ -272,6 +272,75 @@ async def restore_layer_state(name: str) -> str:
     return result.get("message", result.get("error", "Layer state restored."))
 
 @mcp.tool()
+async def get_named_views() -> str:
+    """List the document's named views with their projection and camera framing.
+
+    Unlike layer states, named views are stored in the Rhino document itself,
+    so they survive a plugin or Rhino restart and are saved with the file.
+    """
+    from rhinomcp.server import get_rhino_connection
+    rhino = get_rhino_connection()
+    result = rhino.send_command("get_named_views", {})
+    if result.get("error"):
+        return f"Error: {result['error']}"
+    views = result.get("named_views", [])
+    if not views:
+        return "No named views in this document."
+    lines = []
+    for v in views:
+        lens = f" {v['lensMm']}mm" if v.get("lensMm") else ""
+        lines.append(
+            f"  - {v['name']} [{v['projection']}{lens}] "
+            f"cam {v.get('cameraLocation')} -> {v.get('cameraTarget')}"
+        )
+    return f"Named views ({result.get('count', 0)}):\n" + "\n".join(lines)
+
+@mcp.tool()
+async def save_named_view(name: str, viewport: str | None = None) -> str:
+    """Save a viewport's current camera as a named view in the document.
+
+    Args:
+        name: Name to save under. An existing named view of the same name is
+            replaced, so that the name stays unambiguous to restore by.
+        viewport: Viewport to capture, by name. Defaults to the active one.
+    """
+    from rhinomcp.server import get_rhino_connection
+    rhino = get_rhino_connection()
+    params: dict[str, Any] = {"name": name}
+    if viewport is not None:
+        params["viewport"] = viewport
+    result = rhino.send_command("save_named_view", params)
+    return result.get("message", result.get("error", "Named view saved."))
+
+@mcp.tool()
+async def restore_named_view(name: str, viewport: str | None = None) -> str:
+    """Restore a named view's camera into a viewport.
+
+    Args:
+        name: Name of the named view to restore.
+        viewport: Viewport to restore into, by name. Defaults to the active one.
+    """
+    from rhinomcp.server import get_rhino_connection
+    rhino = get_rhino_connection()
+    params: dict[str, Any] = {"name": name}
+    if viewport is not None:
+        params["viewport"] = viewport
+    result = rhino.send_command("restore_named_view", params)
+    return result.get("message", result.get("error", "Named view restored."))
+
+@mcp.tool()
+async def delete_named_view(name: str) -> str:
+    """Delete a named view from the document.
+
+    Args:
+        name: Name of the named view to remove.
+    """
+    from rhinomcp.server import get_rhino_connection
+    rhino = get_rhino_connection()
+    result = rhino.send_command("delete_named_view", {"name": name})
+    return result.get("message", result.get("error", "Named view deleted."))
+
+@mcp.tool()
 async def get_materials() -> str:
     """Get all materials in the Rhino document."""
     from rhinomcp.server import get_rhino_connection

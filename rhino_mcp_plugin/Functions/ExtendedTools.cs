@@ -276,6 +276,138 @@ namespace RhinoMCPModPlugin.Functions
             return new JObject { ["message"] = $"Restored {restored} layer(s).", ["count"] = restored };
         }
 
+        public JObject GetNamedViews(JObject parameters)
+        {
+            var doc = RhinoDoc.ActiveDoc;
+            if (doc == null) return new JObject { ["error"] = "No active document" };
+
+            var views = new JArray();
+            for (int i = 0; i < doc.NamedViews.Count; i++)
+            {
+                var info = doc.NamedViews[i];
+                if (info == null) continue;
+                var vp = info.Viewport;
+                views.Add(new JObject
+                {
+                    ["index"] = i,
+                    ["name"] = info.Name ?? "",
+                    ["projection"] = vp == null ? "(unknown)" : (vp.IsPerspectiveProjection ? "perspective" : "parallel"),
+                    ["lensMm"] = vp != null && vp.IsPerspectiveProjection
+                        ? JToken.FromObject(Math.Round(vp.Camera35mmLensLength, 6))
+                        : JValue.CreateNull(),
+                    ["cameraLocation"] = vp == null ? null : $"{vp.CameraLocation.X:F2},{vp.CameraLocation.Y:F2},{vp.CameraLocation.Z:F2}",
+                    ["cameraTarget"] = vp == null ? null : $"{vp.TargetPoint.X:F2},{vp.TargetPoint.Y:F2},{vp.TargetPoint.Z:F2}"
+                });
+            }
+
+            return new JObject { ["named_views"] = views, ["count"] = views.Count };
+        }
+
+        public JObject SaveNamedView(JObject parameters)
+        {
+            var doc = RhinoDoc.ActiveDoc;
+            if (doc == null) return new JObject { ["error"] = "No active document" };
+
+            var name = parameters["name"]?.ToString();
+            if (string.IsNullOrWhiteSpace(name)) return new JObject { ["error"] = "name is required" };
+
+            // Save from a named viewport when asked, otherwise from whichever is active.
+            var viewportName = parameters["viewport"]?.ToString();
+            var view = doc.Views.ActiveView;
+            if (!string.IsNullOrWhiteSpace(viewportName))
+            {
+                view = doc.Views.FirstOrDefault(v =>
+                    string.Equals(v.ActiveViewport?.Name, viewportName, StringComparison.OrdinalIgnoreCase));
+                if (view == null) return new JObject { ["error"] = $"Viewport '{viewportName}' not found" };
+            }
+
+            if (view?.ActiveViewport == null) return new JObject { ["error"] = "No active view" };
+
+            // Add would otherwise leave two entries sharing a name, which makes the name
+            // ambiguous to restore by.
+            var replaced = doc.NamedViews.FindByName(name) >= 0;
+            if (replaced) doc.NamedViews.Delete(name);
+
+            var index = doc.NamedViews.Add(name, view.ActiveViewport.Id);
+            if (index < 0) return new JObject { ["error"] = $"Could not save named view '{name}'" };
+
+            return new JObject
+            {
+                ["message"] = replaced
+                    ? $"Named view '{name}' replaced."
+                    : $"Named view '{name}' saved.",
+                ["name"] = name,
+                ["index"] = index,
+                ["replaced"] = replaced,
+                ["viewport"] = view.ActiveViewport.Name ?? ""
+            };
+        }
+
+        public JObject RestoreNamedView(JObject parameters)
+        {
+            var doc = RhinoDoc.ActiveDoc;
+            if (doc == null) return new JObject { ["error"] = "No active document" };
+
+            var name = parameters["name"]?.ToString();
+            if (string.IsNullOrWhiteSpace(name)) return new JObject { ["error"] = "name is required" };
+
+            var index = doc.NamedViews.FindByName(name);
+            if (index < 0) return new JObject { ["error"] = $"Named view '{name}' not found." };
+
+            var viewportName = parameters["viewport"]?.ToString();
+            var view = doc.Views.ActiveView;
+            if (!string.IsNullOrWhiteSpace(viewportName))
+            {
+                view = doc.Views.FirstOrDefault(v =>
+                    string.Equals(v.ActiveViewport?.Name, viewportName, StringComparison.OrdinalIgnoreCase));
+                if (view == null) return new JObject { ["error"] = $"Viewport '{viewportName}' not found" };
+            }
+
+            if (view?.ActiveViewport == null) return new JObject { ["error"] = "No active view" };
+
+            // Rhino renames the viewport to the named view when restoring, and the rename
+            // outlives the named view itself. Restoring a camera should not rename the
+            // user's viewport, so put the original name back.
+            var originalName = view.ActiveViewport.Name;
+
+            if (!doc.NamedViews.Restore(index, view.ActiveViewport))
+                return new JObject { ["error"] = $"Could not restore named view '{name}'" };
+
+            var renamed = !string.IsNullOrEmpty(originalName) &&
+                !string.Equals(view.ActiveViewport.Name, originalName, StringComparison.Ordinal);
+            if (renamed) view.ActiveViewport.Name = originalName;
+
+            doc.Views.Redraw();
+            return new JObject
+            {
+                ["message"] = $"Named view '{name}' restored.",
+                ["name"] = name,
+                ["viewport"] = view.ActiveViewport.Name ?? ""
+            };
+        }
+
+        public JObject DeleteNamedView(JObject parameters)
+        {
+            var doc = RhinoDoc.ActiveDoc;
+            if (doc == null) return new JObject { ["error"] = "No active document" };
+
+            var name = parameters["name"]?.ToString();
+            if (string.IsNullOrWhiteSpace(name)) return new JObject { ["error"] = "name is required" };
+
+            if (doc.NamedViews.FindByName(name) < 0)
+                return new JObject { ["error"] = $"Named view '{name}' not found." };
+
+            if (!doc.NamedViews.Delete(name))
+                return new JObject { ["error"] = $"Could not delete named view '{name}'" };
+
+            return new JObject
+            {
+                ["message"] = $"Named view '{name}' deleted.",
+                ["name"] = name,
+                ["remaining"] = doc.NamedViews.Count
+            };
+        }
+
         public JObject GetMaterials(JObject parameters)
         {
             var doc = RhinoDoc.ActiveDoc;
