@@ -12,6 +12,60 @@ internal static class StabilityUnitMath
     public const double FeetToMeters = 0.3048;
     public const double CubicFeetToCubicMeters = FeetToMeters * FeetToMeters * FeetToMeters;
 
+    // Kangaroo's Floor2 goal is a linear contact spring, so an assembly sinks into the
+    // floor in proportion to its own weight: penetration = C * weight / floor_strength.
+    //
+    // C was calibrated in Rhino against 1x1x1 m blocks resting on a flat floor at
+    // floor_strength 1000, sweeping mass 10 -> 40 -> 160 kg. Penetration came out
+    // 0.005577 -> 0.022315 -> 0.089385 m (exactly 4x per 4x mass), giving
+    // k*penetration/weight = 0.05687, 0.05688, 0.05696.
+    //
+    // The fit assumes unit cubes on a flat floor. Contact-area effects account for roughly
+    // 12% (it predicts 0.0558 m against 0.0493 m measured for a ten-block stack), and
+    // non-planar bases and mixed block sizes are untested, so an explicit floor_strength
+    // always overrides the value derived from this constant.
+    public const double FloorPenetrationCoefficient = 0.0569;
+
+    // Guard against handing Kangaroo an absurd stiffness if an assembly carries a
+    // pathological mass or a caller drives the stability threshold to near zero.
+    public const double MaxAutoFloorStrength = 1e9;
+
+    /// <summary>
+    /// Derives a floor-collision strength that keeps an assembly's floor penetration at
+    /// roughly <paramref name="targetPenetrationMeters"/>, so that a sound structure's
+    /// settling does not consume the stability threshold on its own.
+    /// </summary>
+    /// <remarks>
+    /// Returns <paramref name="fallback"/> whenever the inputs cannot produce a meaningful
+    /// stiffness. A zero gravity or a zero stability threshold are both accepted by the
+    /// solver's parameter reader, so neither can be assumed positive here.
+    /// </remarks>
+    public static double AutoFloorStrength(
+        double totalMassKilograms,
+        double gravity,
+        double targetPenetrationMeters,
+        double fallback)
+    {
+        if (!double.IsFinite(totalMassKilograms) || totalMassKilograms <= 0.0 ||
+            !double.IsFinite(gravity) || gravity <= 0.0 ||
+            !double.IsFinite(targetPenetrationMeters) || targetPenetrationMeters <= 0.0)
+        {
+            return fallback;
+        }
+
+        var strength =
+            FloorPenetrationCoefficient * totalMassKilograms * gravity / targetPenetrationMeters;
+
+        if (!double.IsFinite(strength) || strength <= 0.0)
+        {
+            return fallback;
+        }
+
+        // Never weaken the floor below the fixed default; a very light assembly should not
+        // end up with a floor softer than the one it would have had before auto-scaling.
+        return Math.Min(Math.Max(strength, fallback), MaxAutoFloorStrength);
+    }
+
     public static double ToMeters(double documentLength, double lengthToMeters)
     {
         ValidateLengthScale(lengthToMeters);

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using Newtonsoft.Json.Linq;
 using Rhino;
 using Rhino.Geometry;
@@ -23,6 +24,11 @@ public partial class RhinoMCPModFunctions
     public const double DefaultRigidStrength = 10000.0;
     public const double DefaultFloorStrength = 1000.0;
     public const double DefaultFloorZ = 0.0;
+
+    // Share of the stability threshold that an auto-sized floor is allowed to spend on
+    // settling. Keeping it at a tenth leaves the rest of the budget for real motion, while
+    // staying clear of the ~1 mm residual that rigid-body compliance contributes anyway.
+    public const double AutoFloorPenetrationFraction = 10.0;
     public const double DefaultGravity = 9.80665;
     public const double DefaultAssignToleranceMeters = 1e-6;
     public const double DefaultSolverThresholdMeters = 0.001;
@@ -157,11 +163,25 @@ public partial class RhinoMCPModFunctions
                 inclusiveMinimum: true);
             var rigidStrength = ReadFiniteParameter(
                 parameters, "rigid_strength", DefaultRigidStrength, 0.0, inclusiveMinimum: false);
-            var floorStrength = ReadFiniteParameter(
-                parameters, "floor_strength", DefaultFloorStrength, 0.0, inclusiveMinimum: false);
             var floorZ = ReadFiniteParameter(parameters, "floor_z", DefaultFloorZ);
             var gravity = ReadFiniteParameter(
                 parameters, "gravity", DefaultGravity, 0.0, inclusiveMinimum: true);
+
+            // Floor2 is a linear contact spring, so a fixed strength lets a heavy assembly
+            // sink far enough to exhaust the stability threshold on settling alone. When the
+            // caller does not pin the strength down, size it from the assembly's own weight
+            // so that settling stays within a small fraction of the threshold.
+            var totalMassKilograms = stabilityNodes.Sum(node => node.MassKilograms);
+            var stabilityThresholdMeters = stabilityThreshold * unitContext.LengthToMeters;
+            var floorStrengthIsAuto = parameters?["floor_strength"] == null;
+            var floorStrength = floorStrengthIsAuto
+                ? StabilityUnits.AutoFloorStrength(
+                    totalMassKilograms,
+                    gravity,
+                    stabilityThresholdMeters / AutoFloorPenetrationFraction,
+                    DefaultFloorStrength)
+                : ReadFiniteParameter(
+                    parameters, "floor_strength", DefaultFloorStrength, 0.0, inclusiveMinimum: false);
             var assignTol = ReadFiniteParameter(
                 parameters,
                 "assign_tol",
@@ -205,6 +225,12 @@ public partial class RhinoMCPModFunctions
             graph["length_to_meters"] = unitContext.LengthToMeters;
             graph["mass_unit"] = StabilityUnits.KilogramUnit;
             graph["gravity_m_s2"] = gravity;
+            // Report the solver inputs that the caller did not necessarily supply, so a
+            // result can be explained without re-running the evaluation to discover them.
+            graph["total_mass_kg"] = totalMassKilograms;
+            graph["floor_strength"] = floorStrength;
+            graph["floor_strength_auto"] = floorStrengthIsAuto;
+            graph["floor_z_m"] = unitContext.ToMeters(floorZ);
             graph["unit_warnings"] = unitWarnings.DeepClone();
             var evaluationGraph = SerializableGraph(graph);
             doc.Strings.SetString(EvaluationGraphKey, evaluationGraph.ToString());
@@ -395,6 +421,10 @@ public partial class RhinoMCPModFunctions
                 ["length_to_meters"] = unitContext.LengthToMeters,
                 ["mass_unit"] = StabilityUnits.KilogramUnit,
                 ["gravity_m_s2"] = gravity,
+                ["total_mass_kg"] = totalMassKilograms,
+                ["floor_strength"] = floorStrength,
+                ["floor_strength_auto"] = floorStrengthIsAuto,
+                ["floor_z_m"] = unitContext.ToMeters(floorZ),
                 ["unit_warnings"] = unitWarnings,
                 ["evaluation_graph_key"] = EvaluationGraphKey
             };

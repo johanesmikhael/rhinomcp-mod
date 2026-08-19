@@ -117,6 +117,16 @@ internal static class StabilityUnits
         return StabilityUnitMath.KilogramsToInputMass(kilograms, unit);
     }
 
+    public static double AutoFloorStrength(
+        double totalMassKilograms,
+        double gravity,
+        double targetPenetrationMeters,
+        double fallback)
+    {
+        return StabilityUnitMath.AutoFloorStrength(
+            totalMassKilograms, gravity, targetPenetrationMeters, fallback);
+    }
+
     public static bool TryDensityToKilogramsPerCubicMeter(
         double value,
         string unit,

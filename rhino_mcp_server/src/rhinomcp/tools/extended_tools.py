@@ -12,7 +12,7 @@ async def evaluate_stability(
     current_step: int = 50,
     stability_threshold: float | None = None,
     rigid_strength: float = 10000.0,
-    floor_strength: float = 1000.0,
+    floor_strength: float | None = None,
     floor_z: float = 0.0,
     gravity: float = 9.80665,
     assign_tol: float | None = None,
@@ -34,7 +34,10 @@ async def evaluate_stability(
             active Rhino document's length unit. When omitted, Rhino converts
             the canonical 0.01 m default to document units.
         rigid_strength: Kangaroo rigid-body goal strength.
-        floor_strength: Kangaroo floor-collision goal strength.
+        floor_strength: Kangaroo floor-collision goal strength. When omitted,
+            Rhino sizes it from the assembly's total mass so that settling into
+            the floor stays within a tenth of the stability threshold; a sound
+            structure would otherwise read as unstable purely from sinking.
         floor_z: World Z elevation of the collision floor, in document units.
         gravity: Downward gravitational acceleration in m/s².
         assign_tol: Kangaroo particle assignment tolerance in document units.
@@ -51,7 +54,6 @@ async def evaluate_stability(
     params: dict[str, Any] = {
         "current_step": current_step,
         "rigid_strength": rigid_strength,
-        "floor_strength": floor_strength,
         "floor_z": floor_z,
         "gravity": gravity,
         "solver_substeps": solver_substeps,
@@ -59,6 +61,8 @@ async def evaluate_stability(
     }
     if stability_threshold is not None:
         params["stability_threshold"] = stability_threshold
+    if floor_strength is not None:
+        params["floor_strength"] = floor_strength
     if assign_tol is not None:
         params["assign_tol"] = assign_tol
     if threshold is not None:

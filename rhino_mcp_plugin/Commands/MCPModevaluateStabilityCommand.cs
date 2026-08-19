@@ -56,7 +56,8 @@ namespace RhinoMCPModPlugin.Commands
                 parameters["current_step"] = DefaultCurrentStep;
                 parameters["stability_threshold"] = defaultStabilityThreshold;
                 parameters["rigid_strength"] = DefaultRigidStrength;
-                parameters["floor_strength"] = DefaultFloorStrength;
+                // Left unset on purpose: omitting floor_strength lets the solver size the
+                // floor from the assembly's mass.
                 parameters["floor_z"] = DefaultFloorZ;
                 parameters["gravity"] = DefaultGravity;
                 parameters["assign_tol"] = defaultAssignTolerance;
@@ -70,7 +71,7 @@ namespace RhinoMCPModPlugin.Commands
                     "Current step",
                     $"Stability threshold ({doc.ModelUnitSystem})",
                     "Rigid strength",
-                    "Floor strength",
+                    "Floor strength (0 = auto from mass)",
                     $"Floor Z ({doc.ModelUnitSystem})",
                     "Gravity (m/s²)",
                     $"Assign tolerance ({doc.ModelUnitSystem})",
@@ -83,7 +84,7 @@ namespace RhinoMCPModPlugin.Commands
                     DefaultCurrentStep,
                     defaultStabilityThreshold,
                     DefaultRigidStrength,
-                    DefaultFloorStrength,
+                    0.0,
                     DefaultFloorZ,
                     DefaultGravity,
                     defaultAssignTolerance,
@@ -112,7 +113,13 @@ namespace RhinoMCPModPlugin.Commands
                 parameters["current_step"] = (int)values[0];
                 parameters["stability_threshold"] = values[1];
                 parameters["rigid_strength"] = values[2];
-                parameters["floor_strength"] = values[3];
+                // Zero means auto: leave the parameter out so the solver sizes the floor
+                // from the assembly's mass.
+                if (values[3] > 0.0)
+                {
+                    parameters["floor_strength"] = values[3];
+                }
+
                 parameters["floor_z"] = values[4];
                 parameters["gravity"] = values[5];
                 parameters["assign_tol"] = values[6];
@@ -156,6 +163,11 @@ namespace RhinoMCPModPlugin.Commands
                 RhinoApp.WriteLine(
                     $"max_displacement: {result["max_displacement"]} {result["document_length_unit"]} " +
                     $"({result["max_displacement_m"]} m)");
+                var floorStrengthSource =
+                    result["floor_strength_auto"]?.Value<bool>() == true ? "auto from mass" : "explicit";
+                RhinoApp.WriteLine(
+                    $"floor_strength: {result["floor_strength"]} ({floorStrengthSource}), " +
+                    $"total_mass: {result["total_mass_kg"]} kg");
                 if (result["unit_warnings"] is JArray warnings)
                 {
                     foreach (var warning in warnings)
