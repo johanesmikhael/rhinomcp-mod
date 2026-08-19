@@ -110,17 +110,25 @@ public partial class RhinoMCPModFunctions
                         ["mass"] = massKilograms,
                         ["mass_unit"] = StabilityUnits.KilogramUnit
                     };
-                    rhinoObject.Attributes.SetUserString(
-                        StabilityKey,
-                        payload.ToString(Formatting.None));
+                    var payloadText = payload.ToString(Formatting.None);
+                    rhinoObject.Attributes.SetUserString(StabilityKey, payloadText);
+                    rhinoObject.CommitChanges();
 
-                    if (!rhinoObject.CommitChanges())
+                    // CommitChanges returns false for a successful attribute write whenever
+                    // Rhino decides the change needs no new undo record, so its result cannot
+                    // tell success from failure. Trusting it reported every object in the
+                    // document as skipped while the masses were in fact written correctly.
+                    // Read the value back from the document instead: that is the only claim
+                    // worth making, and it is the one the caller cares about.
+                    var storedText = doc.Objects.FindId(rhinoObject.Id)?
+                        .Attributes?.GetUserString(StabilityKey);
+                    if (!string.Equals(storedText, payloadText, StringComparison.Ordinal))
                     {
                         skippedObjects.Add(new JObject
                         {
                             ["guid"] = rhinoObject.Id.ToString(),
                             ["layer_name"] = layer.FullPath,
-                            ["reason"] = "Failed to commit object attributes."
+                            ["reason"] = "Object attributes did not persist after commit."
                         });
                         continue;
                     }

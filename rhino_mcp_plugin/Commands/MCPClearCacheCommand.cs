@@ -87,13 +87,23 @@ namespace RhinoMCPModPlugin.Commands
                 obj.Attributes.DeleteUserString(PoseStorageKey);
                 obj.Attributes.DeleteUserString(PoseModeStorageKey);
                 obj.Attributes.DeleteUserString(ObbStorageKey);
-                if (obj.CommitChanges())
+                obj.CommitChanges();
+
+                // CommitChanges returns false for a successful attribute write whenever
+                // Rhino decides the change needs no new undo record, so counting on it here
+                // reports cleared objects as failures. Confirm against the document.
+                var after = doc.Objects.FindId(obj.Id)?.Attributes;
+                var stillCached = after == null ||
+                    !string.IsNullOrWhiteSpace(after.GetUserString(PoseStorageKey)) ||
+                    !string.IsNullOrWhiteSpace(after.GetUserString(PoseModeStorageKey)) ||
+                    !string.IsNullOrWhiteSpace(after.GetUserString(ObbStorageKey));
+                if (stillCached)
                 {
-                    cleared++;
+                    failed++;
                 }
                 else
                 {
-                    failed++;
+                    cleared++;
                 }
             }
 

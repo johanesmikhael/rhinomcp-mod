@@ -15,7 +15,9 @@ namespace RhinoMCPModPlugin;
 internal static class MCPConnectivityGraphStore
 {
     public const string DocumentStringKey = "rhinomcp-mod:connectivity-graph";
-    private const int SchemaVersion = 1;
+    // v2 adds candidate/limit/truncation stats. v1 payloads are rejected rather than
+    // loaded, so a restored graph can never under-report truncation.
+    private const int SchemaVersion = 2;
 
     public static bool TryLoad(RhinoDoc doc, string fingerprint, out MCPConnectivityGraph graph)
     {
@@ -82,7 +84,13 @@ internal static class MCPConnectivityGraphStore
                 });
             }
 
-            graph = new MCPConnectivityGraph(nodes, edges, tolerance);
+            graph = new MCPConnectivityGraph(nodes, edges, tolerance)
+            {
+                CandidateCount = payload.Value<int?>("cc") ?? nodes.Count,
+                ExaminedCount = payload.Value<int?>("ec") ?? nodes.Count,
+                NodeLimit = payload.Value<int?>("nl") ?? 0,
+                Truncated = payload.Value<bool?>("tr") ?? false
+            };
             return true;
         }
         catch (Exception)
@@ -91,13 +99,13 @@ internal static class MCPConnectivityGraphStore
         }
     }
 
-    public static void Save(RhinoDoc doc, MCPConnectivityGraph graph, string fingerprint)
+    /// <summary>
+    /// Builds the node/edge JSON that both the stored graph and the stability evaluator
+    /// consume. Exposed so a freshly computed (and possibly scoped) graph can be handed
+    /// straight to the evaluator without a round trip through document text.
+    /// </summary>
+    public static JObject BuildGraphPayload(RhinoDoc doc, MCPConnectivityGraph graph)
     {
-        if (doc == null || graph == null || string.IsNullOrEmpty(fingerprint))
-        {
-            return;
-        }
-
         var nodes = new JArray();
         foreach (var node in graph.Nodes)
         {
@@ -146,14 +154,28 @@ internal static class MCPConnectivityGraphStore
             edges.Add(new JArray(edge.A, edge.B, contact.X, contact.Y, contact.Z));
         }
 
-        var payload = new JObject
+        return new JObject
         {
-            ["v"] = SchemaVersion,
-            ["fp"] = fingerprint,
             ["tol"] = graph.Tolerance,
+            ["cc"] = graph.CandidateCount,
+            ["ec"] = graph.ExaminedCount,
+            ["nl"] = graph.NodeLimit,
+            ["tr"] = graph.Truncated,
             ["n"] = nodes,
             ["e"] = edges
         };
+    }
+
+    public static void Save(RhinoDoc doc, MCPConnectivityGraph graph, string fingerprint)
+    {
+        if (doc == null || graph == null || string.IsNullOrEmpty(fingerprint))
+        {
+            return;
+        }
+
+        var payload = BuildGraphPayload(doc, graph);
+        payload["v"] = SchemaVersion;
+        payload["fp"] = fingerprint;
 
         try
         {

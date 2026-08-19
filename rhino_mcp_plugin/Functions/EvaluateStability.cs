@@ -19,7 +19,10 @@ public partial class RhinoMCPModFunctions
     public const string AfterEvaluationKey = "rhinomcp.after_eva.v1";
     public const string EvaluationMode = "single_rigid_assembly";
 
-    public const int DefaultCurrentStep = 50;
+    // Raised from 50: a toppling assembly has barely started moving after 50 iterations,
+    // so the old default reported collapses as stable. Early exit on settled or clearly
+    // collapsed motion keeps the common cases from paying for the larger budget.
+    public const int DefaultCurrentStep = 2000;
     public const double DefaultStabilityThresholdMeters = 0.01;
     public const double DefaultRigidStrength = 10000.0;
     public const double DefaultFloorStrength = 1000.0;
@@ -29,6 +32,39 @@ public partial class RhinoMCPModFunctions
     // settling. Keeping it at a tenth leaves the rest of the budget for real motion, while
     // staying clear of the ~1 mm residual that rigid-body compliance contributes anyway.
     public const double AutoFloorPenetrationFraction = 10.0;
+
+    // RigidBody2 and Floor2 are blended by weight, so whichever goal weighs more wins
+    // where they disagree. The floor is sized from the assembly's mass, so a fixed rigid
+    // strength is outweighed by every assembly heavier than a few kilograms: the floor
+    // then reshapes the body it is meant to support, and a sound structure settles and
+    // tilts its way past the stability threshold. Keep the rigid goal dominant by
+    // deriving it from whatever floor strength is actually in force.
+    // The floor calibration in StabilityUnitMath was measured at floor_strength 1000
+    // against the fixed rigid default of 10000 - a ratio of 10. Auto-sizing the floor from
+    // mass without moving the rigid goal with it is what pushed the pair three orders of
+    // magnitude out of that regime, so track the ratio the calibration actually assumed.
+    public const double AutoRigidFloorRatio = 10.0;
+
+    // Motion-history sampling. The verdict comes from the trend across a run, so the run
+    // needs enough samples to have a trend at all.
+    public const int MotionSampleCount = 32;
+    public const double SettledEpsilonMeters = 1e-7;
+    public const double DivergenceGrowthMargin = 1.05;
+    public const double CollapseThresholdFactor = 10.0;
+
+    // Cap the gap between samples so the settled-motion exit does not inherit the step
+    // budget: tying the interval to current_step meant a large budget also postponed the
+    // exit that makes the large budget affordable. A sound assembly now leaves after
+    // MinSettledSamples * MaxSampleInterval steps whatever the cap is set to.
+    // A settling assembly sinks straight down into the soft floor; a failing one rotates.
+    // Rotation is therefore the signal, and floor penetration is not - which is what lets
+    // the floor stay soft enough for gravity to act. One degree is far above the numerical
+    // noise of a resting body (measured 0.000 deg) and far below a real topple (32.9 deg).
+    public const double DefaultRotationThresholdDegrees = 1.0;
+
+    public const int MaxSampleInterval = 25;
+    public const int MinSettledSamples = 8;
+    public const double MaxAutoRigidStrength = 1e12;
     public const double DefaultGravity = 9.80665;
     public const double DefaultAssignToleranceMeters = 1e-6;
     public const double DefaultSolverThresholdMeters = 0.001;
@@ -54,7 +90,7 @@ public partial class RhinoMCPModFunctions
 
             var unitContext = StabilityUnits.Create(doc.ModelUnitSystem);
 
-            var graph = ReadGraph(parameters?["graph"], doc);
+            var graph = ReadGraph(parameters, doc);
             var nodes = graph["n"] as JArray;
             if (nodes == null)
             {
@@ -161,8 +197,6 @@ public partial class RhinoMCPModFunctions
                 unitContext.FromMeters(DefaultStabilityThresholdMeters),
                 0.0,
                 inclusiveMinimum: true);
-            var rigidStrength = ReadFiniteParameter(
-                parameters, "rigid_strength", DefaultRigidStrength, 0.0, inclusiveMinimum: false);
             var floorZ = ReadFiniteParameter(parameters, "floor_z", DefaultFloorZ);
             var gravity = ReadFiniteParameter(
                 parameters, "gravity", DefaultGravity, 0.0, inclusiveMinimum: true);
@@ -173,15 +207,28 @@ public partial class RhinoMCPModFunctions
             // so that settling stays within a small fraction of the threshold.
             var totalMassKilograms = stabilityNodes.Sum(node => node.MassKilograms);
             var stabilityThresholdMeters = stabilityThreshold * unitContext.LengthToMeters;
+            // Kangaroo blends goals by weight, and gravity is a Unary of weight 1 per vertex.
+            // Sizing the floor from mass pushed its weight into the millions, which divided
+            // gravity away and froze the assembly: a structure whose centre of mass sat
+            // 908 mm outside its support still reported as settled. The floor therefore
+            // stays at the strength the penetration coefficient was calibrated against.
+            // Settling is deep here, but it is pure translation and the verdict ignores it.
             var floorStrengthIsAuto = parameters?["floor_strength"] == null;
             var floorStrength = floorStrengthIsAuto
-                ? StabilityUnits.AutoFloorStrength(
-                    totalMassKilograms,
-                    gravity,
-                    stabilityThresholdMeters / AutoFloorPenetrationFraction,
-                    DefaultFloorStrength)
+                ? DefaultFloorStrength
                 : ReadFiniteParameter(
                     parameters, "floor_strength", DefaultFloorStrength, 0.0, inclusiveMinimum: false);
+
+            // Sized after the floor, and from the floor, for the reason given on
+            // AutoRigidFloorRatio. An explicit rigid_strength still wins outright, so a
+            // caller can deliberately study a compliant assembly.
+            var rigidStrengthIsAuto = parameters?["rigid_strength"] == null;
+            var rigidStrength = rigidStrengthIsAuto
+                ? Math.Min(
+                    Math.Max(floorStrength * AutoRigidFloorRatio, DefaultRigidStrength),
+                    MaxAutoRigidStrength)
+                : ReadFiniteParameter(
+                    parameters, "rigid_strength", DefaultRigidStrength, 0.0, inclusiveMinimum: false);
             var assignTol = ReadFiniteParameter(
                 parameters,
                 "assign_tol",
@@ -230,6 +277,8 @@ public partial class RhinoMCPModFunctions
             graph["total_mass_kg"] = totalMassKilograms;
             graph["floor_strength"] = floorStrength;
             graph["floor_strength_auto"] = floorStrengthIsAuto;
+            graph["rigid_strength"] = rigidStrength;
+            graph["rigid_strength_auto"] = rigidStrengthIsAuto;
             graph["floor_z_m"] = unitContext.ToMeters(floorZ);
             graph["unit_warnings"] = unitWarnings.DeepClone();
             var evaluationGraph = SerializableGraph(graph);
@@ -424,6 +473,19 @@ public partial class RhinoMCPModFunctions
                 ["total_mass_kg"] = totalMassKilograms,
                 ["floor_strength"] = floorStrength,
                 ["floor_strength_auto"] = floorStrengthIsAuto,
+                // Reported for the same reason as the floor pair: the rigid strength is
+                // now derived rather than fixed, so a result cannot be explained without
+                // knowing which value the solver actually used.
+                ["rigid_strength"] = rigidStrength,
+                ["rigid_strength_auto"] = rigidStrengthIsAuto,
+                // The verdict now rests on the motion trend, so the trend and the step
+                // count it was measured over have to travel with the result; without them
+                // a caller cannot tell a settled assembly from an under-run one.
+                ["rotation_deg"] = graph["rotation_deg"],
+                ["rotation_threshold_deg"] = graph["rotation_threshold_deg"],
+                ["motion_trend"] = graph["motion_trend"],
+                ["solver_steps_run"] = graph["solver_steps_run"],
+                ["motion_samples_m"] = graph["motion_samples_m"],
                 ["floor_z_m"] = unitContext.ToMeters(floorZ),
                 ["unit_warnings"] = unitWarnings,
                 ["evaluation_graph_key"] = EvaluationGraphKey
@@ -532,11 +594,41 @@ public partial class RhinoMCPModFunctions
         return value;
     }
 
-    private static JObject ReadGraph(JToken graphToken, RhinoDoc doc)
+    /// <summary>
+    /// Resolves the graph to evaluate, in priority order: an explicit graph payload, then
+    /// a freshly computed graph when scope filters are supplied, then the graph stored in
+    /// document text. The scope path is preferred for real work because it evaluates one
+    /// assembly and cannot serve a stale graph - the stored copy is only rewritten when
+    /// someone requests an unscoped graph, so it can lag the model badly.
+    /// </summary>
+    private static JObject ReadGraph(JObject parameters, RhinoDoc doc)
     {
+        var graphToken = parameters?["graph"];
         if (graphToken is JObject graphObject)
         {
             return graphObject;
+        }
+
+        if (HasGraphScopeParameters(parameters))
+        {
+            var scope = ReadGraphScope(parameters);
+            var computed = MCPConnectivityGraphController.GetOrComputeGraph(
+                doc, persist: false, scope: scope);
+
+            if (computed.Nodes.Count == 0)
+            {
+                throw new Exception(
+                    "Connectivity graph scope matched no objects; widen layer/ids/bbox/selected.");
+            }
+
+            if (computed.Truncated)
+            {
+                throw new Exception(
+                    $"Connectivity graph is truncated ({computed.ExaminedCount} of " +
+                    $"{computed.CandidateCount} objects examined); narrow the scope before evaluating.");
+            }
+
+            return MCPConnectivityGraphStore.BuildGraphPayload(doc, computed);
         }
 
         var graphText = graphToken?.Type == JTokenType.String
@@ -566,6 +658,33 @@ public partial class RhinoMCPModFunctions
 
         return graph;
     }
+    private static bool HasGraphScopeParameters(JObject parameters)
+    {
+        if (parameters == null)
+        {
+            return false;
+        }
+
+        foreach (var name in new[] { "layer", "ids", "bbox", "selected" })
+        {
+            var token = parameters[name];
+            if (token == null || token.Type == JTokenType.Null)
+            {
+                continue;
+            }
+
+            // selected:false is not a scope request, it is the absence of one.
+            if (name == "selected" && token.Type == JTokenType.Boolean && !token.Value<bool>())
+            {
+                continue;
+            }
+
+            return true;
+        }
+
+        return false;
+    }
+
     private static void ClearAfterEvaluationCache(RhinoDoc doc)
     {
         if (doc == null)
@@ -811,13 +930,84 @@ public partial class RhinoMCPModFunctions
         var globalP0 = tracking0.GlobalIndex;
         var globalP1 = tracking1.GlobalIndex;
         var globalP2 = tracking2.GlobalIndex;
+
+        // Sample how far the assembly has moved as the run proceeds, rather than reading
+        // the displacement once at the end. A settling structure's motion decays toward
+        // zero; a toppling one accelerates. Judged by a single end-of-run number the two
+        // are indistinguishable, because a slow topple sampled early simply looks small -
+        // which is exactly how an assembly whose centre of mass sits outside its support
+        // came back "stable" at the old 50-step default.
+        var motionSamples = new List<double>();
+        var sampleInterval = Math.Clamp(currentStep / MotionSampleCount, 1, MaxSampleInterval);
+        var stepsRun = 0;
+
+        double CurrentMotionMeters()
+        {
+            var sampled = physicalSystem.GetPositionArray();
+            if (globalP0 >= sampled.Length || globalP1 >= sampled.Length || globalP2 >= sampled.Length)
+            {
+                return 0.0;
+            }
+
+            return Math.Max(
+                sampled[globalP0].DistanceTo(tracking0.Point),
+                Math.Max(
+                    sampled[globalP1].DistanceTo(tracking1.Point),
+                    sampled[globalP2].DistanceTo(tracking2.Point)));
+        }
+
         for (var step = 0; step < currentStep; step++)
         {
             for (var subStep = 0; subStep < solverSubsteps; subStep++)
             {
                 physicalSystem.Step(goals, true, solverThresholdMeters);
             }
+
+            stepsRun = step + 1;
+            if (stepsRun % sampleInterval != 0 && stepsRun != currentStep)
+            {
+                continue;
+            }
+
+            var motion = CurrentMotionMeters();
+            motionSamples.Add(motion);
+
+            // No displacement-based early exit. With the floor soft enough for gravity to
+            // act, a sound assembly settles hundreds of millimetres into it, so any cutoff
+            // that trips on distance fires long before rotation - the actual signal - has
+            // developed. Stepping costs well under a millisecond, so the run simply
+            // continues until motion flattens or the budget is spent.
+
+            // Equally, stop once motion has genuinely stopped: three consecutive samples
+            // that add essentially nothing mean the structure has settled. Require a
+            // minimum sample count first, because the initial settling into the floor
+            // decays on its own and can briefly look like rest even while a slower topple
+            // is building underneath it.
+            if (motionSamples.Count >= MinSettledSamples)
+            {
+                var settled = true;
+                for (var back = 0; back < 3; back++)
+                {
+                    var index = motionSamples.Count - 1 - back;
+                    var delta = Math.Abs(motionSamples[index] - motionSamples[index - 1]);
+                    if (delta > SettledEpsilonMeters * (1.0 + motionSamples[index]))
+                    {
+                        settled = false;
+                        break;
+                    }
+                }
+
+                if (settled)
+                {
+                    break;
+                }
+            }
         }
+
+        var diverging = IsDivergingMotion(motionSamples);
+        graph["motion_trend"] = diverging ? "diverging" : "settling";
+        graph["motion_samples_m"] = new JArray(motionSamples.Select(value => (object)value).ToArray());
+        graph["solver_steps_run"] = stepsRun;
 
         var positions = physicalSystem.GetPositionArray();
         if (globalP0 < 0 || globalP1 < 0 || globalP2 < 0 ||
@@ -852,7 +1042,38 @@ public partial class RhinoMCPModFunctions
             finalXform,
             stabilityThreshold,
             lengthToMeters,
+            diverging,
             graph);
+    }
+
+    /// <summary>
+    /// Classifies a motion history as settling or diverging by comparing how much the
+    /// assembly moved during the final quarter of the run against the quarter before it.
+    /// Growth means the motion is still accelerating, which for a body under gravity alone
+    /// means it is falling or toppling rather than coming to rest.
+    /// </summary>
+    private static bool IsDivergingMotion(List<double> samples)
+    {
+        if (samples == null || samples.Count < 4)
+        {
+            return false;
+        }
+
+        var quarter = Math.Max(1, samples.Count / 4);
+        var lastStart = samples.Count - quarter;
+        var previousStart = Math.Max(0, lastStart - quarter);
+
+        var lastGrowth = samples[samples.Count - 1] - samples[lastStart - 1];
+        var previousGrowth = samples[lastStart - 1] - samples[previousStart];
+        if (!double.IsFinite(lastGrowth) || !double.IsFinite(previousGrowth))
+        {
+            return false;
+        }
+
+        // A settling assembly's growth decays; require a clear margin so that solver noise
+        // on an essentially static body is not read as collapse.
+        return lastGrowth > previousGrowth * DivergenceGrowthMargin &&
+            lastGrowth > SettledEpsilonMeters;
     }
 
     private static bool RecordNodeTransforms(
@@ -860,6 +1081,7 @@ public partial class RhinoMCPModFunctions
         Transform xform,
         double stabilityThreshold,
         double lengthToMeters,
+        bool diverging,
         JObject graph)
     {
         var maxDisplacement = 0.0;
@@ -906,12 +1128,34 @@ public partial class RhinoMCPModFunctions
 
         var maxDisplacementMeters = maxDisplacement * lengthToMeters;
         var stabilityThresholdMeters = stabilityThreshold * lengthToMeters;
-        graph["stable"] = maxDisplacementMeters <= stabilityThresholdMeters;
+
+        // The soft floor means a sound assembly still sinks a long way, so displacement
+        // alone cannot separate settling from collapse - a stable pad sank 342 mm while a
+        // toppling deck moved 2786 mm, and the gap between those is contact area, not
+        // stability. Rotation does separate them cleanly: the pad turned 0.000 deg, the
+        // deck 32.9 deg about the edge of its supports.
+        var rotationDegrees = RotationDegreesFromTransform(xform);
+        graph["rotation_deg"] = rotationDegrees;
+        graph["rotation_threshold_deg"] = DefaultRotationThresholdDegrees;
+        // Diverging motion is a collapse whatever the pose happens to read at the moment
+        // the run stopped, so it overrides the rotation comparison outright.
+        graph["stable"] = !diverging && rotationDegrees <= DefaultRotationThresholdDegrees;
         graph["stability_threshold"] = stabilityThreshold;
         graph["stability_threshold_m"] = stabilityThresholdMeters;
         graph["max_displacement"] = maxDisplacement;
         graph["max_displacement_m"] = maxDisplacementMeters;
         return graph["stable"].Value<bool>();
+    }
+
+    /// <summary>
+    /// Rotation magnitude of a rigid transform, in degrees, from the trace of its linear
+    /// part. Reported on its own because it, not displacement, decides the verdict.
+    /// </summary>
+    private static double RotationDegreesFromTransform(Transform xform)
+    {
+        var cosAngle = (xform.M00 + xform.M11 + xform.M22 - 1.0) * 0.5;
+        cosAngle = Math.Max(-1.0, Math.Min(1.0, cosAngle));
+        return RhinoMath.ToDegrees(Math.Acos(cosAngle));
     }
 
     private static JObject RotationFromTransform(Transform xform)

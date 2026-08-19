@@ -9,9 +9,9 @@ from rhinomcp.server import mcp
 
 @mcp.tool()
 async def evaluate_stability(
-    current_step: int = 50,
+    current_step: int | None = None,
     stability_threshold: float | None = None,
-    rigid_strength: float = 10000.0,
+    rigid_strength: float | None = None,
     floor_strength: float | None = None,
     floor_z: float = 0.0,
     gravity: float = 9.80665,
@@ -20,6 +20,11 @@ async def evaluate_stability(
     solver_substeps: int = 1,
     display: bool = False,
     graph: str | dict[str, Any] | None = None,
+    layer: str | list[str] | None = None,
+    ids: list[str] | None = None,
+    bbox: list[list[float]] | None = None,
+    bbox_mode: str = "intersects",
+    selected: bool = False,
 ) -> dict[str, Any]:
     """Experimentally evaluate the active model as one welded rigid assembly.
 
@@ -29,11 +34,18 @@ async def evaluate_stability(
     from the active document.
 
     Args:
-        current_step: Number of solver steps to run.
+        current_step: Number of solver steps to run. When omitted, Rhino uses a
+            budget large enough for a collapse to develop; a short run makes a
+            toppling assembly look stationary and so reads as stable. The run
+            exits early once motion settles or clearly diverges.
         stability_threshold: Maximum displacement considered stable, in the
             active Rhino document's length unit. When omitted, Rhino converts
             the canonical 0.01 m default to document units.
-        rigid_strength: Kangaroo rigid-body goal strength.
+        rigid_strength: Kangaroo rigid-body goal strength. When omitted, Rhino
+            sizes it above the floor strength. The two goals are blended by
+            weight, so a rigid strength below the floor lets the floor deform
+            the assembly it is supporting and a sound structure reads as
+            unstable. Pass a value only to study a deliberately compliant body.
         floor_strength: Kangaroo floor-collision goal strength. When omitted,
             Rhino sizes it from the assembly's total mass so that settling into
             the floor stays within a tenth of the stability threshold; a sound
@@ -46,14 +58,26 @@ async def evaluate_stability(
             omitted, Rhino converts the canonical 0.001 m default.
         solver_substeps: Kangaroo substeps per solver step.
         display: Cache evaluated geometry in Rhino for display when true.
-        graph: Optional connectivity graph JSON. When omitted, use the graph
-            stored in the active Rhino document.
+        graph: Optional connectivity graph JSON. Overrides every other source.
+        layer: Layer name, or list of names, to evaluate.
+        ids: Object GUIDs to evaluate.
+        bbox: World box filter [[min_x,min_y,min_z],[max_x,max_y,max_z]].
+        bbox_mode: "intersects" (default), "contains_center", or "contained".
+        selected: When True, evaluate the current Rhino selection.
+
+    Scope the evaluation with layer/ids/bbox/selected whenever the document holds
+    more than the assembly under test. Scoping does two things: it welds only the
+    parts you name, instead of every object in the file, and it recomputes the
+    graph on the spot. With no scope and no explicit graph the stored
+    document-text graph is used, which is only rewritten on an unscoped
+    get_connectivity_graph call and so can lag the model badly.
+
+    A scoped request fails rather than guessing if the scope matches nothing, or
+    if the graph would be truncated.
     """
     from rhinomcp.server import get_rhino_connection
 
     params: dict[str, Any] = {
-        "current_step": current_step,
-        "rigid_strength": rigid_strength,
         "floor_z": floor_z,
         "gravity": gravity,
         "solver_substeps": solver_substeps,
@@ -63,12 +87,25 @@ async def evaluate_stability(
         params["stability_threshold"] = stability_threshold
     if floor_strength is not None:
         params["floor_strength"] = floor_strength
+    if rigid_strength is not None:
+        params["rigid_strength"] = rigid_strength
+    if current_step is not None:
+        params["current_step"] = current_step
     if assign_tol is not None:
         params["assign_tol"] = assign_tol
     if threshold is not None:
         params["threshold"] = threshold
     if graph is not None:
         params["graph"] = json.dumps(graph, separators=(",", ":")) if isinstance(graph, dict) else graph
+    if layer is not None:
+        params["layer"] = layer
+    if ids:
+        params["ids"] = ids
+    if bbox is not None:
+        params["bbox"] = bbox
+        params["bbox_mode"] = bbox_mode
+    if selected:
+        params["selected"] = True
 
     rhino = get_rhino_connection()
     return rhino.send_command("evaluate_stability", params)

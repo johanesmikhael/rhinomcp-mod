@@ -1,3 +1,5 @@
+using System;
+using System.Linq;
 using Newtonsoft.Json.Linq;
 using Rhino;
 using Rhino.Commands;
@@ -46,6 +48,31 @@ namespace RhinoMCPModPlugin.Commands
                 $"Mass calculation finished. Updated {assignedCount} object(s); " +
                 $"skipped {skippedLayerCount} layer(s) and {skippedObjectCount} object(s). " +
                 $"Model units: {result["model_unit_system"]}.");
+
+            // A bare skip count cannot be acted on: "skipped 77" reads like a filter doing
+            // its job when it can equally mean every object failed for one fixable reason.
+            // Report the reasons, and which layers they landed on, so the count explains
+            // itself without a second run.
+            if (skippedObjectCount > 0 && result["skipped_objects"] is JArray skipped)
+            {
+                var byReason = skipped
+                    .OfType<JObject>()
+                    .GroupBy(entry => entry["reason"]?.ToString() ?? "Unspecified.")
+                    .OrderByDescending(group => group.Count());
+                foreach (var group in byReason)
+                {
+                    var reasonLayers = group
+                        .Select(entry => entry["layer_name"]?.ToString())
+                        .Where(name => !string.IsNullOrWhiteSpace(name))
+                        .Distinct()
+                        .OrderBy(name => name, StringComparer.Ordinal)
+                        .ToList();
+                    var layerList = reasonLayers.Count == 0
+                        ? string.Empty
+                        : $" On layer(s): {string.Join(", ", reasonLayers)}.";
+                    RhinoApp.WriteLine($"  Skipped {group.Count()} object(s): {group.Key}{layerList}");
+                }
+            }
             if (result["unit_warnings"] is JArray warnings)
             {
                 foreach (var warning in warnings)

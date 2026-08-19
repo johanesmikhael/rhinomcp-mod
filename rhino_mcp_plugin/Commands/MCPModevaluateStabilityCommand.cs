@@ -1,3 +1,6 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
 using Newtonsoft.Json.Linq;
 using Rhino;
 using Rhino.Commands;
@@ -20,6 +23,86 @@ namespace RhinoMCPModPlugin.Commands
 
         public override string EnglishName => "mcpmodevaluatestability";
 
+
+        /// <summary>
+        /// Captures the set of objects to evaluate. Honours pre-selection; otherwise
+        /// prompts. "Pinned" reuses the scope the graph display is showing, so what you
+        /// were just looking at is what gets solved.
+        /// </summary>
+        private static bool TryReadScope(RhinoDoc doc, JObject parameters, out string label)
+        {
+            label = "whole document";
+
+            var getObject = new GetObject();
+            getObject.SetCommandPrompt("Select objects to evaluate (Enter = whole document)");
+            var allOption = getObject.AddOption("All");
+            var pinnedOption = getObject.AddOption("Pinned");
+            getObject.EnablePreSelect(true, true);
+            getObject.EnablePostSelect(true);
+            getObject.SubObjectSelect = false;
+            getObject.GroupSelect = true;
+            getObject.AcceptNothing(true);
+
+            var result = getObject.GetMultiple(1, 0);
+
+            if (result == GetResult.Option)
+            {
+                var index = getObject.Option()?.Index ?? -1;
+                if (index == allOption)
+                {
+                    return true;
+                }
+
+                if (index == pinnedOption)
+                {
+                    var pinned = MCPConnectivityGraphController.PinnedScope;
+                    if (pinned?.Ids == null || pinned.Ids.Count == 0)
+                    {
+                        RhinoApp.WriteLine(
+                            "No pinned graph scope; run mcpmodgraph with a selection first.");
+                        return false;
+                    }
+
+                    parameters["ids"] = new JArray(pinned.Ids.Select(id => (object)id.ToString()).ToArray());
+                    label = $"pinned graph scope ({pinned.Ids.Count} objects)";
+                    return true;
+                }
+
+                return false;
+            }
+
+            if (result == GetResult.Nothing)
+            {
+                return true;
+            }
+
+            if (result != GetResult.Object)
+            {
+                return false;
+            }
+
+            var ids = new JArray();
+            var count = 0;
+            for (var i = 0; i < getObject.ObjectCount; i++)
+            {
+                var objectId = getObject.Object(i)?.ObjectId ?? Guid.Empty;
+                if (objectId != Guid.Empty)
+                {
+                    ids.Add(objectId.ToString());
+                    count++;
+                }
+            }
+
+            if (count == 0)
+            {
+                return true;
+            }
+
+            parameters["ids"] = ids;
+            label = $"{count} selected objects";
+            return true;
+        }
+
         protected override Result RunCommand(RhinoDoc doc, RunMode mode)
         {
             if (!StabilityUnits.TryCreate(doc.ModelUnitSystem, out var unitContext, out var unitError))
@@ -30,6 +113,16 @@ namespace RhinoMCPModPlugin.Commands
 
             var handler = new RhinoMCPModFunctions();
             var parameters = new JObject();
+
+            // Scope first, so pre-selected objects are picked up before any other prompt.
+            // Evaluating the whole document welds every object in the file into one body,
+            // which is almost never what you want once a file holds more than one thing.
+            if (!TryReadScope(doc, parameters, out var scopeLabel))
+            {
+                return Result.Cancel;
+            }
+
+            RhinoApp.WriteLine($"Stability scope: {scopeLabel}.");
             var defaultStabilityThreshold =
                 unitContext.FromMeters(DefaultStabilityThresholdMeters);
             var defaultAssignTolerance =
@@ -55,9 +148,10 @@ namespace RhinoMCPModPlugin.Commands
             {
                 parameters["current_step"] = DefaultCurrentStep;
                 parameters["stability_threshold"] = defaultStabilityThreshold;
-                parameters["rigid_strength"] = DefaultRigidStrength;
-                // Left unset on purpose: omitting floor_strength lets the solver size the
-                // floor from the assembly's mass.
+                // Both strengths are left unset on purpose: omitting floor_strength lets
+                // the solver size the floor from the assembly's mass, and omitting
+                // rigid_strength then keeps the rigid goal above that floor. Pinning
+                // either one alone is what makes a sound assembly read as unstable.
                 parameters["floor_z"] = DefaultFloorZ;
                 parameters["gravity"] = DefaultGravity;
                 parameters["assign_tol"] = defaultAssignTolerance;
@@ -70,7 +164,7 @@ namespace RhinoMCPModPlugin.Commands
                 {
                     "Current step",
                     $"Stability threshold ({doc.ModelUnitSystem})",
-                    "Rigid strength",
+                    "Rigid strength (0 = auto from floor)",
                     "Floor strength (0 = auto from mass)",
                     $"Floor Z ({doc.ModelUnitSystem})",
                     "Gravity (m/s²)",
@@ -83,7 +177,7 @@ namespace RhinoMCPModPlugin.Commands
                 {
                     DefaultCurrentStep,
                     defaultStabilityThreshold,
-                    DefaultRigidStrength,
+                    0.0,
                     0.0,
                     DefaultFloorZ,
                     DefaultGravity,
@@ -112,9 +206,14 @@ namespace RhinoMCPModPlugin.Commands
 
                 parameters["current_step"] = (int)values[0];
                 parameters["stability_threshold"] = values[1];
-                parameters["rigid_strength"] = values[2];
-                // Zero means auto: leave the parameter out so the solver sizes the floor
-                // from the assembly's mass.
+                // Zero means auto for both strengths: leave the parameter out so the
+                // solver sizes the floor from the assembly's mass and the rigid goal
+                // from the floor.
+                if (values[2] > 0.0)
+                {
+                    parameters["rigid_strength"] = values[2];
+                }
+
                 if (values[3] > 0.0)
                 {
                     parameters["floor_strength"] = values[3];
@@ -163,10 +262,20 @@ namespace RhinoMCPModPlugin.Commands
                 RhinoApp.WriteLine(
                     $"max_displacement: {result["max_displacement"]} {result["document_length_unit"]} " +
                     $"({result["max_displacement_m"]} m)");
+                // Rotation decides the verdict, so printing only the displacement leaves the
+                // reader unable to see why a run with tiny displacement came back unstable.
+                RhinoApp.WriteLine(
+                    $"rotation: {result["rotation_deg"]} deg " +
+                    $"(threshold {result["rotation_threshold_deg"]} deg), " +
+                    $"motion_trend: {result["motion_trend"]}, " +
+                    $"steps_run: {result["solver_steps_run"]}");
                 var floorStrengthSource =
                     result["floor_strength_auto"]?.Value<bool>() == true ? "auto from mass" : "explicit";
+                var rigidStrengthSource =
+                    result["rigid_strength_auto"]?.Value<bool>() == true ? "auto from floor" : "explicit";
                 RhinoApp.WriteLine(
                     $"floor_strength: {result["floor_strength"]} ({floorStrengthSource}), " +
+                    $"rigid_strength: {result["rigid_strength"]} ({rigidStrengthSource}), " +
                     $"total_mass: {result["total_mass_kg"]} kg");
                 if (result["unit_warnings"] is JArray warnings)
                 {

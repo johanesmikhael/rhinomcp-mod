@@ -17,6 +17,8 @@ internal sealed class MCPConnectivityGraphConduit : DisplayConduit
 {
     private readonly Color _edgeColor = Color.FromArgb(180, 255, 120, 40);
     private readonly Color _nodeColor = Color.FromArgb(240, 80, 180, 255);
+    private readonly Color _contactColor = Color.FromArgb(255, 255, 240, 90);
+    private readonly Color _isolatedColor = Color.FromArgb(255, 255, 60, 60);
 
     protected override void DrawForeground(DrawEventArgs e)
     {
@@ -26,50 +28,249 @@ internal sealed class MCPConnectivityGraphConduit : DisplayConduit
             return;
         }
 
-        var graph = MCPConnectivityGraphController.GetOrComputeGraph(doc, persist: false);
+        // Scope is pinned by the mcpmodgraph command, not read from the live selection:
+        // you select, run the command, and the graph stays put while you deselect and
+        // orbit. With no pinned scope the whole document is graphed, which will truncate.
+        var scope = MCPConnectivityGraphController.PinnedScope ?? GraphScope.All;
+        var graph = MCPConnectivityGraphController.GetOrComputeGraph(doc, persist: false, scope: scope);
+        var scopeLabel = scope.IsWholeDocument
+            ? "whole document"
+            : $"pinned {scope.Ids?.Count ?? 0} objects";
+
         if (graph.Nodes.Count == 0)
         {
-            e.Display.Draw2dText("MCP Graph ON | no visible objects", Color.White, new Point2d(20, 40), false, 14);
+            e.Display.Draw2dText(
+                $"MCP Graph ON | scope: {scopeLabel} | nothing in scope",
+                Color.White,
+                new Point2d(20, 40),
+                false,
+                14);
             return;
+        }
+
+        var degree = new int[graph.Nodes.Count];
+        foreach (var edge in graph.Edges)
+        {
+            degree[edge.A]++;
+            degree[edge.B]++;
         }
 
         foreach (var edge in graph.Edges)
         {
-            var a = graph.Nodes[edge.A];
-            var b = graph.Nodes[edge.B];
-            e.Display.DrawLine(a.Center, b.Center, _edgeColor, 2);
+            var a = graph.Nodes[edge.A].Center;
+            var b = graph.Nodes[edge.B].Center;
+            var contact = edge.ContactPoint;
+
+            if (contact.IsValid)
+            {
+                // Elbow through the contact point: shows which parts meet AND where they
+                // touch. A centre-to-centre line hides the location, which is the part
+                // that actually matters when checking a joint.
+                e.Display.DrawLine(a, contact, _edgeColor, 2);
+                e.Display.DrawLine(contact, b, _edgeColor, 2);
+                e.Display.DrawPoint(contact, PointStyle.X, 5, _contactColor);
+            }
+            else
+            {
+                e.Display.DrawLine(a, b, _edgeColor, 2);
+            }
         }
 
-        foreach (var node in graph.Nodes)
+        var isolated = 0;
+        for (var i = 0; i < graph.Nodes.Count; i++)
         {
-            e.Display.DrawPoint(node.Center, PointStyle.RoundSimple, 3, _nodeColor);
+            var connected = degree[i] > 0;
+            if (!connected)
+            {
+                isolated++;
+            }
+
+            e.Display.DrawPoint(
+                graph.Nodes[i].Center,
+                connected ? PointStyle.RoundSimple : PointStyle.RoundControlPoint,
+                connected ? 3 : 6,
+                connected ? _nodeColor : _isolatedColor);
         }
 
         e.Display.Draw2dText(
-            $"MCP Graph ON | nodes: {graph.Nodes.Count} edges: {graph.Edges.Count}",
+            $"MCP Graph | scope: {scopeLabel} | nodes {graph.Nodes.Count} " +
+            $"edges {graph.Edges.Count} isolated {isolated}",
             Color.White,
             new Point2d(20, 40),
             false,
             14);
+
+        if (graph.Truncated)
+        {
+            e.Display.Draw2dText(
+                $"TRUNCATED: {graph.ExaminedCount} of {graph.CandidateCount} examined - " +
+                "select a sub-assembly to see the rest",
+                _isolatedColor,
+                new Point2d(20, 60),
+                false,
+                14);
+        }
+    }
+}
+
+/// <summary>
+/// Restricts which document objects enter the graph. Scoping happens before node
+/// collection, so the node cap applies to the scoped set rather than to the whole
+/// document - that is what makes an untruncated graph of one assembly possible.
+/// An empty scope means the whole document.
+/// </summary>
+internal sealed class GraphScope
+{
+    public static readonly GraphScope All = new();
+
+    public HashSet<Guid> Ids { get; init; }
+    public HashSet<string> Layers { get; init; }
+    public BoundingBox? Bbox { get; init; }
+    public string BboxMode { get; init; } = "intersects";
+    public bool SelectedOnly { get; init; }
+
+    public bool IsWholeDocument =>
+        Ids == null && Layers == null && Bbox == null && !SelectedOnly;
+
+    /// <summary>Stable identity of this scope, used to key caches.</summary>
+    public string Key
+    {
+        get
+        {
+            if (IsWholeDocument)
+            {
+                return "all";
+            }
+
+            var builder = new StringBuilder();
+            if (Ids != null)
+            {
+                builder.Append("ids:");
+                foreach (var id in Ids.OrderBy(x => x))
+                {
+                    builder.Append(id.ToString("N")).Append(',');
+                }
+            }
+
+            if (Layers != null)
+            {
+                builder.Append("layers:");
+                foreach (var layer in Layers.OrderBy(x => x, StringComparer.OrdinalIgnoreCase))
+                {
+                    builder.Append(layer).Append(',');
+                }
+            }
+
+            if (Bbox.HasValue)
+            {
+                var box = Bbox.Value;
+                builder.Append("bbox:")
+                    .Append(box.Min.X.ToString("R", CultureInfo.InvariantCulture)).Append(',')
+                    .Append(box.Min.Y.ToString("R", CultureInfo.InvariantCulture)).Append(',')
+                    .Append(box.Min.Z.ToString("R", CultureInfo.InvariantCulture)).Append(',')
+                    .Append(box.Max.X.ToString("R", CultureInfo.InvariantCulture)).Append(',')
+                    .Append(box.Max.Y.ToString("R", CultureInfo.InvariantCulture)).Append(',')
+                    .Append(box.Max.Z.ToString("R", CultureInfo.InvariantCulture)).Append(':')
+                    .Append(BboxMode);
+            }
+
+            if (SelectedOnly)
+            {
+                builder.Append("selected");
+            }
+
+            return builder.ToString();
+        }
+    }
+
+    public bool Matches(RhinoObject obj, BoundingBox bbox)
+    {
+        if (Ids != null && !Ids.Contains(obj.Id))
+        {
+            return false;
+        }
+
+        if (Layers != null)
+        {
+            var layerName = SafeLayerName(obj);
+            if (layerName == null || !Layers.Contains(layerName))
+            {
+                return false;
+            }
+        }
+
+        if (SelectedOnly && obj.IsSelected(false) == 0)
+        {
+            return false;
+        }
+
+        if (Bbox.HasValue && !BboxMatches(Bbox.Value, bbox, BboxMode))
+        {
+            return false;
+        }
+
+        return true;
+    }
+
+    private static string SafeLayerName(RhinoObject obj)
+    {
+        try
+        {
+            var doc = obj.Document ?? RhinoDoc.ActiveDoc;
+            return doc?.Layers[obj.Attributes.LayerIndex]?.FullPath;
+        }
+        catch (Exception)
+        {
+            return null;
+        }
+    }
+
+    private static bool ContainsPoint(BoundingBox container, Point3d point)
+    {
+        return point.X >= container.Min.X && point.X <= container.Max.X &&
+               point.Y >= container.Min.Y && point.Y <= container.Max.Y &&
+               point.Z >= container.Min.Z && point.Z <= container.Max.Z;
+    }
+
+    private static bool BboxMatches(BoundingBox query, BoundingBox candidate, string mode)
+    {
+        return mode switch
+        {
+            "contained" => ContainsPoint(query, candidate.Min) && ContainsPoint(query, candidate.Max),
+            "contains_center" => ContainsPoint(query, candidate.Center),
+            _ => query.Min.X <= candidate.Max.X && query.Max.X >= candidate.Min.X &&
+                 query.Min.Y <= candidate.Max.Y && query.Max.Y >= candidate.Min.Y &&
+                 query.Min.Z <= candidate.Max.Z && query.Max.Z >= candidate.Min.Z
+        };
     }
 }
 
 internal static class MCPConnectivityGraphBuilder
 {
-    private const int MaxNodes = 160;
+    // Runaway guard, not a working limit. With the RTree broad phase the cost is roughly
+    // linear in object count, so ordinary models are graphed whole; truncation should now
+    // be rare rather than routine. Response size on the MCP path is a separate concern -
+    // an agent facing a huge graph should scope the request, not rely on a silent cap.
+    private const int MaxNodes = 20000;
     private const int MinComponentSize = 2;
     private const double NearbyDistanceFactor = 12.0;
 
-    public static MCPConnectivityGraph Compute(RhinoDoc doc)
+    public static MCPConnectivityGraph Compute(RhinoDoc doc, GraphScope scope = null)
     {
+        scope ??= GraphScope.All;
         var tolerance = doc.ModelAbsoluteTolerance * 5.0;
-        var nodes = new List<Node>(MaxNodes);
+        // Not preallocated to MaxNodes: that is a runaway guard, not an expected size.
+        var nodes = new List<Node>();
 
-        foreach (var (obj, bbox) in EnumerateCandidates(doc))
+        // Every candidate is counted even once the cap is reached, so callers can be
+        // told the graph is partial instead of reading a truncated graph as complete.
+        var candidateCount = 0;
+        foreach (var (obj, bbox) in EnumerateCandidates(doc, scope))
         {
+            candidateCount++;
             if (nodes.Count >= MaxNodes)
             {
-                break;
+                continue;
             }
 
             nodes.Add(new Node
@@ -83,10 +284,36 @@ internal static class MCPConnectivityGraphBuilder
             });
         }
 
+        // Broad phase via RTree instead of testing every pair. The old double loop was
+        // O(n^2) - 596 objects is 177k pairs - which is the only reason a node cap was
+        // ever needed. Here each object only tests against boxes that actually overlap it.
         var edges = new List<Edge>();
+        var searchSlack = tolerance * 4.0;
+
+        var tree = new RTree();
         for (var i = 0; i < nodes.Count; i++)
         {
-            for (var j = i + 1; j < nodes.Count; j++)
+            tree.Insert(nodes[i].BoundingBox, i);
+        }
+
+        var candidates = new List<int>();
+        for (var i = 0; i < nodes.Count; i++)
+        {
+            var searchBox = nodes[i].BoundingBox;
+            searchBox.Inflate(searchSlack);
+
+            candidates.Clear();
+            var current = i;
+            tree.Search(searchBox, (sender, args) =>
+            {
+                // Only j > i, so each pair is considered once.
+                if (args.Id > current)
+                {
+                    candidates.Add(args.Id);
+                }
+            });
+
+            foreach (var j in candidates)
             {
                 if (!TryGetContactPoint(nodes[i], nodes[j], tolerance, out var contactPoint))
                 {
@@ -98,7 +325,13 @@ internal static class MCPConnectivityGraphBuilder
         }
 
         var nearbyDistance = tolerance * NearbyDistanceFactor;
-        return FilterByComponentProximity(nodes, edges, nearbyDistance, MinComponentSize, tolerance);
+        var examinedCount = nodes.Count;
+        var graph = FilterByComponentProximity(nodes, edges, nearbyDistance, MinComponentSize, tolerance);
+        graph.ExaminedCount = examinedCount;
+        graph.CandidateCount = candidateCount;
+        graph.NodeLimit = MaxNodes;
+        graph.Truncated = candidateCount > MaxNodes;
+        return graph;
     }
 
     /// <summary>
@@ -106,27 +339,27 @@ internal static class MCPConnectivityGraphBuilder
     /// Same fingerprint =&gt; recomputing would produce the same graph, so a stored
     /// graph can be reused instead of re-running the geometry intersections.
     /// </summary>
-    public static string ComputeFingerprint(RhinoDoc doc)
+    public static string ComputeFingerprint(RhinoDoc doc, GraphScope scope = null)
     {
         if (doc == null)
         {
             return null;
         }
 
+        scope ??= GraphScope.All;
+
         var tolerance = doc.ModelAbsoluteTolerance * 5.0;
         var quantum = Math.Max(tolerance * 0.1, 1e-9);
 
         var builder = new StringBuilder();
-        builder.Append("v1|").Append(tolerance.ToString("R", CultureInfo.InvariantCulture));
+        builder.Append("v2|").Append(tolerance.ToString("R", CultureInfo.InvariantCulture))
+            .Append("|").Append(scope.Key);
 
+        // Covers every candidate, not just the first MaxNodes: a change beyond the cap
+        // still changes which objects the cap admits, so it must invalidate the cache.
         var count = 0;
-        foreach (var (obj, bbox) in EnumerateCandidates(doc))
+        foreach (var (obj, bbox) in EnumerateCandidates(doc, scope))
         {
-            if (count >= MaxNodes)
-            {
-                break;
-            }
-
             count++;
             builder.Append('|').Append(obj.Id.ToString("N"));
             AppendQuantized(builder, bbox.Min, quantum);
@@ -140,8 +373,11 @@ internal static class MCPConnectivityGraphBuilder
         return Convert.ToHexString(hash);
     }
 
-    private static IEnumerable<(RhinoObject Object, BoundingBox BoundingBox)> EnumerateCandidates(RhinoDoc doc)
+    private static IEnumerable<(RhinoObject Object, BoundingBox BoundingBox)> EnumerateCandidates(
+        RhinoDoc doc,
+        GraphScope scope)
     {
+        scope ??= GraphScope.All;
         foreach (var obj in doc.Objects)
         {
             if (obj == null || obj.IsDeleted || !obj.Visible || obj.Geometry == null)
@@ -156,6 +392,11 @@ internal static class MCPConnectivityGraphBuilder
 
             var bbox = obj.Geometry.GetBoundingBox(true);
             if (!bbox.IsValid)
+            {
+                continue;
+            }
+
+            if (!scope.Matches(obj, bbox))
             {
                 continue;
             }
@@ -553,6 +794,25 @@ internal sealed class MCPConnectivityGraph
     public IReadOnlyList<Node> Nodes { get; }
     public IReadOnlyList<Edge> Edges { get; }
     public double Tolerance { get; }
+
+    /// <summary>Objects in the document that qualified as graph candidates.</summary>
+    public int CandidateCount { get; set; }
+
+    /// <summary>
+    /// Candidates actually admitted as nodes and tested for contact, before the
+    /// component-proximity filter dropped isolated ones. Distinct from Nodes.Count,
+    /// which is the post-filter result.
+    /// </summary>
+    public int ExaminedCount { get; set; }
+
+    /// <summary>Node cap applied while collecting candidates.</summary>
+    public int NodeLimit { get; set; }
+
+    /// <summary>
+    /// True when candidates exceeded <see cref="NodeLimit"/>, so objects were never
+    /// examined and absent edges do not mean absent contact.
+    /// </summary>
+    public bool Truncated { get; set; }
 }
 
 internal struct Node
@@ -576,6 +836,7 @@ internal enum GraphCacheSource
 {
     None,
     Computed,
+    MemoryCache,
     DocumentText
 }
 
@@ -590,11 +851,19 @@ internal static class MCPConnectivityGraphController
     private static MCPConnectivityGraph _cachedGraph;
     private static GraphCacheSource _cachedSource = GraphCacheSource.None;
     private static string _cachedFingerprint;
+    private static string _cachedScopeKey;
     private static bool _cachedGraphPersisted;
     private static bool _persistQueued;
     private static RhinoDoc _pendingPersistDoc;
 
     public static bool IsEnabled => _enabled;
+
+    /// <summary>
+    /// Scope the display is pinned to, captured by the mcpmodgraph command. Null means
+    /// the whole document. Pinning rather than tracking the live selection lets the user
+    /// select, run the command, then deselect and keep looking at the same graph.
+    /// </summary>
+    public static GraphScope PinnedScope { get; set; }
 
     /// <summary>Where the graph currently held in memory came from.</summary>
     public static GraphCacheSource LastSource => _cachedSource;
@@ -629,8 +898,14 @@ internal static class MCPConnectivityGraphController
     /// Callers running inside a display pipeline pass false: modifying the document
     /// during a redraw is not safe.
     /// </param>
-    public static MCPConnectivityGraph GetOrComputeGraph(RhinoDoc doc, bool persist = true)
+    public static MCPConnectivityGraph GetOrComputeGraph(
+        RhinoDoc doc,
+        bool persist = true,
+        GraphScope scope = null)
     {
+        scope ??= GraphScope.All;
+        var scopeKey = scope.Key;
+
         lock (SyncRoot)
         {
             if (doc == null)
@@ -639,24 +914,59 @@ internal static class MCPConnectivityGraphController
                 return new MCPConnectivityGraph(Array.Empty<Node>(), Array.Empty<Edge>(), 0.0);
             }
 
-            if (_cachedGraph != null && !_dirty && _cachedDocRuntimeSerial == doc.RuntimeSerialNumber)
+            // Invalidation used to be hooked only by the display toggle, so _dirty stayed
+            // false forever for callers that never enabled the conduit and every request
+            // got the first graph ever built. Hooking here makes _dirty authoritative for
+            // every caller; it is idempotent and has no effect while the conduit is off.
+            EnsureEventsHooked();
+
+            // Only one graph is held in memory, so it is reused only for the same scope.
+            // Alternating scopes recompute rather than returning another scope's graph.
+            var sameDocument = _cachedDocRuntimeSerial == doc.RuntimeSerialNumber &&
+                string.Equals(_cachedScopeKey, scopeKey, StringComparison.Ordinal);
+
+            // The dirty flag only tracks document edits, and selection raises none of the
+            // hooked events. So it is trustworthy for the whole-document graph but not for
+            // a scoped one, where changing the selection changes the answer with no edit.
+            // Scoped requests always fall through to the fingerprint, which does see it.
+            if (_cachedGraph != null && sameDocument && !_dirty && _cachedFingerprint != null &&
+                scope.IsWholeDocument)
             {
-                // A graph first computed for the display conduit was intentionally not
-                // written to the document; persist it now that a caller allows it.
-                if (persist && !_cachedGraphPersisted && _cachedFingerprint != null)
+                // Events are wired, so a clean flag is trustworthy and the fingerprint
+                // scan can be skipped. This keeps redraws cheap.
+                if (persist && !_cachedGraphPersisted)
                 {
                     MCPConnectivityGraphStore.Save(doc, _cachedGraph, _cachedFingerprint);
                     _cachedGraphPersisted = true;
                 }
 
+                _cachedSource = GraphCacheSource.MemoryCache;
                 return _cachedGraph;
             }
 
-            var fingerprint = MCPConnectivityGraphBuilder.ComputeFingerprint(doc);
-            var currentDocumentWasInvalidated =
-                _dirty && _cachedDocRuntimeSerial == doc.RuntimeSerialNumber;
+            // Second line of defence: any document change that the events do not raise
+            // still shows up as a different fingerprint.
+            var fingerprint = MCPConnectivityGraphBuilder.ComputeFingerprint(doc, scope);
 
-            if (!currentDocumentWasInvalidated &&
+            if (_cachedGraph != null && sameDocument &&
+                string.Equals(_cachedFingerprint, fingerprint, StringComparison.Ordinal))
+            {
+                // A graph first computed for the display conduit was intentionally not
+                // written to the document; persist it now that a caller allows it.
+                if (persist && !_cachedGraphPersisted)
+                {
+                    MCPConnectivityGraphStore.Save(doc, _cachedGraph, _cachedFingerprint);
+                    _cachedGraphPersisted = true;
+                }
+
+                _dirty = false;
+                _cachedSource = GraphCacheSource.MemoryCache;
+                return _cachedGraph;
+            }
+
+            var currentDocumentWasInvalidated = _dirty && sameDocument;
+
+            if (!currentDocumentWasInvalidated && scope.IsWholeDocument &&
                 MCPConnectivityGraphStore.TryLoad(doc, fingerprint, out var storedGraph))
             {
                 _cachedGraph = storedGraph;
@@ -664,18 +974,20 @@ internal static class MCPConnectivityGraphController
                 _dirty = false;
                 _cachedSource = GraphCacheSource.DocumentText;
                 _cachedFingerprint = fingerprint;
+                _cachedScopeKey = scopeKey;
                 _cachedGraphPersisted = true;
                 return _cachedGraph;
             }
 
-            _cachedGraph = MCPConnectivityGraphBuilder.Compute(doc);
+            _cachedGraph = MCPConnectivityGraphBuilder.Compute(doc, scope);
             _cachedDocRuntimeSerial = doc.RuntimeSerialNumber;
             _dirty = false;
             _cachedSource = GraphCacheSource.Computed;
             _cachedFingerprint = fingerprint;
+            _cachedScopeKey = scopeKey;
             _cachedGraphPersisted = false;
 
-            if (persist)
+            if (persist && scope.IsWholeDocument)
             {
                 MCPConnectivityGraphStore.Save(doc, _cachedGraph, fingerprint);
                 _cachedGraphPersisted = true;
@@ -694,6 +1006,7 @@ internal static class MCPConnectivityGraphController
             _cachedGraph = null;
             _cachedSource = GraphCacheSource.None;
             _cachedFingerprint = null;
+            _cachedScopeKey = null;
             _cachedGraphPersisted = false;
             _dirty = true;
         }
