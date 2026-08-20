@@ -130,6 +130,39 @@ namespace RhinoMCPModPlugin.Commands
             var defaultSolverThreshold =
                 unitContext.FromMeters(DefaultSolverThresholdMeters);
 
+            // Which idealisation to run. Welded asks whether the whole scope tips over;
+            // Contact gives every element its own body on bearing surfaces that carry no
+            // tension, and so can fail one element rather than the assembly; Pinned joins
+            // the elements rigidly at their contact points and only finds mechanisms.
+            var getEvalMode = new GetOption();
+            getEvalMode.SetCommandPrompt("Evaluation mode");
+            var weldedEvalOption = getEvalMode.AddOption("Welded");
+            var contactEvalOption = getEvalMode.AddOption("Contact");
+            // Not "Pinned": the scope prompt already uses that word for the saved pinned
+            // selection, and the two mean entirely different things.
+            var pinnedEvalOption = getEvalMode.AddOption("PinnedJoints");
+            getEvalMode.AcceptNothing(true);
+
+            var evalModeResult = getEvalMode.Get();
+            if (evalModeResult == GetResult.Cancel)
+            {
+                return Result.Cancel;
+            }
+
+            var evalModeIndex = getEvalMode.Option()?.Index ?? -1;
+            var evaluationMode = "welded";
+            if (evalModeIndex == contactEvalOption)
+            {
+                evaluationMode = "contact";
+            }
+            else if (evalModeIndex == pinnedEvalOption)
+            {
+                evaluationMode = "pinned";
+            }
+
+            parameters["mode"] = evaluationMode;
+            var multiBody = evaluationMode != "welded";
+
             var getOption = new GetOption();
             getOption.SetCommandPrompt("Stability parameter mode");
             var defaultsOption = getOption.AddOption("Defaults");
@@ -284,7 +317,47 @@ namespace RhinoMCPModPlugin.Commands
 
                 var result = handler.EvaluateStability(parameters);
 
-            if (result["success"]?.Value<bool>() == true)
+            if (result["success"]?.Value<bool>() == true && multiBody)
+            {
+                // The multi-body result has no single assembly transform, no floor strength
+                // and no support margin, so printing the welded lines would show blanks.
+                var verdict = result["stable"]?.Value<bool>() == true ? "stable" : "unstable";
+                RhinoApp.WriteLine(
+                    $"EvaluateStability ({result["evaluation_mode"]}): {verdict}");
+                RhinoApp.WriteLine(
+                    $"bodies: {result["body_count"]}, contacts: {result["contact_count"]}, " +
+                    $"open contacts: {result["open_contacts"]}, particles: {result["particle_count"]}");
+                RhinoApp.WriteLine(
+                    $"worst body: {result["worst_body"]}");
+                RhinoApp.WriteLine(
+                    $"max body displacement: {result["max_body_displacement_m"]} m, " +
+                    $"max body rotation: {result["max_body_rotation_deg"]} deg " +
+                    $"(threshold {result["rotation_threshold_deg"]} deg)");
+                RhinoApp.WriteLine(
+                    $"motion_trend: {result["motion_trend"]}, " +
+                    $"rotation_trend: {result["rotation_trend"]}, " +
+                    $"steps_run: {result["solver_steps_run"]}");
+                var contactSource =
+                    result["contact_strength_auto"]?.Value<bool>() == true ? "auto" : "explicit";
+                RhinoApp.WriteLine(
+                    $"contact_strength: {result["contact_strength"]} ({contactSource}), " +
+                    $"friction: {result["friction"]}, " +
+                    $"total_mass: {result["total_mass_kg"]} kg");
+                if (result["bodies"] is JArray movedBodies)
+                {
+                    var worst = movedBodies
+                        .OfType<JObject>()
+                        .OrderByDescending(b => b["displacement_m"]?.Value<double>() ?? 0.0)
+                        .Take(5);
+                    foreach (var body in worst)
+                    {
+                        RhinoApp.WriteLine(
+                            $"  {body["g"]}: {body["displacement_m"]} m, " +
+                            $"{body["rotation_deg"]} deg, joints {body["joints"]}");
+                    }
+                }
+            }
+            else if (result["success"]?.Value<bool>() == true)
             {
                 var stable = result["stable"]?.Value<bool>() == true ? "stable" : "unstable";
                 RhinoApp.WriteLine($"EvaluateStability result: {stable}");
