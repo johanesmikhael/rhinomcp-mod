@@ -25,8 +25,29 @@ public partial class RhinoMCPModFunctions
     public const int DefaultCurrentStep = 2000;
     public const double DefaultStabilityThresholdMeters = 0.01;
     public const double DefaultRigidStrength = 10000.0;
-    public const double DefaultFloorStrength = 1000.0;
+    // Contact stiffness per square metre of bearing area, not per mesh vertex. Floor2
+    // holds one scalar strength shared by every point it is given, so a single Floor2 over
+    // all vertices made a footing's stiffness track its mesh density: a column resting on
+    // 33 vertices over 0.085 m2 was 90x stiffer per unit area than a slab resting on 12
+    // vertices over 2.82 m2, purely because it was meshed finer. Contacts are now grouped
+    // into buckets of equal tributary area and each bucket gets its own Floor2 at
+    // floor_strength * area, so remeshing no longer changes a structural result.
+    // 1e7 measured in Rhino against this catalogue. It is a subgrade modulus in Pa/m:
+    // penetration = 0.83 * bearing pressure / floor_strength. A 15.3 t tower on 8.5 m2 of
+    // slab (17.8 kPa) settles 1.5 mm, and the value is exactly linear over three decades.
+    // Stiffer is not better: the same eccentric test block turned 17.5 deg at 1e7, 13.1 at
+    // 1.2e7 and only 0.67 at 1.2e8, because a stiffer floor slows the topple more than it
+    // shortens the settling. 1e7 keeps a real collapse inside the step budget while holding
+    // settling to about a millimetre.
+    public const double DefaultFloorStrength = 1e7;
     public const double DefaultFloorZ = 0.0;
+
+    // Contact sites are bucketed by tributary area because Floor2 cannot carry a per-point
+    // strength. Buckets start 2% wide and double until they fit the cap, so a regular
+    // assembly gets a handful of exact groups and a pathological mesh still gets a bounded
+    // number of goals.
+    public const int MaxContactBuckets = 32;
+    public const double ContactBucketRatio = 0.02;
 
     // Share of the stability threshold that an auto-sized floor is allowed to spend on
     // settling. Keeping it at a tenth leaves the rest of the budget for real motion, while
@@ -49,6 +70,14 @@ public partial class RhinoMCPModFunctions
     // needs enough samples to have a trend at all.
     public const int MotionSampleCount = 32;
     public const double SettledEpsilonMeters = 1e-7;
+
+    // Absolute floor under the divergence test. Area-weighted contact leaves a resting
+    // assembly drifting by nanometres, and at 1e-7 m that drift was read as collapse: a
+    // tower whose centre of mass sat 1.48 m inside its support was failed on a growth of
+    // 1.07e-7 m - a tenth of a micron. A real topple grows by hundreds of millimetres over
+    // the same window, so 1e-5 m sits a thousand times above the noise and four orders
+    // below the signal.
+    public const double DivergenceMinGrowthMeters = 1e-5;
     public const double DivergenceGrowthMargin = 1.05;
     public const double CollapseThresholdFactor = 10.0;
 
@@ -61,15 +90,17 @@ public partial class RhinoMCPModFunctions
     // to rest lying down, which reads as "settled" because it genuinely has stopped.
     //
     // Rotation therefore only has to separate a completed topple from a resting body, and
-    // the measured gap is wide. A resting assembly still rotates a little, because Floor2 is
-    // a spring per mesh vertex rather than per unit area: where two differently tessellated
-    // elements meet the ground at one support, they seat unevenly and tilt the fitted
-    // transform. That is a property of the contact, not of the weight - a 17.3 t tower whose
-    // slabs alone touch the ground turned 0.23 deg, while a 9.8 t frame whose columns and
-    // slabs both touched turned 1.69 deg. Measured resting values span 0.13 to 2.38 deg; a
-    // real topple measured 40.2 deg. Ten degrees sits between them with roughly 4x margin
-    // either way. One degree did not, and failed sound assemblies outright.
-    public const double DefaultRotationThresholdDegrees = 10.0;
+    // once contact is weighted by area rather than by vertex count the gap is enormous. The
+    // uneven seating that used to tilt a resting body - two differently tessellated elements
+    // meeting the ground at one support - is gone, and what rotation remains is just the
+    // floor's own compliance, which scales with penetration: the same tower turned 0.98 deg
+    // at floor_strength 1.2e4 and 0.00053 deg at 1e7.
+    //
+    // Measured at the 1e7 default: three resting assemblies turned 0.00031, 0.00046 and
+    // 0.00053 deg, while a block whose centre of mass sat 186 mm outside its support turned
+    // 17.5 deg. One degree sits about 2000x above the resting values and 17x below the
+    // topple. Ten degrees was needed only to absorb the old contact noise.
+    public const double DefaultRotationThresholdDegrees = 1.0;
 
     public const int MaxSampleInterval = 25;
     public const int MinSettledSamples = 8;
@@ -214,6 +245,11 @@ public partial class RhinoMCPModFunctions
             // sink far enough to exhaust the stability threshold on settling alone. When the
             // caller does not pin the strength down, size it from the assembly's own weight
             // so that settling stays within a small fraction of the threshold.
+            //
+            // floor_strength is now read as stiffness per square metre of bearing area: the
+            // solver multiplies it by each contact's tributary area. A value carried over
+            // from before that change is a per-vertex figure and will not mean the same
+            // thing.
             var totalMassKilograms = stabilityNodes.Sum(node => node.MassKilograms);
             var stabilityThresholdMeters = stabilityThreshold * unitContext.LengthToMeters;
             // Kangaroo blends goals by weight, and gravity is a Unary of weight 1 per vertex.
@@ -495,6 +531,12 @@ public partial class RhinoMCPModFunctions
                 ["motion_trend"] = graph["motion_trend"],
                 ["solver_steps_run"] = graph["solver_steps_run"],
                 ["motion_samples_m"] = graph["motion_samples_m"],
+                // floor_strength alone no longer says how stiff the support was: it is
+                // multiplied by tributary area, so the bearing area and the bucket count it
+                // was resolved into have to travel with the result too.
+                ["contact_area_m2"] = graph["contact_area_m2"],
+                ["contact_sites"] = graph["contact_sites"],
+                ["contact_buckets"] = graph["contact_buckets"],
                 ["floor_z_m"] = unitContext.ToMeters(floorZ),
                 ["unit_warnings"] = unitWarnings,
                 ["evaluation_graph_key"] = EvaluationGraphKey
@@ -743,8 +785,16 @@ public partial class RhinoMCPModFunctions
 
         var rigidMesh = new Mesh();
         var vertexPoints = new List<Point3d>();
-        var gravityLoads = new List<(Point3d Point, double MassPerPoint)>();
-        var collisionPoints = new List<Point3d>();
+
+        // Contact and gravity are accumulated per unique particle position rather than per
+        // mesh vertex. Kangaroo merges coincident points into one particle and blends every
+        // goal on that particle as a weighted average, so an unwelded box - three
+        // coincident vertices at each corner - had its three gravity goals averaged rather
+        // than summed, applying a third of its own weight. Summing here, then emitting one
+        // goal per unique site, makes the applied load exact and mesh-independent.
+        var siteAreas = new Dictionary<(long, long, long), double>();
+        var siteMasses = new Dictionary<(long, long, long), double>();
+        var sitePoints = new Dictionary<(long, long, long), Point3d>();
 
         foreach (var node in nodes)
         {
@@ -771,12 +821,65 @@ public partial class RhinoMCPModFunctions
             }
 
             rigidMesh.Append(mesh);
-            var massPerPoint = node.MassKilograms / points.Count;
-            foreach (var point in points)
+            vertexPoints.AddRange(points);
+
+            // Tributary area per vertex, deduplicated to one entry per unique position.
+            var vertexAreas = TributaryVertexAreas(mesh);
+            var nodeKeys = new List<(long, long, long)>();
+            var nodePoints = new List<Point3d>();
+            var nodeAreas = new List<double>();
+            var nodeIndices = new Dictionary<(long, long, long), int>();
+            for (var i = 0; i < points.Count; i++)
             {
-                vertexPoints.Add(point);
-                gravityLoads.Add((point, massPerPoint));
-                collisionPoints.Add(point);
+                if (!TrySiteKey(points[i], assignToleranceMeters, out var key))
+                {
+                    throw new InvalidOperationException(
+                        $"Object {node.Node["g"]} has a vertex that cannot be placed on the solver grid.");
+                }
+
+                if (!nodeIndices.TryGetValue(key, out var index))
+                {
+                    index = nodePoints.Count;
+                    nodeIndices[key] = index;
+                    nodeKeys.Add(key);
+                    nodePoints.Add(points[i]);
+                    nodeAreas.Add(0.0);
+                }
+
+                nodeAreas[index] += vertexAreas[i];
+            }
+
+            var nodeArea = nodeAreas.Sum();
+            if (!double.IsFinite(nodeArea) || nodeArea <= 0.0)
+            {
+                throw new InvalidOperationException(
+                    $"Object {node.Node["g"]} has no surface area to carry its own weight.");
+            }
+
+            // Distribute the node's mass over its surface, then correct the distribution so
+            // that its resultant acts on the true volume centroid. Dividing mass by vertex
+            // count instead put the load on the vertex centroid, which drifts wherever a
+            // mesh is denser on one side - the same mesh-density bias as the contact goal,
+            // on the load side.
+            var shares = new double[nodeAreas.Count];
+            for (var i = 0; i < shares.Length; i++)
+            {
+                shares[i] = nodeAreas[i] / nodeArea;
+            }
+
+            if (TryVolumeCentroid(mesh, out var volumeCentroid))
+            {
+                shares = SharesAtCentroid(nodePoints, shares, volumeCentroid);
+            }
+
+            for (var i = 0; i < nodeKeys.Count; i++)
+            {
+                var key = nodeKeys[i];
+                sitePoints[key] = nodePoints[i];
+                siteAreas.TryGetValue(key, out var area);
+                siteAreas[key] = area + nodeAreas[i];
+                siteMasses.TryGetValue(key, out var mass);
+                siteMasses[key] = mass + (node.MassKilograms * shares[i]);
             }
         }
 
@@ -826,15 +929,43 @@ public partial class RhinoMCPModFunctions
         var rbGoal = new RigidBody2(bodyBrep, solverPlane, rigidGoalPoints, rigidStrength);
         var goals = new List<IGoal> { rbGoal };
 
-        foreach (var (point, massPerPoint) in gravityLoads)
+        // Sorted by grid key so that goal order - and with it particle numbering and the
+        // order the solver sums contributions in - depends only on the geometry, never on
+        // dictionary insertion order or on which node the graph listed first.
+        var siteKeys = siteMasses.Keys
+            .OrderBy(key => key.Item1)
+            .ThenBy(key => key.Item2)
+            .ThenBy(key => key.Item3)
+            .ToList();
+
+        foreach (var key in siteKeys)
         {
-            goals.Add(new Unary(point, new Vector3d(0.0, 0.0, -gravity * massPerPoint)));
+            goals.Add(new Unary(sitePoints[key], new Vector3d(0.0, 0.0, -gravity * siteMasses[key])));
         }
 
-        if (collisionPoints.Count > 0)
+        var contactSites = new List<(Point3d Point, double AreaM2)>();
+        var totalContactArea = 0.0;
+        foreach (var key in siteKeys)
         {
-            goals.Add(new Floor2(collisionPoints, floorStrength, floorZMeters));
+            var area = siteAreas.TryGetValue(key, out var value) ? value : 0.0;
+            if (!double.IsFinite(area) || area <= 0.0)
+            {
+                continue;
+            }
+
+            contactSites.Add((sitePoints[key], area));
+            totalContactArea += area;
         }
+
+        var contactBuckets = BucketContactSites(contactSites, MaxContactBuckets);
+        foreach (var bucket in contactBuckets)
+        {
+            goals.Add(new Floor2(bucket.Points, floorStrength * bucket.AreaM2, floorZMeters));
+        }
+
+        graph["contact_area_m2"] = totalContactArea;
+        graph["contact_sites"] = contactSites.Count;
+        graph["contact_buckets"] = contactBuckets.Count;
 
         var physicalSystem = new PhysicalSystem();
         foreach (var goal in goals)
@@ -1082,7 +1213,7 @@ public partial class RhinoMCPModFunctions
         // A settling assembly's growth decays; require a clear margin so that solver noise
         // on an essentially static body is not read as collapse.
         return lastGrowth > previousGrowth * DivergenceGrowthMargin &&
-            lastGrowth > SettledEpsilonMeters;
+            lastGrowth > DivergenceMinGrowthMeters;
     }
 
     private static bool RecordNodeTransforms(
@@ -1257,6 +1388,256 @@ public partial class RhinoMCPModFunctions
         }
 
         return result;
+    }
+
+    /// <summary>
+    /// Area each mesh vertex is responsible for: every triangle hands a third of its area
+    /// to each of its corners, and a quad is split on its A-C diagonal first.
+    /// </summary>
+    private static double[] TributaryVertexAreas(Mesh mesh)
+    {
+        var areas = new double[mesh.Vertices.Count];
+        for (var faceIndex = 0; faceIndex < mesh.Faces.Count; faceIndex++)
+        {
+            var face = mesh.Faces[faceIndex];
+            AddTriangleArea(mesh, areas, face.A, face.B, face.C);
+            if (face.IsQuad)
+            {
+                AddTriangleArea(mesh, areas, face.A, face.C, face.D);
+            }
+        }
+
+        return areas;
+    }
+
+    private static void AddTriangleArea(Mesh mesh, double[] areas, int a, int b, int c)
+    {
+        if (a < 0 || b < 0 || c < 0 ||
+            a >= areas.Length || b >= areas.Length || c >= areas.Length)
+        {
+            return;
+        }
+
+        var pa = (Point3d)mesh.Vertices[a];
+        var pb = (Point3d)mesh.Vertices[b];
+        var pc = (Point3d)mesh.Vertices[c];
+        var area = 0.5 * Vector3d.CrossProduct(pb - pa, pc - pa).Length;
+        if (!double.IsFinite(area) || area <= 0.0)
+        {
+            return;
+        }
+
+        var share = area / 3.0;
+        areas[a] += share;
+        areas[b] += share;
+        areas[c] += share;
+    }
+
+    /// <summary>
+    /// Quantises a solver-space point onto the same grid Kangaroo uses to merge coincident
+    /// particles, so that goals can be summed per particle before they are handed over.
+    /// </summary>
+    private static bool TrySiteKey(Point3d point, double toleranceMeters, out (long, long, long) key)
+    {
+        key = default;
+        if (!point.IsValid || !double.IsFinite(toleranceMeters) || toleranceMeters <= 0.0)
+        {
+            return false;
+        }
+
+        var x = Math.Round(point.X / toleranceMeters);
+        var y = Math.Round(point.Y / toleranceMeters);
+        var z = Math.Round(point.Z / toleranceMeters);
+        if (Math.Abs(x) > long.MaxValue || Math.Abs(y) > long.MaxValue || Math.Abs(z) > long.MaxValue)
+        {
+            return false;
+        }
+
+        key = ((long)x, (long)y, (long)z);
+        return true;
+    }
+
+    private static bool TryVolumeCentroid(Mesh mesh, out Point3d centroid)
+    {
+        centroid = Point3d.Unset;
+        try
+        {
+            var properties = VolumeMassProperties.Compute(mesh);
+            if (properties == null || !(properties.Volume > 0.0))
+            {
+                return false;
+            }
+
+            centroid = properties.Centroid;
+            return centroid.IsValid;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Rebalances load shares so that their resultant acts on <paramref name="target"/>,
+    /// by scaling each share with a linear ramp across the body: p' = p * (1 + a . (x - c)).
+    /// The ramp sums to zero by construction, so the total load is untouched; solving the
+    /// 3x3 covariance system for a moves the load centroid onto the target exactly.
+    /// </summary>
+    private static double[] SharesAtCentroid(
+        IReadOnlyList<Point3d> points,
+        double[] shares,
+        Point3d target)
+    {
+        if (points.Count != shares.Length || points.Count < 4 || !target.IsValid)
+        {
+            return shares;
+        }
+
+        var centre = Point3d.Origin;
+        for (var i = 0; i < shares.Length; i++)
+        {
+            centre += points[i] * shares[i];
+        }
+
+        var offset = target - centre;
+        if (!offset.IsValid || offset.Length <= RhinoMath.ZeroTolerance)
+        {
+            return shares;
+        }
+
+        // Covariance of the load points about their own centroid.
+        double m00 = 0, m01 = 0, m02 = 0, m11 = 0, m12 = 0, m22 = 0;
+        var deltas = new Vector3d[shares.Length];
+        for (var i = 0; i < shares.Length; i++)
+        {
+            var d = points[i] - centre;
+            deltas[i] = d;
+            m00 += shares[i] * d.X * d.X;
+            m01 += shares[i] * d.X * d.Y;
+            m02 += shares[i] * d.X * d.Z;
+            m11 += shares[i] * d.Y * d.Y;
+            m12 += shares[i] * d.Y * d.Z;
+            m22 += shares[i] * d.Z * d.Z;
+        }
+
+        var det =
+            (m00 * ((m11 * m22) - (m12 * m12))) -
+            (m01 * ((m01 * m22) - (m12 * m02))) +
+            (m02 * ((m01 * m12) - (m11 * m02)));
+
+        // A flat or collinear load cloud has no spread along some axis, so no ramp can move
+        // the centroid that way. Leave the area-weighted shares alone rather than inverting
+        // a singular system.
+        var scale = (m00 + m11 + m22) / 3.0;
+        if (!double.IsFinite(det) || scale <= 0.0 || Math.Abs(det) < 1e-12 * scale * scale * scale)
+        {
+            return shares;
+        }
+
+        var a = new Vector3d(
+            (offset.X * ((m11 * m22) - (m12 * m12))) -
+            (m01 * ((offset.Y * m22) - (m12 * offset.Z))) +
+            (m02 * ((offset.Y * m12) - (m11 * offset.Z))),
+            (m00 * ((offset.Y * m22) - (m12 * offset.Z))) -
+            (offset.X * ((m01 * m22) - (m12 * m02))) +
+            (m02 * ((m01 * offset.Z) - (offset.Y * m02))),
+            (m00 * ((m11 * offset.Z) - (offset.Y * m12))) -
+            (m01 * ((m01 * offset.Z) - (offset.Y * m02))) +
+            (offset.X * ((m01 * m12) - (m11 * m02))));
+        a /= det;
+        if (!a.IsValid)
+        {
+            return shares;
+        }
+
+        // The ramp must never drive a share to zero or below. If it would, pull it back
+        // until the smallest share keeps a tenth of its area-weighted value and accept the
+        // residual centroid offset - a partial correction still beats a negative mass.
+        var lowest = 0.0;
+        for (var i = 0; i < shares.Length; i++)
+        {
+            lowest = Math.Min(lowest, a * deltas[i]);
+        }
+
+        if (1.0 + lowest < 0.1)
+        {
+            a *= 0.9 / -lowest;
+        }
+
+        var corrected = new double[shares.Length];
+        var total = 0.0;
+        for (var i = 0; i < shares.Length; i++)
+        {
+            corrected[i] = shares[i] * (1.0 + (a * deltas[i]));
+            total += corrected[i];
+        }
+
+        if (!double.IsFinite(total) || total <= 0.0)
+        {
+            return shares;
+        }
+
+        for (var i = 0; i < corrected.Length; i++)
+        {
+            corrected[i] /= total;
+        }
+
+        return corrected;
+    }
+
+    /// <summary>
+    /// Groups contact sites into buckets of near-equal tributary area, since Floor2 shares
+    /// one strength across every point it is given. Buckets widen geometrically until they
+    /// fit <paramref name="maxBuckets"/>; each bucket reports the mean area of its members,
+    /// which preserves the bucket's total stiffness.
+    /// </summary>
+    private static List<(List<Point3d> Points, double AreaM2)> BucketContactSites(
+        List<(Point3d Point, double AreaM2)> sites,
+        int maxBuckets)
+    {
+        var buckets = new List<(List<Point3d> Points, double AreaM2)>();
+        if (sites.Count == 0)
+        {
+            return buckets;
+        }
+
+        var ratio = ContactBucketRatio;
+        while (true)
+        {
+            var logStep = Math.Log(1.0 + ratio);
+            var groups = new SortedDictionary<long, List<int>>();
+            for (var i = 0; i < sites.Count; i++)
+            {
+                var key = (long)Math.Floor(Math.Log(sites[i].AreaM2) / logStep);
+                if (!groups.TryGetValue(key, out var members))
+                {
+                    members = new List<int>();
+                    groups[key] = members;
+                }
+
+                members.Add(i);
+            }
+
+            if (groups.Count <= maxBuckets || ratio >= 1e6)
+            {
+                foreach (var group in groups)
+                {
+                    var points = new List<Point3d>(group.Value.Count);
+                    var area = 0.0;
+                    foreach (var index in group.Value)
+                    {
+                        points.Add(sites[index].Point);
+                        area += sites[index].AreaM2;
+                    }
+
+                    buckets.Add((points, area / group.Value.Count));
+                }
+
+                return buckets;
+            }
+
+            ratio *= 2.0;
+        }
     }
 
     private static List<Point3d> MeshVerticesAsPoints(Mesh mesh)
