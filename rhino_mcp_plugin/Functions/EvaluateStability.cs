@@ -124,6 +124,11 @@ public partial class RhinoMCPModFunctions
 
     public const int MaxSampleInterval = 25;
     public const int MinSettledSamples = 8;
+
+    // Consecutive samples that must show both diverging motion and growing rotation before
+    // a run gives up on the assembly. Three of them span 75 solver steps at the default
+    // sampling interval, which is long enough that bedding-in noise cannot fake it.
+    public const int DivergingSamplesToExit = 3;
     public const double MaxAutoRigidStrength = 1e12;
     public const double DefaultGravity = 9.80665;
     public const double DefaultAssignToleranceMeters = 1e-6;
@@ -1145,6 +1150,7 @@ public partial class RhinoMCPModFunctions
         // came back "stable" at the old 50-step default.
         var motionSamples = new List<double>();
         var rotationSamples = new List<double>();
+        var divergingSampleRun = 0;
         var sampleInterval = Math.Clamp(currentStep / MotionSampleCount, 1, MaxSampleInterval);
         var stepsRun = 0;
 
@@ -1208,8 +1214,9 @@ public partial class RhinoMCPModFunctions
             // No displacement-based early exit. With the floor soft enough for gravity to
             // act, a sound assembly settles hundreds of millimetres into it, so any cutoff
             // that trips on distance fires long before rotation - the actual signal - has
-            // developed. Stepping costs well under a millisecond, so the run simply
-            // continues until motion flattens or the budget is spent.
+            // developed. That was the old collapse exit, and it is what made sound
+            // assemblies read as collapsing. The divergence exit below replaces it: it asks
+            // the two trends, not the distance travelled.
 
             // Equally, stop once motion has genuinely stopped: three consecutive samples
             // that add essentially nothing mean the structure has settled. Require a
@@ -1241,6 +1248,28 @@ public partial class RhinoMCPModFunctions
                 if (settled)
                 {
                     break;
+                }
+            }
+
+            // A collapse that is under way is already decided: gravity alone does not slow
+            // a toppling body back into rest, so nothing later in the run can flip the
+            // verdict, and the remaining steps only enlarge a rotation figure that is not
+            // deciding anything. Require both signals, and require them to hold for several
+            // consecutive samples, so that a run does not quit on one noisy sample taken
+            // while the assembly is still bedding into the floor.
+            if (motionSamples.Count >= MinSettledSamples)
+            {
+                if (IsDivergingMotion(motionSamples) && IsGrowingRotation(rotationSamples))
+                {
+                    divergingSampleRun++;
+                    if (divergingSampleRun >= DivergingSamplesToExit)
+                    {
+                        break;
+                    }
+                }
+                else
+                {
+                    divergingSampleRun = 0;
                 }
             }
         }

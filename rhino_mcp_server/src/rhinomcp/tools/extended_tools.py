@@ -37,7 +37,11 @@ async def evaluate_stability(
         current_step: Number of solver steps to run. When omitted, Rhino uses a
             budget large enough for a collapse to develop; a short run makes a
             toppling assembly look stationary and so reads as stable. The run
-            exits early once motion settles or clearly diverges.
+            exits early once motion and rotation have both settled, and also
+            once both are clearly diverging, since a collapse under way cannot
+            reverse. Read solver_steps_run alongside rotation_deg: a run that
+            exited on divergence reports the rotation reached at that moment,
+            not at the end of the budget.
         stability_threshold: Maximum displacement considered stable, in the
             active Rhino document's length unit. When omitted, Rhino converts
             the canonical 0.01 m default to document units.
