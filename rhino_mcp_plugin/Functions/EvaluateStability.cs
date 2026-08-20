@@ -328,6 +328,79 @@ public partial class RhinoMCPModFunctions
                     $"current_step * solver_substeps must not exceed {MaxTotalSolverSteps}.");
             }
 
+            // The two modes answer different questions and neither subsumes the other:
+            // welded catches an assembly tipping over, pinned catches a mechanism. See the
+            // remarks on the pinned solver for why a pin cannot see overturning.
+            var modeText = parameters?["mode"]?.ToString();
+            var pinned = string.Equals(modeText, "pinned", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(modeText, PinnedEvaluationMode, StringComparison.OrdinalIgnoreCase);
+            if (!pinned && !string.IsNullOrWhiteSpace(modeText) &&
+                !string.Equals(modeText, "welded", StringComparison.OrdinalIgnoreCase) &&
+                !string.Equals(modeText, "contact", StringComparison.OrdinalIgnoreCase) &&
+                !string.Equals(modeText, ContactEvaluationMode, StringComparison.OrdinalIgnoreCase) &&
+                !string.Equals(modeText, EvaluationMode, StringComparison.OrdinalIgnoreCase))
+            {
+                throw new ArgumentException(
+                    $"Unknown evaluation mode '{modeText}'; use 'welded', 'pinned' or 'contact'.");
+            }
+
+            var contactMode = string.Equals(modeText, "contact", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(modeText, ContactEvaluationMode, StringComparison.OrdinalIgnoreCase);
+            if (contactMode)
+            {
+                // The multi-body modes need their own stiffness scale; see the note on
+                // DefaultContactStrength. An explicit floor_strength still wins, and the
+                // body strength follows it by the usual ratio unless pinned down too.
+                var contactStrength = floorStrengthIsAuto ? DefaultContactStrength : floorStrength;
+                var bodyStrength = rigidStrengthIsAuto
+                    ? contactStrength * AutoRigidFloorRatio
+                    : rigidStrength;
+
+                var contactStable = SolveContactFromGraph(
+                    graph,
+                    stabilityNodes,
+                    currentStep,
+                    contactStrength,
+                    bodyStrength,
+                    unitContext.ToMeters(floorZ),
+                    gravity,
+                    unitContext.ToMeters(assignTol),
+                    unitContext.ToMeters(threshold),
+                    solverSubsteps,
+                    unitContext.LengthToMeters,
+                    WantsDisplay(parameters) ? doc : null);
+
+                var contactResult = BuildPinnedResult(graph, doc, unitContext, contactStable, gravity,
+                    floorZ, floorZIsAuto, bodyStrength, totalMassKilograms, unitWarnings);
+                contactResult["evaluation_mode"] = ContactEvaluationMode;
+                contactResult["contact_strength_auto"] = floorStrengthIsAuto;
+                contactResult["friction"] = DefaultContactFriction;
+                contactResult["contact_count"] = graph["contact_count"];
+                contactResult["open_contacts"] = graph["open_contacts"];
+                contactResult["ground_contact_points"] = graph["ground_contact_points"];
+                contactResult["contact_strength"] = contactStrength;
+                return contactResult;
+            }
+
+            if (pinned)
+            {
+                var pinnedStable = SolvePinnedFromGraph(
+                    graph,
+                    stabilityNodes,
+                    currentStep,
+                    rigidStrength,
+                    rigidStrength * AutoRigidFloorRatio,
+                    unitContext.ToMeters(floorZ),
+                    gravity,
+                    unitContext.ToMeters(assignTol),
+                    unitContext.ToMeters(threshold),
+                    solverSubsteps,
+                    unitContext.LengthToMeters);
+
+                return BuildPinnedResult(graph, doc, unitContext, pinnedStable, gravity, floorZ,
+                    floorZIsAuto, rigidStrength, totalMassKilograms, unitWarnings);
+            }
+
             var stable = SolveFromGraph(
                 graph,
                 stabilityNodes,
@@ -698,6 +771,23 @@ public partial class RhinoMCPModFunctions
     /// assembly and cannot serve a stale graph - the stored copy is only rewritten when
     /// someone requests an unscoped graph, so it can lag the model badly.
     /// </summary>
+    /// <summary>True when the caller asked for the settled pose to be drawn.</summary>
+    private static bool WantsDisplay(JObject parameters)
+    {
+        var token = parameters?["display"];
+        if (token == null)
+        {
+            return false;
+        }
+
+        if (token.Type == JTokenType.Boolean)
+        {
+            return token.Value<bool>();
+        }
+
+        return string.Equals(token.ToString(), "On", StringComparison.OrdinalIgnoreCase);
+    }
+
     private static JObject ReadGraph(JObject parameters, RhinoDoc doc)
     {
         var graphToken = parameters?["graph"];
@@ -1347,8 +1437,8 @@ public partial class RhinoMCPModFunctions
         // Both windows must span the same number of intervals, or the comparison is
         // meaningless. Taking previousStart as lastStart - quarter made the earlier window
         // one interval shorter than the later one, so steady non-accelerating growth came
-        // out looking like acceleration by roughly a factor of two, and any assembly
-        // drifting at constant speed was reported as diverging.
+        // out looking like acceleration by roughly a factor of two and every drifting
+        // assembly was reported as diverging.
         var previousStart = Math.Max(0, lastStart - 1 - quarter);
         if (lastStart - 1 <= previousStart)
         {

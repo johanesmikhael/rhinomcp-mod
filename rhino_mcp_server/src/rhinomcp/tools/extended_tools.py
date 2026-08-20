@@ -9,6 +9,7 @@ from rhinomcp.server import mcp
 
 @mcp.tool()
 async def evaluate_stability(
+    mode: str | None = None,
     current_step: int | None = None,
     stability_threshold: float | None = None,
     rigid_strength: float | None = None,
@@ -34,6 +35,21 @@ async def evaluate_stability(
     from the active document.
 
     Args:
+        mode: "welded" (default) treats the whole scope as one rigid body and
+            answers whether it tips over. "pinned" gives every element its own
+            rigid body, joined at the connectivity graph's contact points, and
+            answers whether the assembly is a mechanism - whether any element
+            can rotate or slide off its supports. Neither subsumes the other: a
+            pin holds in tension, so pinned mode cannot see an element toppling
+            off another, and welded mode cannot see a mechanism at all. Run
+            both. "contact" also gives every element its own body, but joins
+            them across bearing surfaces that carry compression and no tension,
+            so an element can rotate off its support or lift away - the closest
+            of the three to a dry-stacked assembly, and the only one that can
+            fail a single element rather than the whole scope.
+            Pinned and contact modes report per-element displacement and rotation and
+            names the element that moved furthest, and its result carries no
+            floor strength, assembly transform or support margin.
         current_step: Number of solver steps to run. When omitted, Rhino uses a
             budget large enough for a collapse to develop; a short run makes a
             toppling assembly look stationary and so reads as stable. The run
@@ -98,6 +114,8 @@ async def evaluate_stability(
         params["floor_strength"] = floor_strength
     if rigid_strength is not None:
         params["rigid_strength"] = rigid_strength
+    if mode is not None:
+        params["mode"] = mode
     if current_step is not None:
         params["current_step"] = current_step
     if assign_tol is not None:
