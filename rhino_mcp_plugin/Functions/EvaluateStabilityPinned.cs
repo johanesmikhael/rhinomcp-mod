@@ -623,7 +623,13 @@ public partial class RhinoMCPModFunctions
         List<StabilityNode> nodes,
         int currentStep,
         double contactStrength,
+        bool contactStrengthIsAuto,
+        double groundStrength,
+        bool groundStrengthIsAuto,
+        double jointPenetrationMeters,
+        double groundSettlementMeters,
         double bodyStrength,
+        bool bodyStrengthIsAuto,
         double floorZMeters,
         double gravity,
         double assignToleranceMeters,
@@ -643,41 +649,10 @@ public partial class RhinoMCPModFunctions
         var goals = new List<IGoal>();
         var rigidGoals = new List<RigidMesh>(bodies.Count);
 
-        foreach (var body in bodies)
-        {
-            AssignBodyMarkers(body);
-            var points = new List<Point3d>(body.GroundPoints);
-            points.AddRange(body.Markers);
-            var rigid = new RigidMesh(body.SolverMesh, body.BodyPlane, points, bodyStrength);
-            rigidGoals.Add(rigid);
-            goals.Add(rigid);
-            goals.Add(new Unary(
-                body.BodyPlane.Origin, new Vector3d(0.0, 0.0, -gravity * body.Node.MassKilograms)));
-        }
-
-        // Ground bearing, per body, reusing the same area-weighted contact the welded mode
-        // uses against the floor.
-        var groundSites = 0;
-        foreach (var body in bodies)
-        {
-            if (body.GroundPoints.Count == 0)
-            {
-                continue;
-            }
-
-            var strengths = new List<double>();
-            var boxArea = GroundPatchAreaPerPoint(body);
-            foreach (var _ in body.GroundPoints)
-            {
-                strengths.Add(contactStrength * boxArea);
-            }
-
-            goals.Add(new AreaFloor(new List<Point3d>(body.GroundPoints), strengths, floorZMeters));
-            groundSites += body.GroundPoints.Count;
-        }
-
-        // One bearing surface per graph edge.
-        var patches = new List<ContactPatch>();
+        // The bearing surfaces are built before any stiffness is chosen, because in the
+        // automatic mode the stiffness follows from the load each surface carries and the
+        // load follows from the topology.
+        var specs = new List<PatchSpec>();
         if (graph["e"] is JArray edges)
         {
             foreach (var edgeToken in edges)
@@ -706,14 +681,104 @@ public partial class RhinoMCPModFunctions
                     continue;
                 }
 
-                var patch = new ContactPatch(
-                    bodies[a].BodyPlane, bodies[b].BodyPlane, points, areas, normal,
-                    contactStrength, DefaultContactFriction);
-                patches.Add(patch);
-                goals.Add(patch);
-                bodies[a].JointPoints.Add(contact);
-                bodies[b].JointPoints.Add(contact);
+                specs.Add(new PatchSpec
+                {
+                    A = a,
+                    B = b,
+                    Contact = contact,
+                    Points = points,
+                    Areas = areas,
+                    Normal = normal
+                });
             }
+        }
+
+        var loads = TributaryLoads(bodies, specs, gravity);
+
+        // Every stiffness in the model, expressed as a total weight per joint rather than
+        // as a modulus, so that the ratio to gravity is fixed instead of the magnitude.
+        var patchWeights = new double[specs.Count];
+        for (var i = 0; i < specs.Count; i++)
+        {
+            var areaSum = specs[i].Areas.Sum();
+            patchWeights[i] = contactStrengthIsAuto
+                ? Math.Max(loads.Patch[i], MinimumJointLoadNewtons) / jointPenetrationMeters
+                : contactStrength * areaSum;
+        }
+
+        var stiffestJoint = patchWeights.Length > 0 ? patchWeights.Max() : 0.0;
+        var groundWeights = new double[bodies.Count];
+        for (var i = 0; i < bodies.Count; i++)
+        {
+            if (bodies[i].GroundPoints.Count == 0)
+            {
+                continue;
+            }
+
+            groundWeights[i] = groundStrengthIsAuto
+                ? Math.Max(loads.Ground[i], MinimumJointLoadNewtons) / groundSettlementMeters
+                : groundStrength * GroundPatchAreaPerPoint(bodies[i]) * bodies[i].GroundPoints.Count;
+            stiffestJoint = Math.Max(stiffestJoint, groundWeights[i]);
+        }
+
+        // A body has to be rigid against whatever holds it, so in the automatic mode the
+        // rigid goal is sized from the stiffest joint rather than from an absolute.
+        var effectiveBodyStrength = bodyStrengthIsAuto && stiffestJoint > 0.0
+            ? stiffestJoint * AutoBodyStiffnessRatio
+            : bodyStrength;
+
+        foreach (var body in bodies)
+        {
+            AssignBodyMarkers(body);
+            var points = new List<Point3d>(body.GroundPoints);
+            points.AddRange(body.Markers);
+            var rigid = new RigidMesh(body.SolverMesh, body.BodyPlane, points, effectiveBodyStrength);
+            rigidGoals.Add(rigid);
+            goals.Add(rigid);
+            goals.Add(new Unary(
+                body.BodyPlane.Origin, new Vector3d(0.0, 0.0, -gravity * body.Node.MassKilograms)));
+        }
+
+        // Ground bearing, per body. This is a separate knob from the joints on purpose: the
+        // ground is a soil, the joints are dry masonry, and tying them to one number made a
+        // ten-block tower with 157 mm of support margin rock as one piece and read as
+        // failed - the ground going soft, not its joints.
+        var groundSites = 0;
+        for (var i = 0; i < bodies.Count; i++)
+        {
+            var body = bodies[i];
+            if (body.GroundPoints.Count == 0)
+            {
+                continue;
+            }
+
+            var perPoint = groundWeights[i] / body.GroundPoints.Count;
+            var strengths = new List<double>();
+            foreach (var _ in body.GroundPoints)
+            {
+                strengths.Add(perPoint);
+            }
+
+            goals.Add(new AreaFloor(new List<Point3d>(body.GroundPoints), strengths, floorZMeters));
+            groundSites += body.GroundPoints.Count;
+        }
+
+        // One bearing surface per graph edge, at the stiffness its own load earned it. The
+        // goal multiplies each point by its area, so the total weight is spread over the
+        // patch in proportion to area exactly as before.
+        var patches = new List<ContactPatch>();
+        for (var i = 0; i < specs.Count; i++)
+        {
+            var spec = specs[i];
+            var areaSum = spec.Areas.Sum();
+            var strength = areaSum > 0.0 ? patchWeights[i] / areaSum : patchWeights[i];
+            var patch = new ContactPatch(
+                bodies[spec.A].BodyPlane, bodies[spec.B].BodyPlane, spec.Points, spec.Areas,
+                spec.Normal, strength, DefaultContactFriction);
+            patches.Add(patch);
+            goals.Add(patch);
+            bodies[spec.A].JointPoints.Add(spec.Contact);
+            bodies[spec.B].JointPoints.Add(spec.Contact);
         }
 
         foreach (var goal in goals)
@@ -821,6 +886,8 @@ public partial class RhinoMCPModFunctions
         graph["contact_count"] = patches.Count;
         graph["open_contacts"] = openJoints;
         graph["ground_contact_points"] = groundSites;
+        graph["joint_weight_min_n_per_m"] = patchWeights.Length > 0 ? patchWeights.Min() : 0.0;
+        graph["joint_weight_max_n_per_m"] = stiffestJoint;
         graph["motion_trend"] = diverging ? "diverging" : "settling";
         graph["rotation_trend"] = turning ? "turning" : "steady";
         graph["motion_samples_m"] = new JArray(motionSamples.Select(v => (object)v).ToArray());
@@ -842,6 +909,101 @@ public partial class RhinoMCPModFunctions
         }
 
         return !failed;
+    }
+
+    /// <summary>One bearing surface, resolved from the geometry before any stiffness is chosen.</summary>
+    private sealed class PatchSpec
+    {
+        public int A { get; set; }
+        public int B { get; set; }
+        public Point3d Contact { get; set; }
+        public List<Point3d> Points { get; set; }
+        public List<double> Areas { get; set; }
+        public Vector3d Normal { get; set; }
+    }
+
+    /// <summary>The load reaching each bearing surface and each body's ground bearing, in newtons.</summary>
+    private sealed class LoadPath
+    {
+        public double[] Patch { get; set; }
+        public double[] Ground { get; set; }
+    }
+
+    // A joint carrying nothing would otherwise be given zero stiffness and hold nothing at
+    // all. This is a floor, not a calibration: one newton is far below any real bearing
+    // load and only keeps a load-free joint from vanishing.
+    private const double MinimumJointLoadNewtons = 1.0;
+
+    /// <summary>
+    /// Walks the assembly's weight down to the ground, one storey at a time, so that every
+    /// bearing surface knows the load it actually carries.
+    /// </summary>
+    /// <remarks>
+    /// Bodies are taken from the top down. Each one sheds the weight it has accumulated
+    /// through whatever supports it - the joints to bodies below it, plus the ground if it
+    /// stands on it - splitting equally between them. Equal splitting is crude where a body
+    /// rests on supports of very different stiffness, but the result only sets the pseudo-
+    /// time step, and being out by a factor of two on one joint costs nothing: it is the
+    /// scale-free ratio to gravity that matters, not the exact share.
+    /// </remarks>
+    private static LoadPath TributaryLoads(
+        List<PinnedBody> bodies, List<PatchSpec> specs, double gravity)
+    {
+        var patchLoads = new double[specs.Count];
+        var groundLoads = new double[bodies.Count];
+        var carried = new double[bodies.Count];
+        var height = new double[bodies.Count];
+
+        for (var i = 0; i < bodies.Count; i++)
+        {
+            carried[i] = gravity * bodies[i].Node.MassKilograms;
+            height[i] = bodies[i].BodyPlane.Origin.Z;
+        }
+
+        // Which side of a joint is above the other is what makes this a load path rather
+        // than a graph traversal, and the body's own centre is the only ordering available
+        // that survives a joint whose patch normal is not vertical.
+        var order = Enumerable.Range(0, bodies.Count).OrderByDescending(i => height[i]).ToList();
+
+        foreach (var index in order)
+        {
+            var supports = new List<int>();
+            for (var s = 0; s < specs.Count; s++)
+            {
+                if (specs[s].A == index && height[specs[s].B] < height[index])
+                {
+                    supports.Add(s);
+                }
+                else if (specs[s].B == index && height[specs[s].A] < height[index])
+                {
+                    supports.Add(s);
+                }
+            }
+
+            var standsOnGround = bodies[index].GroundPoints.Count > 0;
+            var ways = supports.Count + (standsOnGround ? 1 : 0);
+            if (ways == 0)
+            {
+                // Nothing below it: the body is hanging on its neighbours, and its weight
+                // has nowhere to descend to. Leave it on the joints it does have.
+                continue;
+            }
+
+            var share = carried[index] / ways;
+            foreach (var s in supports)
+            {
+                patchLoads[s] += share;
+                var other = specs[s].A == index ? specs[s].B : specs[s].A;
+                carried[other] += share;
+            }
+
+            if (standsOnGround)
+            {
+                groundLoads[index] += share;
+            }
+        }
+
+        return new LoadPath { Patch = patchLoads, Ground = groundLoads };
     }
 
     // A ground point's share of its body's footprint. The welded mode derives this from
@@ -877,6 +1039,29 @@ public partial class RhinoMCPModFunctions
     // same topple is suppressed to 1.5 mm and 0.0005 deg and survives on the rotation trend
     // alone. 1e10 leaves two decades of margin below that.
     public const double DefaultContactStrength = 1e10;
+
+    // How far a bearing surface is allowed to close under the load it actually carries,
+    // and how far a body is allowed to settle into the ground under the same. These, not a
+    // stiffness in Pa/m, are what the automatic mode fixes.
+    //
+    // A stiffness stated in the absolute is not a material property in this solver, it is
+    // the size of the pseudo-time step. Kangaroo blends goals as sum(w*move)/sum(w) and
+    // gravity is a Unary of weight 1 proposing g*M, so a body's step down is g*M/sum(w).
+    // Pin the stiffness and that step becomes a function of the model's mass and bearing
+    // area: at 1e10 a six-block stack whose centre of mass sat 75 mm outside its base moved
+    // 1e-9 m per step and read as settled after 2000 steps, while the same stack at 1e7
+    // toppled - the same mechanics at a thousand times the clock rate.
+    //
+    // Referencing the stiffness to the load fixes the ratio instead of the magnitude. With
+    // sum(w) = P/d for a body carrying its own weight P = g*M, the step down is exactly d
+    // whatever the mass, the bearing area or the document's units. Collapse then develops
+    // over the same number of steps in every model.
+    public const double DefaultJointPenetrationMeters = 1e-4;
+    public const double DefaultGroundSettlementMeters = 1e-4;
+
+    // Bodies must stay rigid against the joints holding them, so the rigid goal is sized
+    // from the stiffest joint in the model rather than from an absolute.
+    public const double AutoBodyStiffnessRatio = 10.0;
 
     private sealed class BodyReport
     {

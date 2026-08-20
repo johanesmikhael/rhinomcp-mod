@@ -348,10 +348,32 @@ public partial class RhinoMCPModFunctions
                 string.Equals(modeText, ContactEvaluationMode, StringComparison.OrdinalIgnoreCase);
             if (contactMode)
             {
-                // The multi-body modes need their own stiffness scale; see the note on
-                // DefaultContactStrength. An explicit floor_strength still wins, and the
-                // body strength follows it by the usual ratio unless pinned down too.
-                var contactStrength = floorStrengthIsAuto ? DefaultContactStrength : floorStrength;
+                // Left alone, the contact solver now sizes every stiffness from the load it
+                // carries: see the note on DefaultJointPenetrationMeters for why an absolute
+                // modulus is a pseudo-time step here rather than a material property. The
+                // two surfaces are separate knobs because they are different materials - a
+                // soil under the assembly, dry masonry inside it - and an explicit strength
+                // on either still pins that one to the old absolute law.
+                var contactStrengthIsAuto = parameters?["contact_strength"] == null;
+                var contactStrength = contactStrengthIsAuto
+                    ? DefaultContactStrength
+                    : ReadFiniteParameter(
+                        parameters, "contact_strength", DefaultContactStrength, 0.0,
+                        inclusiveMinimum: false);
+                var groundStrengthIsAuto = floorStrengthIsAuto;
+                var groundStrength = floorStrength;
+                var jointPenetration = ReadFiniteParameter(
+                    parameters,
+                    "joint_penetration",
+                    unitContext.FromMeters(DefaultJointPenetrationMeters),
+                    0.0,
+                    inclusiveMinimum: false);
+                var groundSettlement = ReadFiniteParameter(
+                    parameters,
+                    "ground_settlement",
+                    unitContext.FromMeters(DefaultGroundSettlementMeters),
+                    0.0,
+                    inclusiveMinimum: false);
                 var bodyStrength = rigidStrengthIsAuto
                     ? contactStrength * AutoRigidFloorRatio
                     : rigidStrength;
@@ -361,7 +383,13 @@ public partial class RhinoMCPModFunctions
                     stabilityNodes,
                     currentStep,
                     contactStrength,
+                    contactStrengthIsAuto,
+                    groundStrength,
+                    groundStrengthIsAuto,
+                    unitContext.ToMeters(jointPenetration),
+                    unitContext.ToMeters(groundSettlement),
                     bodyStrength,
+                    rigidStrengthIsAuto,
                     unitContext.ToMeters(floorZ),
                     gravity,
                     unitContext.ToMeters(assignTol),
@@ -373,7 +401,15 @@ public partial class RhinoMCPModFunctions
                 var contactResult = BuildPinnedResult(graph, doc, unitContext, contactStable, gravity,
                     floorZ, floorZIsAuto, bodyStrength, totalMassKilograms, unitWarnings);
                 contactResult["evaluation_mode"] = ContactEvaluationMode;
-                contactResult["contact_strength_auto"] = floorStrengthIsAuto;
+                contactResult["contact_strength_auto"] = contactStrengthIsAuto;
+                contactResult["ground_strength_auto"] = groundStrengthIsAuto;
+                contactResult["joint_penetration"] = jointPenetration;
+                contactResult["joint_penetration_m"] = unitContext.ToMeters(jointPenetration);
+                contactResult["ground_settlement"] = groundSettlement;
+                contactResult["ground_settlement_m"] = unitContext.ToMeters(groundSettlement);
+                contactResult["ground_strength"] = groundStrength;
+                contactResult["joint_weight_min_n_per_m"] = graph["joint_weight_min_n_per_m"];
+                contactResult["joint_weight_max_n_per_m"] = graph["joint_weight_max_n_per_m"];
                 contactResult["friction"] = DefaultContactFriction;
                 contactResult["contact_count"] = graph["contact_count"];
                 contactResult["open_contacts"] = graph["open_contacts"];

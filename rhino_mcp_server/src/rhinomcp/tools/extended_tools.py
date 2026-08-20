@@ -11,6 +11,9 @@ from rhinomcp.server import mcp
 async def evaluate_stability(
     mode: str | None = None,
     current_step: int | None = None,
+    contact_strength: float | None = None,
+    joint_penetration: float | None = None,
+    ground_settlement: float | None = None,
     stability_threshold: float | None = None,
     rigid_strength: float | None = None,
     floor_strength: float | None = None,
@@ -50,6 +53,19 @@ async def evaluate_stability(
             Pinned and contact modes report per-element displacement and rotation and
             names the element that moved furthest, and its result carries no
             floor strength, assembly transform or support margin.
+        contact_strength: Contact mode only. Absolute joint stiffness in Pa/m. Leave
+            unset: by default each bearing surface is sized from the load it
+            actually carries, which is what makes the verdict independent of the
+            model's mass, size and units. An absolute value is a pseudo-time step
+            here, not a material property, so pinning it makes a collapse develop
+            faster or slower rather than making the contact stiffer or softer.
+        joint_penetration: Contact mode only. How far a bearing surface may close
+            under its own load, in document units. This is the automatic mode's
+            real knob; it sets the per-step motion directly.
+        ground_settlement: Contact mode only. How far a body may settle into the
+            ground under its own load, in document units. Separate from the
+            joints because the ground is a soil and the joints are not; use
+            floor_strength to pin the ground to an absolute subgrade modulus.
         current_step: Number of solver steps to run. When omitted, Rhino uses a
             budget large enough for a collapse to develop; a short run makes a
             toppling assembly look stationary and so reads as stable. The run
@@ -116,6 +132,12 @@ async def evaluate_stability(
         params["rigid_strength"] = rigid_strength
     if mode is not None:
         params["mode"] = mode
+    if contact_strength is not None:
+        params["contact_strength"] = contact_strength
+    if joint_penetration is not None:
+        params["joint_penetration"] = joint_penetration
+    if ground_settlement is not None:
+        params["ground_settlement"] = ground_settlement
     if current_step is not None:
         params["current_step"] = current_step
     if assign_tol is not None:
