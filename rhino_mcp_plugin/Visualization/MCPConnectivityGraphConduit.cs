@@ -288,7 +288,9 @@ internal static class MCPConnectivityGraphBuilder
         // O(n^2) - 596 objects is 177k pairs - which is the only reason a node cap was
         // ever needed. Here each object only tests against boxes that actually overlap it.
         var edges = new List<Edge>();
-        var searchSlack = tolerance * 4.0;
+        // The RTree slack must match the gate the narrow phase uses, or pairs that would
+        // qualify as touching are discarded before they are ever tested. See ContactGap.
+        var searchSlack = ContactGap(tolerance);
 
         var tree = new RTree();
         for (var i = 0; i < nodes.Count; i++)
@@ -559,7 +561,7 @@ internal static class MCPConnectivityGraphBuilder
     private static bool TryGetContactPoint(in Node a, in Node b, double tolerance, out Point3d contactPoint)
     {
         // Broad-phase reject only. Final decision is based on actual geometry.
-        if (BoundingBoxDistance(a.BoundingBox, b.BoundingBox) > tolerance * 4.0)
+        if (BoundingBoxDistance(a.BoundingBox, b.BoundingBox) > ContactGap(tolerance))
         {
             contactPoint = Point3d.Unset;
             return false;
@@ -567,6 +569,44 @@ internal static class MCPConnectivityGraphBuilder
 
         return TryGetGeometryContactPoint(a, b, tolerance, out contactPoint);
     }
+
+    /// <summary>
+    /// How far apart two elements may sit and still be treated as bearing on one another.
+    /// </summary>
+    /// <remarks>
+    /// The geometric tolerance is far too tight for this. At a document tolerance of
+    /// 0.001 mm the old gate came to 0.02 mm, while a catalogue column 2730.9 mm tall,
+    /// placed from a height rounded to 2731, leaves a 0.1 mm gap under the beam it is
+    /// meant to carry - five times the gate, so the pair was discarded before contact was
+    /// ever tested. Nothing about that gap is a modelling error; it is what snapping to
+    /// rounded dimensions produces.
+    ///
+    /// The threshold is therefore a construction tolerance rather than a numerical one: a
+    /// millimetre, which is finer than anything a reuse catalogue is cut to and far below
+    /// the size of any real gap between elements that are genuinely apart.
+    /// </remarks>
+    private static double ContactGap(double tolerance)
+    {
+        // Deliberately not tolerance * 4. That term is twenty times the document's absolute
+        // tolerance, and absolute tolerance conventionally tracks the unit system: 0.001 mm
+        // in a millimetre model but 0.001 m in a metre one. The same physical building
+        // therefore got a 1 mm contact gap in millimetres and a 20 mm one in metres, and a
+        // measured ladder confirmed it - gaps of 2 mm and 5 mm, correctly rejected in the
+        // millimetre document, were both accepted as contact in the metre one.
+        //
+        // The gap is a construction tolerance, so it is stated as one. The document's own
+        // tolerance is kept only as a floor, since nothing finer than that is resolvable.
+        return Math.Max(
+            Functions.DocumentUnits.AbsoluteTolerance(),
+            Functions.DocumentUnits.Millimetres(ContactGapMillimetres));
+    }
+
+    /// <summary>
+    /// How close two elements must come to count as bearing on one another, as a real
+    /// length. Finer than anything a reuse catalogue is cut to, and far below any gap
+    /// between elements that are genuinely apart.
+    /// </summary>
+    public const double ContactGapMillimetres = 1.0;
 
     private static double BoundingBoxDistance(BoundingBox a, BoundingBox b)
     {
@@ -611,8 +651,78 @@ internal static class MCPConnectivityGraphBuilder
             }
         }
 
+        // Both tests above look for an intersection, and two elements that merely touch do
+        // not intersect: coplanar faces meeting at zero overlap give MeshMeshFast nothing
+        // to return, and BrepBrep never runs for mesh objects at all. A deck modelled
+        // resting exactly on a beam therefore read as unsupported, which is how a structure
+        // whose beams sat precisely on its column tops came back with every column
+        // connected to nothing above it.
+        //
+        // The broad phase has already accepted this pair as being within contact distance,
+        // so the narrow phase should not now reject it for failing to overlap. Fall back to
+        // asking how close the two actually come.
+        if (a.ProxyMesh != null && b.ProxyMesh != null &&
+            TryGetProximityContactPoint(a.ProxyMesh, b.ProxyMesh, ContactGap(tolerance), out contactPoint))
+        {
+            return true;
+        }
+
         contactPoint = Point3d.Unset;
         return false;
+    }
+
+    /// <summary>
+    /// Closest approach between two meshes, as a contact when it is within
+    /// <paramref name="maxGap"/>. The reported point is the midpoint of the closest pair,
+    /// which for a face-to-face bearing lies in the shared surface.
+    /// </summary>
+    private static bool TryGetProximityContactPoint(
+        Mesh a, Mesh b, double maxGap, out Point3d contactPoint)
+    {
+        contactPoint = Point3d.Unset;
+        if (a.Vertices.Count == 0 || b.Vertices.Count == 0)
+        {
+            return false;
+        }
+
+        // Walk the vertices of the coarser mesh against the finer one: the closest approach
+        // between two convex-ish elements is attained at a vertex of one of them, and
+        // testing the coarser side keeps a finely tessellated neighbour from dominating the
+        // cost.
+        var walkA = a.Vertices.Count <= b.Vertices.Count;
+        var source = walkA ? a : b;
+        var target = walkA ? b : a;
+
+        var bestGap = double.MaxValue;
+        var bestPoint = Point3d.Unset;
+        foreach (var vertex in source.Vertices)
+        {
+            var point = new Point3d(vertex.X, vertex.Y, vertex.Z);
+            var onTarget = target.ClosestPoint(point);
+            if (!onTarget.IsValid)
+            {
+                continue;
+            }
+
+            var gap = point.DistanceTo(onTarget);
+            if (gap < bestGap)
+            {
+                bestGap = gap;
+                bestPoint = (point + onTarget) * 0.5;
+                if (bestGap <= RhinoMath.ZeroTolerance)
+                {
+                    break;
+                }
+            }
+        }
+
+        if (bestGap > maxGap || !bestPoint.IsValid)
+        {
+            return false;
+        }
+
+        contactPoint = bestPoint;
+        return true;
     }
 
     private static bool TryGetRepresentativePoint(Point3d[] points, Curve[] curves, out Point3d contactPoint)
