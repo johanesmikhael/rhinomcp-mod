@@ -172,7 +172,7 @@ public partial class RhinoMCPModFunctions
         objectInfo["material"] = obj.Attributes.MaterialIndex.ToString();
         objectInfo["color"] = Serializer.SerializeColor(obj.Attributes.ObjectColor);
 
-        double tolerance = RhinoDoc.ActiveDoc?.ModelAbsoluteTolerance ?? 0.01;
+        double tolerance = DocumentUnits.AbsoluteTolerance();
         var descriptor = new JObject();
 
         switch (geometry)

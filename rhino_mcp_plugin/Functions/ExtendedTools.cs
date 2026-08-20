@@ -122,7 +122,8 @@ namespace RhinoMCPModPlugin.Functions
             // Rhino does not visibly change the view for zero-size or near-flat boxes.
             if (bbox.Diagonal.Length < doc.ModelAbsoluteTolerance)
             {
-                bbox.Inflate(Math.Max(doc.ModelAbsoluteTolerance * 10.0, 1.0));
+                bbox.Inflate(Math.Max(
+                    doc.ModelAbsoluteTolerance * 10.0, DocumentUnits.Millimetres(1.0, doc)));
             }
 
             view.ActiveViewport.ZoomBoundingBox(bbox);

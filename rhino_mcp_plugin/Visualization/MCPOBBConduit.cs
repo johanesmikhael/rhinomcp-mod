@@ -361,7 +361,9 @@ internal sealed class MCPOBBConduit : DisplayConduit
         }
 
         var diag = min.DistanceTo(max);
-        var axisLength = Math.Max(diag * 0.10, 0.1);
+        // The floor is a real length: as a bare 0.1 it drew a tenth of a metre of axis in a
+        // metre model and a tenth of a millimetre in a millimetre one.
+        var axisLength = Math.Max(diag * 0.10, Functions.DocumentUnits.Millimetres(1.0));
 
         display.DrawLine(origin, origin + (xAxis * axisLength), Color.FromArgb(240, 255, 80, 80), 3);
         display.DrawLine(origin, origin + (yAxis * axisLength), Color.FromArgb(240, 80, 255, 120), 3);

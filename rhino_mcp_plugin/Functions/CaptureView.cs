@@ -356,7 +356,10 @@ namespace RhinoMCPModPlugin.Functions
         private static bool ApplyPresetView(RhinoViewport viewport, string viewName, BoundingBox bbox, double? lensMm)
         {
             var center = bbox.Center;
-            double distance = Math.Max(bbox.Diagonal.Length * 2.0, 1.0);
+            // A degenerate box needs a real standoff, not one document unit - which would
+            // put the camera a millimetre away in a millimetre model.
+            double distance = Math.Max(
+                bbox.Diagonal.Length * 2.0, DocumentUnits.Metres(1.0));
 
             Vector3d direction;
             Vector3d up;

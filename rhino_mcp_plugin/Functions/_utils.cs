@@ -705,7 +705,8 @@ public partial class RhinoMCPModFunctions
             return false;
         }
 
-        double tol = Math.Max((RhinoDoc.ActiveDoc?.ModelAbsoluteTolerance ?? 0.01) * 10.0, 1e-4);
+        double tol = Math.Max(
+            DocumentUnits.AbsoluteTolerance() * 10.0, DocumentUnits.Millimetres(1e-4));
         return Math.Abs(minX - bbox.Min.X) <= tol &&
                Math.Abs(minY - bbox.Min.Y) <= tol &&
                Math.Abs(minZ - bbox.Min.Z) <= tol &&
@@ -928,8 +929,11 @@ public partial class RhinoMCPModFunctions
             return false;
         }
 
-        double docTol = RhinoDoc.ActiveDoc?.ModelAbsoluteTolerance ?? 0.01;
-        double translationTol = Math.Max(docTol * 10.0, 0.1);
+        // A tenth of a millimetre, not a tenth of a document unit: the literal used to mean
+        // 100 mm in a metre-based model, which would call two visibly different placements
+        // the same pose.
+        double docTol = DocumentUnits.AbsoluteTolerance();
+        double translationTol = Math.Max(docTol * 10.0, DocumentUnits.Millimetres(0.1));
         if (st.DistanceTo(dt) > translationTol)
         {
             return false;
