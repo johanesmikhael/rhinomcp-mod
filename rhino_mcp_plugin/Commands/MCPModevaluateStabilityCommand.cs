@@ -148,11 +148,14 @@ namespace RhinoMCPModPlugin.Commands
             {
                 parameters["current_step"] = DefaultCurrentStep;
                 parameters["stability_threshold"] = defaultStabilityThreshold;
-                // Both strengths are left unset on purpose: omitting floor_strength lets
-                // the solver size the floor from the assembly's mass, and omitting
-                // rigid_strength then keeps the rigid goal above that floor. Pinning
-                // either one alone is what makes a sound assembly read as unstable.
-                parameters["floor_z"] = DefaultFloorZ;
+                // Both strengths are left unset on purpose: omitting floor_strength gives
+                // the calibrated subgrade modulus, and omitting rigid_strength then keeps
+                // the rigid goal above that floor. Pinning either one alone is what makes a
+                // sound assembly read as unstable.
+                // floor_z is left unset with the strengths: the solver then puts the floor
+                // at the underside of the assembly, so a scope that excludes the pads its
+                // columns stand on is evaluated standing on the ground rather than falling
+                // to world zero.
                 parameters["gravity"] = DefaultGravity;
                 parameters["assign_tol"] = defaultAssignTolerance;
                 parameters["threshold"] = defaultSolverThreshold;
@@ -160,13 +163,30 @@ namespace RhinoMCPModPlugin.Commands
             }
             else if (selectedMode == customOption)
             {
+                // Zero is a perfectly good floor elevation, so it cannot double as the
+                // "auto" sentinel the way a zero strength does. Ask outright instead.
+                var getFloorMode = new GetOption();
+                getFloorMode.SetCommandPrompt("Floor level");
+                var autoFloorOption = getFloorMode.AddOption("Auto");
+                getFloorMode.AddOption("Manual");
+                getFloorMode.AcceptNothing(true);
+
+                var floorModeResult = getFloorMode.Get();
+                if (floorModeResult == GetResult.Cancel)
+                {
+                    return Result.Cancel;
+                }
+
+                var floorZIsAuto = floorModeResult == GetResult.Nothing ||
+                    getFloorMode.Option()?.Index == autoFloorOption;
+
                 var parameterLabels = new[]
                 {
                     "Current step",
                     $"Stability threshold ({doc.ModelUnitSystem})",
                     "Rigid strength (0 = auto from floor)",
                     "Floor strength (0 = auto from mass)",
-                    $"Floor Z ({doc.ModelUnitSystem})",
+                    $"Floor Z ({doc.ModelUnitSystem})",  // skipped when the floor is auto
                     "Gravity (m/s²)",
                     $"Assign tolerance ({doc.ModelUnitSystem})",
                     $"Displacement threshold ({doc.ModelUnitSystem})",
@@ -188,6 +208,11 @@ namespace RhinoMCPModPlugin.Commands
 
                 for (var i = 0; i < parameterLabels.Length; i++)
                 {
+                    if (i == 4 && floorZIsAuto)
+                    {
+                        continue;
+                    }
+
                     var getNumber = new GetNumber();
                     getNumber.SetCommandPrompt($"{parameterLabels[i]} = {values[i]}");
                     getNumber.SetDefaultNumber(values[i]);
@@ -219,7 +244,11 @@ namespace RhinoMCPModPlugin.Commands
                     parameters["floor_strength"] = values[3];
                 }
 
-                parameters["floor_z"] = values[4];
+                if (!floorZIsAuto)
+                {
+                    parameters["floor_z"] = values[4];
+                }
+
                 parameters["gravity"] = values[5];
                 parameters["assign_tol"] = values[6];
                 parameters["threshold"] = values[7];
@@ -270,9 +299,16 @@ namespace RhinoMCPModPlugin.Commands
                     $"motion_trend: {result["motion_trend"]}, " +
                     $"steps_run: {result["solver_steps_run"]}");
                 var floorStrengthSource =
-                    result["floor_strength_auto"]?.Value<bool>() == true ? "auto from mass" : "explicit";
+                    result["floor_strength_auto"]?.Value<bool>() == true ? "auto" : "explicit";
+                var floorZSource =
+                    result["floor_z_auto"]?.Value<bool>() == true ? "auto, lowest point" : "explicit";
+                RhinoApp.WriteLine(
+                    $"floor_z: {result["floor_z"]} {result["document_length_unit"]} ({floorZSource}), " +
+                    $"rotation_trend: {result["rotation_trend"]}, " +
+                    $"support_margin: {result["support_margin_m"]} m");
                 var rigidStrengthSource =
                     result["rigid_strength_auto"]?.Value<bool>() == true ? "auto from floor" : "explicit";
+
                 RhinoApp.WriteLine(
                     $"floor_strength: {result["floor_strength"]} ({floorStrengthSource}), " +
                     $"rigid_strength: {result["rigid_strength"]} ({rigidStrengthSource}), " +

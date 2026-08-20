@@ -32,14 +32,22 @@ public partial class RhinoMCPModFunctions
     // vertices over 2.82 m2, purely because it was meshed finer. Contact is now handled by
     // AreaFloor, which carries a per-point stiffness of floor_strength * tributary area, so
     // remeshing no longer changes a structural result.
-    // 1e7 measured in Rhino against this catalogue. It is a subgrade modulus in Pa/m:
-    // penetration = 0.83 * bearing pressure / floor_strength. A 15.3 t tower on 8.5 m2 of
-    // slab (17.8 kPa) settles 1.5 mm, and the value is exactly linear over three decades.
-    // Stiffer is not better: the same eccentric test block turned 17.5 deg at 1e7, 13.1 at
-    // 1.2e7 and only 0.67 at 1.2e8, because a stiffer floor slows the topple more than it
-    // shortens the settling. 1e7 keeps a real collapse inside the step budget while holding
-    // settling to about a millimetre.
-    public const double DefaultFloorStrength = 1e7;
+    // A subgrade modulus in Pa/m: penetration = 0.83 * bearing pressure / floor_strength,
+    // exactly linear over the four decades measured in Rhino.
+    //
+    // The choice is governed by one ratio. Settling depth falls as 1/floor_strength while a
+    // topple turns at a rate proportional to 1/rigid_strength, and rigidity forces the rigid
+    // goal above the floor, so a stiff floor buys shallow settling at the price of a slow
+    // collapse. At 1e7 a tower carrying its upper storeys on a single line of columns stood
+    // up for the whole run: the assembly is not welded in reality, but the solver welds it,
+    // and the residual eccentricity turned it at 5e-8 deg per step - a real failure that
+    // reads as rest. At 1e5 the same assembly turns 0.18 to 0.36 deg and both trends catch
+    // it, while a sound four-column tower still converges by step 300 and a squat block
+    // control converges by step 200.
+    //
+    // 1e5 settles this catalogue about 125 mm. That is deep to look at, but it is pure
+    // translation and no part of the verdict reads it.
+    public const double DefaultFloorStrength = 1e5;
     public const double DefaultFloorZ = 0.0;
 
 
@@ -102,10 +110,16 @@ public partial class RhinoMCPModFunctions
     // floor's own compliance, which scales with penetration: the same tower turned 0.98 deg
     // at floor_strength 1.2e4 and 0.00053 deg at 1e7.
     //
-    // Measured at the 1e7 default: three resting assemblies turned 0.00031, 0.00046 and
-    // 0.00053 deg, while a block whose centre of mass sat 186 mm outside its support turned
-    // 17.5 deg. One degree sits about 2000x above the resting values and 17x below the
-    // topple. Ten degrees was needed only to absorb the old contact noise.
+    // Measured at the 1e5 default: a four-column tower rests at 0.024 deg and a squat block
+    // control at 0.041 deg, while a block whose centre of mass sat 186 mm outside its
+    // support fell flat and read 89.6 deg. One degree sits about 24x above the resting
+    // values and far below a completed topple. Ten degrees was needed only to absorb the
+    // old contact noise.
+    //
+    // Magnitude is the last of the three signals, not the first. A collapse still running
+    // when the budget ends is caught by the trends at a fraction of a degree - 0.18 and
+    // 0.36 deg for two cantilevered frames - and only an assembly that finished toppling
+    // and came to rest lying down needs this comparison at all.
     public const double DefaultRotationThresholdDegrees = 1.0;
 
     public const int MaxSampleInterval = 25;
@@ -243,7 +257,15 @@ public partial class RhinoMCPModFunctions
                 unitContext.FromMeters(DefaultStabilityThresholdMeters),
                 0.0,
                 inclusiveMinimum: true);
-            var floorZ = ReadFiniteParameter(parameters, "floor_z", DefaultFloorZ);
+            // The floor is placed under the assembly rather than at world zero unless the
+            // caller asks for a specific elevation. A scope that excludes the pads its
+            // columns stand on would otherwise start 224 mm in the air and spend the run
+            // falling, and a model built above or below the construction plane would never
+            // touch the floor at all.
+            var floorZIsAuto = parameters?["floor_z"] == null;
+            var floorZ = floorZIsAuto
+                ? AssemblyMinimumZ(stabilityNodes)
+                : ReadFiniteParameter(parameters, "floor_z", DefaultFloorZ);
             var gravity = ReadFiniteParameter(
                 parameters, "gravity", DefaultGravity, 0.0, inclusiveMinimum: true);
 
@@ -542,9 +564,10 @@ public partial class RhinoMCPModFunctions
                 ["solver_steps_run"] = graph["solver_steps_run"],
                 ["motion_samples_m"] = graph["motion_samples_m"],
                 ["rotation_samples_deg"] = graph["rotation_samples_deg"],
-                // The independent statics check: signed distance from the centre of mass to
-                // the support polygon, positive inside. Exact where the solver is only
-                // approximate, so it is reported whether or not it changed the verdict.
+                // Whole-body overturning margin: signed distance from the centre of mass to
+                // the ground support polygon, positive inside. Reported for diagnosis only.
+                // It is exact for a genuinely rigid body and says nothing about an assembly
+                // that can come apart at a joint, so it never decides the verdict.
                 ["support_margin_m"] = graph["support_margin_m"],
                 ["ground_contact_sites"] = graph["ground_contact_sites"],
                 ["centre_of_mass_m"] = graph["centre_of_mass_m"],
@@ -553,7 +576,9 @@ public partial class RhinoMCPModFunctions
                 // was resolved into have to travel with the result too.
                 ["contact_area_m2"] = graph["contact_area_m2"],
                 ["contact_sites"] = graph["contact_sites"],
+                ["floor_z"] = floorZ,
                 ["floor_z_m"] = unitContext.ToMeters(floorZ),
+                ["floor_z_auto"] = floorZIsAuto,
                 ["unit_warnings"] = unitWarnings,
                 ["evaluation_graph_key"] = EvaluationGraphKey
             };
@@ -1256,16 +1281,21 @@ public partial class RhinoMCPModFunctions
 
         var solverTransform = Transform.PlaneToPlane(initialTrackingPlane, nowPlane);
         finalXform = StabilityUnits.SolverTransformToDocument(solverTransform, lengthToMeters);
-        // A negative margin means the centre of mass hangs outside every possible line of
-        // support, which is decisive on its own: the assembly cannot stand however few
-        // degrees the solver managed to turn it inside the step budget.
-        var overturning = hasSupportMargin && supportMargin < 0.0;
+        // The support margin is reported but deliberately does not gate the verdict. It
+        // measures whole-body overturning about the ground footprint, which assumes the
+        // assembly is one rigid body - the same assumption the solver makes, but one the
+        // real structures do not satisfy, since their parts merely rest on one another. On
+        // a frame carrying its storeys on a single line of columns the margin read +393 mm,
+        // comfortably "stable", while the level slab it hung on was cantilevered 1.64 m off
+        // a 0.29 m column top and would rotate off it. Gating on that number would have
+        // overruled both trends and passed the assembly. Judging an interface at a time is
+        // what that case actually needs; until then the solver's own signals decide.
         return RecordNodeTransforms(
             nodes,
             finalXform,
             stabilityThreshold,
             lengthToMeters,
-            diverging || turning || overturning,
+            diverging || turning,
             graph);
     }
 
@@ -1832,6 +1862,30 @@ public partial class RhinoMCPModFunctions
         }
 
         return points;
+    }
+
+    /// <summary>
+    /// Lowest point of the assembly in document units, used as the floor elevation when the
+    /// caller does not pin one down.
+    /// </summary>
+    private static double AssemblyMinimumZ(List<StabilityNode> nodes)
+    {
+        var lowest = double.PositiveInfinity;
+        foreach (var node in nodes)
+        {
+            if (node?.Geometry == null)
+            {
+                continue;
+            }
+
+            var box = node.Geometry.GetBoundingBox(true);
+            if (box.IsValid && box.Min.Z < lowest)
+            {
+                lowest = box.Min.Z;
+            }
+        }
+
+        return double.IsFinite(lowest) ? lowest : DefaultFloorZ;
     }
 
     private static bool TryGeometryCenter(GeometryBase geometry, out Point3d center)

@@ -13,7 +13,7 @@ async def evaluate_stability(
     stability_threshold: float | None = None,
     rigid_strength: float | None = None,
     floor_strength: float | None = None,
-    floor_z: float = 0.0,
+    floor_z: float | None = None,
     gravity: float = 9.80665,
     assign_tol: float | None = None,
     threshold: float | None = None,
@@ -51,6 +51,10 @@ async def evaluate_stability(
             the floor stays within a tenth of the stability threshold; a sound
             structure would otherwise read as unstable purely from sinking.
         floor_z: World Z elevation of the collision floor, in document units.
+            When omitted, Rhino places the floor at the underside of the scoped
+            assembly. Pass a value only to hold the floor at a fixed level: a
+            scope that leaves out the pads its columns stand on would otherwise
+            start in mid-air and spend the run falling to world zero.
         gravity: Downward gravitational acceleration in m/s².
         assign_tol: Kangaroo particle assignment tolerance in document units.
             When omitted, Rhino converts the canonical 0.000001 m default.
@@ -78,13 +82,14 @@ async def evaluate_stability(
     from rhinomcp.server import get_rhino_connection
 
     params: dict[str, Any] = {
-        "floor_z": floor_z,
         "gravity": gravity,
         "solver_substeps": solver_substeps,
         "display": display,
     }
     if stability_threshold is not None:
         params["stability_threshold"] = stability_threshold
+    if floor_z is not None:
+        params["floor_z"] = floor_z
     if floor_strength is not None:
         params["floor_strength"] = floor_strength
     if rigid_strength is not None:
