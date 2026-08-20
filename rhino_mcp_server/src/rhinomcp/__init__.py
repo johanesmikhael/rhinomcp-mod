@@ -33,6 +33,7 @@ from .tools.run_rhino_command import run_rhino_command
 from .tools.get_rhino_log import get_rhino_log
 from .tools.extended_tools import (
     evaluate_stability,
+    assign_mass,
     get_selected_objects,
     select_objects,
     deselect_all,

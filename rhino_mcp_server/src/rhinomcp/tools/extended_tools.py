@@ -139,6 +139,65 @@ async def evaluate_stability(
 
 
 @mcp.tool()
+async def assign_mass(
+    density: float | None = None,
+    mass: float | None = None,
+    ids: list[str] | None = None,
+    names: list[str] | None = None,
+    layer: str | list[str] | None = None,
+    selected: bool = False,
+    overwrite: bool = True,
+) -> dict[str, Any]:
+    """Assign the mass that evaluate_stability needs, without prompting in Rhino.
+
+    Every node the stability evaluator sees must carry a positive mass, stored
+    on the object as canonical kilograms. Assign it here rather than through
+    the interactive Rhino commands, which stop and ask per object or per layer.
+
+    Args:
+        density: Material density in kg/m^3, for example 2400 for concrete.
+            Each object's mass follows from its own closed volume, so this is
+            the right choice whenever the geometry is solid. Objects with no
+            computable volume are reported under "skipped" rather than guessed
+            at. Document units are converted for you.
+        mass: One mass in kilograms applied to every object in the scope. Use
+            it for geometry that is not a closed solid, or to model a part as
+            heavier or lighter than its volume implies. Pass exactly one of
+            density or mass.
+        ids: Object GUIDs to assign.
+        names: Object names to assign.
+        layer: Layer name, or list of names, to assign.
+        selected: When True, assign to the current selection.
+        overwrite: When False, objects that already carry a mass keep it and
+            are reported under "skipped". Defaults to True.
+
+    Omitting every scope argument assigns the whole document, matching how the
+    connectivity graph and the evaluator read an omitted scope.
+
+    Returns per-object masses in kg, the volumes used, anything skipped and
+    why, and the scope total.
+    """
+    from rhinomcp.server import get_rhino_connection
+
+    params: dict[str, Any] = {"overwrite": overwrite}
+    if density is not None:
+        params["density"] = density
+    if mass is not None:
+        params["mass"] = mass
+    if ids:
+        params["ids"] = ids
+    if names:
+        params["names"] = names
+    if layer is not None:
+        params["layer"] = layer
+    if selected:
+        params["selected"] = True
+
+    rhino = get_rhino_connection()
+    return rhino.send_command("assign_mass", params)
+
+
+@mcp.tool()
 async def get_selected_objects() -> str:
     """Get id, name, type, and layer of all currently selected objects in Rhino."""
     from rhinomcp.server import get_rhino_connection
