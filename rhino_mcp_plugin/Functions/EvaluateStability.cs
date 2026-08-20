@@ -29,9 +29,9 @@ public partial class RhinoMCPModFunctions
     // holds one scalar strength shared by every point it is given, so a single Floor2 over
     // all vertices made a footing's stiffness track its mesh density: a column resting on
     // 33 vertices over 0.085 m2 was 90x stiffer per unit area than a slab resting on 12
-    // vertices over 2.82 m2, purely because it was meshed finer. Contacts are now grouped
-    // into buckets of equal tributary area and each bucket gets its own Floor2 at
-    // floor_strength * area, so remeshing no longer changes a structural result.
+    // vertices over 2.82 m2, purely because it was meshed finer. Contact is now handled by
+    // AreaFloor, which carries a per-point stiffness of floor_strength * tributary area, so
+    // remeshing no longer changes a structural result.
     // 1e7 measured in Rhino against this catalogue. It is a subgrade modulus in Pa/m:
     // penetration = 0.83 * bearing pressure / floor_strength. A 15.3 t tower on 8.5 m2 of
     // slab (17.8 kPa) settles 1.5 mm, and the value is exactly linear over three decades.
@@ -42,12 +42,6 @@ public partial class RhinoMCPModFunctions
     public const double DefaultFloorStrength = 1e7;
     public const double DefaultFloorZ = 0.0;
 
-    // Contact sites are bucketed by tributary area because Floor2 cannot carry a per-point
-    // strength. Buckets start 2% wide and double until they fit the cap, so a regular
-    // assembly gets a handful of exact groups and a pathological mesh still gets a bounded
-    // number of goals.
-    public const int MaxContactBuckets = 32;
-    public const double ContactBucketRatio = 0.02;
 
     // Share of the stability threshold that an auto-sized floor is allowed to spend on
     // settling. Keeping it at a tenth leaves the rest of the budget for real motion, while
@@ -78,6 +72,18 @@ public partial class RhinoMCPModFunctions
     // the same window, so 1e-5 m sits a thousand times above the noise and four orders
     // below the signal.
     public const double DivergenceMinGrowthMeters = 1e-5;
+
+    // Noise floor and decay margin for the rotation trend. A resting assembly's rotation
+    // converges: measured growth over the final quarter of a run was below 1e-6 deg for
+    // every sound configuration in the catalogue. A topple keeps turning - the slowest one
+    // measured, at floor_strength 1e7, still gained about 1e-4 deg per quarter.
+    public const double RotationNoiseFloorDegrees = 1e-5;
+    public const double RotationDecayMargin = 0.95;
+
+    // How close to the floor a contact site has to be to count as bearing on the ground
+    // when the support polygon is built. Two millimetres covers modelling slop without
+    // reaching up to the next storey.
+    public const double GroundContactToleranceMeters = 2e-3;
     public const double DivergenceGrowthMargin = 1.05;
     public const double CollapseThresholdFactor = 10.0;
 
@@ -529,14 +535,24 @@ public partial class RhinoMCPModFunctions
                 ["rotation_deg"] = graph["rotation_deg"],
                 ["rotation_threshold_deg"] = graph["rotation_threshold_deg"],
                 ["motion_trend"] = graph["motion_trend"],
+                // Rotation carries its own trend now. A topple's rate scales as 1/rigid
+                // strength, so a stiff floor can leave a real collapse turning too slowly
+                // to register as displacement at all; only the rotation history shows it.
+                ["rotation_trend"] = graph["rotation_trend"],
                 ["solver_steps_run"] = graph["solver_steps_run"],
                 ["motion_samples_m"] = graph["motion_samples_m"],
+                ["rotation_samples_deg"] = graph["rotation_samples_deg"],
+                // The independent statics check: signed distance from the centre of mass to
+                // the support polygon, positive inside. Exact where the solver is only
+                // approximate, so it is reported whether or not it changed the verdict.
+                ["support_margin_m"] = graph["support_margin_m"],
+                ["ground_contact_sites"] = graph["ground_contact_sites"],
+                ["centre_of_mass_m"] = graph["centre_of_mass_m"],
                 // floor_strength alone no longer says how stiff the support was: it is
                 // multiplied by tributary area, so the bearing area and the bucket count it
                 // was resolved into have to travel with the result too.
                 ["contact_area_m2"] = graph["contact_area_m2"],
                 ["contact_sites"] = graph["contact_sites"],
-                ["contact_buckets"] = graph["contact_buckets"],
                 ["floor_z_m"] = unitContext.ToMeters(floorZ),
                 ["unit_warnings"] = unitWarnings,
                 ["evaluation_graph_key"] = EvaluationGraphKey
@@ -792,6 +808,8 @@ public partial class RhinoMCPModFunctions
         // coincident vertices at each corner - had its three gravity goals averaged rather
         // than summed, applying a third of its own weight. Summing here, then emitting one
         // goal per unique site, makes the applied load exact and mesh-independent.
+        var massMoment = Vector3d.Zero;
+        var massTotal = 0.0;
         var siteAreas = new Dictionary<(long, long, long), double>();
         var siteMasses = new Dictionary<(long, long, long), double>();
         var sitePoints = new Dictionary<(long, long, long), Point3d>();
@@ -867,10 +885,20 @@ public partial class RhinoMCPModFunctions
                 shares[i] = nodeAreas[i] / nodeArea;
             }
 
+            var loadCentre = Point3d.Origin;
+            for (var i = 0; i < nodePoints.Count; i++)
+            {
+                loadCentre += nodePoints[i] * shares[i];
+            }
+
             if (TryVolumeCentroid(mesh, out var volumeCentroid))
             {
                 shares = SharesAtCentroid(nodePoints, shares, volumeCentroid);
+                loadCentre = volumeCentroid;
             }
+
+            massMoment += new Vector3d(loadCentre) * node.MassKilograms;
+            massTotal += node.MassKilograms;
 
             for (var i = 0; i < nodeKeys.Count; i++)
             {
@@ -957,15 +985,28 @@ public partial class RhinoMCPModFunctions
             totalContactArea += area;
         }
 
-        var contactBuckets = BucketContactSites(contactSites, MaxContactBuckets);
-        foreach (var bucket in contactBuckets)
+        if (contactSites.Count > 0)
         {
-            goals.Add(new Floor2(bucket.Points, floorStrength * bucket.AreaM2, floorZMeters));
+            goals.Add(new AreaFloor(
+                contactSites.Select(site => site.Point).ToList(),
+                contactSites.Select(site => floorStrength * site.AreaM2).ToList(),
+                floorZMeters));
         }
 
         graph["contact_area_m2"] = totalContactArea;
         graph["contact_sites"] = contactSites.Count;
-        graph["contact_buckets"] = contactBuckets.Count;
+
+        // The classical overturning check, run on the same contact set the solver uses.
+        var centreOfMass = massTotal > 0.0
+            ? new Point3d(massMoment / massTotal)
+            : Point3d.Unset;
+        var hasSupportMargin = TrySupportMargin(
+            contactSites, centreOfMass, floorZMeters, out var supportMargin, out var groundSites);
+        graph["support_margin_m"] = hasSupportMargin ? new JValue(supportMargin) : JValue.CreateNull();
+        graph["ground_contact_sites"] = groundSites;
+        graph["centre_of_mass_m"] = centreOfMass.IsValid
+            ? new JArray(centreOfMass.X, centreOfMass.Y, centreOfMass.Z)
+            : null;
 
         var physicalSystem = new PhysicalSystem();
         foreach (var goal in goals)
@@ -1078,8 +1119,34 @@ public partial class RhinoMCPModFunctions
         // which is exactly how an assembly whose centre of mass sits outside its support
         // came back "stable" at the old 50-step default.
         var motionSamples = new List<double>();
+        var rotationSamples = new List<double>();
         var sampleInterval = Math.Clamp(currentStep / MotionSampleCount, 1, MaxSampleInterval);
         var stepsRun = 0;
+
+        // Rotation has to be sampled as the run proceeds, not read once at the end. The
+        // solver's three weights - gravity 1, contact k, rigid R - admit only ratios, and
+        // rigidity forces R above k, so a topple turns at a rate proportional to 1/R while
+        // settling depth falls as 1/k. Shallow settling and a fast topple are therefore the
+        // same knob pulled in opposite directions: at k=1e7 a tower whose centre of mass sat
+        // 198 mm outside its support turned about 5e-8 deg per step - a real collapse, but
+        // one whose displacement trace flattens and reads as rest. Magnitude cannot see it;
+        // a rotation that is still growing at the end of the run can.
+        double CurrentRotationDegrees()
+        {
+            var sampled = physicalSystem.GetPositionArray();
+            if (globalP0 >= sampled.Length || globalP1 >= sampled.Length || globalP2 >= sampled.Length)
+            {
+                return 0.0;
+            }
+
+            var plane = new Plane(sampled[globalP0], sampled[globalP1], sampled[globalP2]);
+            if (!plane.IsValid)
+            {
+                return rotationSamples.Count > 0 ? rotationSamples[rotationSamples.Count - 1] : 0.0;
+            }
+
+            return RotationDegreesFromTransform(Transform.PlaneToPlane(initialTrackingPlane, plane));
+        }
 
         double CurrentMotionMeters()
         {
@@ -1111,6 +1178,7 @@ public partial class RhinoMCPModFunctions
 
             var motion = CurrentMotionMeters();
             motionSamples.Add(motion);
+            rotationSamples.Add(CurrentRotationDegrees());
 
             // No displacement-based early exit. With the floor soft enough for gravity to
             // act, a sound assembly settles hundreds of millimetres into it, so any cutoff
@@ -1137,6 +1205,14 @@ public partial class RhinoMCPModFunctions
                     }
                 }
 
+                // Rotation must have stopped too. A slow topple's translation flattens as
+                // soon as the assembly has bedded in, so a displacement-only test calls it
+                // settled while it is still turning over.
+                if (settled && IsGrowingRotation(rotationSamples))
+                {
+                    settled = false;
+                }
+
                 if (settled)
                 {
                     break;
@@ -1145,8 +1221,11 @@ public partial class RhinoMCPModFunctions
         }
 
         var diverging = IsDivergingMotion(motionSamples);
+        var turning = IsGrowingRotation(rotationSamples);
         graph["motion_trend"] = diverging ? "diverging" : "settling";
+        graph["rotation_trend"] = turning ? "turning" : "steady";
         graph["motion_samples_m"] = new JArray(motionSamples.Select(value => (object)value).ToArray());
+        graph["rotation_samples_deg"] = new JArray(rotationSamples.Select(value => (object)value).ToArray());
         graph["solver_steps_run"] = stepsRun;
 
         var positions = physicalSystem.GetPositionArray();
@@ -1177,12 +1256,16 @@ public partial class RhinoMCPModFunctions
 
         var solverTransform = Transform.PlaneToPlane(initialTrackingPlane, nowPlane);
         finalXform = StabilityUnits.SolverTransformToDocument(solverTransform, lengthToMeters);
+        // A negative margin means the centre of mass hangs outside every possible line of
+        // support, which is decisive on its own: the assembly cannot stand however few
+        // degrees the solver managed to turn it inside the step budget.
+        var overturning = hasSupportMargin && supportMargin < 0.0;
         return RecordNodeTransforms(
             nodes,
             finalXform,
             stabilityThreshold,
             lengthToMeters,
-            diverging,
+            diverging || turning || overturning,
             graph);
     }
 
@@ -1214,6 +1297,156 @@ public partial class RhinoMCPModFunctions
         // on an essentially static body is not read as collapse.
         return lastGrowth > previousGrowth * DivergenceGrowthMargin &&
             lastGrowth > DivergenceMinGrowthMeters;
+    }
+
+    /// <summary>
+    /// True while an assembly is still turning at the end of the run. Unlike
+    /// <see cref="IsDivergingMotion"/> this does not ask for acceleration: a topple driven
+    /// by gravity alone against a very stiff rigid goal advances almost linearly, so steady
+    /// growth is already the signal. A body at rest converges instead, and its remaining
+    /// rotation is the floor's elastic compliance, which stops changing.
+    /// </summary>
+    private static bool IsGrowingRotation(List<double> samples)
+    {
+        if (samples == null || samples.Count < 4)
+        {
+            return false;
+        }
+
+        var quarter = Math.Max(1, samples.Count / 4);
+        var lastStart = samples.Count - quarter;
+        var previousStart = Math.Max(0, lastStart - quarter);
+
+        var lastGrowth = samples[samples.Count - 1] - samples[lastStart - 1];
+        var previousGrowth = samples[lastStart - 1] - samples[previousStart];
+        if (!double.IsFinite(lastGrowth) || !double.IsFinite(previousGrowth))
+        {
+            return false;
+        }
+
+        // Growth must be sustained rather than a single step of solver noise: the last
+        // quarter has to turn at least as fast as the quarter before it, and by more than
+        // the noise floor. A settling assembly fails the first test, since its compliance
+        // rotation decays; a resting one fails the second.
+        return lastGrowth > RotationNoiseFloorDegrees &&
+            lastGrowth >= previousGrowth * RotationDecayMargin;
+    }
+
+    /// <summary>
+    /// Signed distance from the assembly's centre of mass to the boundary of the convex
+    /// hull of its ground contacts, positive inside. This is the classical rigid-body
+    /// overturning test, and unlike the solver it is exact and costs nothing, so it is
+    /// reported alongside the simulation and can fail an assembly the solver has not had
+    /// the steps to topple.
+    /// </summary>
+    private static bool TrySupportMargin(
+        IReadOnlyList<(Point3d Point, double AreaM2)> contactSites,
+        Point3d centreOfMass,
+        double floorZMeters,
+        out double marginMeters,
+        out int groundSiteCount)
+    {
+        marginMeters = 0.0;
+        groundSiteCount = 0;
+        if (contactSites == null || !centreOfMass.IsValid)
+        {
+            return false;
+        }
+
+        var ground = new List<Point2d>();
+        foreach (var site in contactSites)
+        {
+            if (site.Point.Z <= floorZMeters + GroundContactToleranceMeters)
+            {
+                ground.Add(new Point2d(site.Point.X, site.Point.Y));
+            }
+        }
+
+        groundSiteCount = ground.Count;
+        var hull = ConvexHullXY(ground);
+        if (hull.Count < 3)
+        {
+            return false;
+        }
+
+        marginMeters = SignedMarginToPolygon(hull, new Point2d(centreOfMass.X, centreOfMass.Y));
+        return true;
+    }
+
+    /// <summary>Andrew's monotone chain; returns the hull counter-clockwise.</summary>
+    private static List<Point2d> ConvexHullXY(List<Point2d> points)
+    {
+        var hull = new List<Point2d>();
+        if (points.Count < 3)
+        {
+            return hull;
+        }
+
+        var sorted = points
+            .OrderBy(point => point.X)
+            .ThenBy(point => point.Y)
+            .ToList();
+
+        double Cross(Point2d o, Point2d a, Point2d b) =>
+            ((a.X - o.X) * (b.Y - o.Y)) - ((a.Y - o.Y) * (b.X - o.X));
+
+        var lower = new List<Point2d>();
+        foreach (var point in sorted)
+        {
+            while (lower.Count >= 2 && Cross(lower[lower.Count - 2], lower[lower.Count - 1], point) <= 0.0)
+            {
+                lower.RemoveAt(lower.Count - 1);
+            }
+
+            lower.Add(point);
+        }
+
+        var upper = new List<Point2d>();
+        for (var i = sorted.Count - 1; i >= 0; i--)
+        {
+            var point = sorted[i];
+            while (upper.Count >= 2 && Cross(upper[upper.Count - 2], upper[upper.Count - 1], point) <= 0.0)
+            {
+                upper.RemoveAt(upper.Count - 1);
+            }
+
+            upper.Add(point);
+        }
+
+        lower.RemoveAt(lower.Count - 1);
+        upper.RemoveAt(upper.Count - 1);
+        hull.AddRange(lower);
+        hull.AddRange(upper);
+        return hull;
+    }
+
+    /// <summary>Positive inside, negative outside; magnitude is distance to the boundary.</summary>
+    private static double SignedMarginToPolygon(List<Point2d> polygon, Point2d query)
+    {
+        var inside = true;
+        var best = double.MaxValue;
+        for (var i = 0; i < polygon.Count; i++)
+        {
+            var a = polygon[i];
+            var b = polygon[(i + 1) % polygon.Count];
+            var edgeX = b.X - a.X;
+            var edgeY = b.Y - a.Y;
+            if ((edgeX * (query.Y - a.Y)) - (edgeY * (query.X - a.X)) < 0.0)
+            {
+                inside = false;
+            }
+
+            var lengthSquared = (edgeX * edgeX) + (edgeY * edgeY);
+            var t = lengthSquared <= 0.0
+                ? 0.0
+                : Math.Max(0.0, Math.Min(1.0,
+                    (((query.X - a.X) * edgeX) + ((query.Y - a.Y) * edgeY)) / lengthSquared));
+            var dx = query.X - (a.X + (t * edgeX));
+            var dy = query.Y - (a.Y + (t * edgeY));
+            best = Math.Min(best, Math.Sqrt((dx * dx) + (dy * dy)));
+        }
+
+        return inside ? best : -best;
     }
 
     private static bool RecordNodeTransforms(
@@ -1585,61 +1818,6 @@ public partial class RhinoMCPModFunctions
         return corrected;
     }
 
-    /// <summary>
-    /// Groups contact sites into buckets of near-equal tributary area, since Floor2 shares
-    /// one strength across every point it is given. Buckets widen geometrically until they
-    /// fit <paramref name="maxBuckets"/>; each bucket reports the mean area of its members,
-    /// which preserves the bucket's total stiffness.
-    /// </summary>
-    private static List<(List<Point3d> Points, double AreaM2)> BucketContactSites(
-        List<(Point3d Point, double AreaM2)> sites,
-        int maxBuckets)
-    {
-        var buckets = new List<(List<Point3d> Points, double AreaM2)>();
-        if (sites.Count == 0)
-        {
-            return buckets;
-        }
-
-        var ratio = ContactBucketRatio;
-        while (true)
-        {
-            var logStep = Math.Log(1.0 + ratio);
-            var groups = new SortedDictionary<long, List<int>>();
-            for (var i = 0; i < sites.Count; i++)
-            {
-                var key = (long)Math.Floor(Math.Log(sites[i].AreaM2) / logStep);
-                if (!groups.TryGetValue(key, out var members))
-                {
-                    members = new List<int>();
-                    groups[key] = members;
-                }
-
-                members.Add(i);
-            }
-
-            if (groups.Count <= maxBuckets || ratio >= 1e6)
-            {
-                foreach (var group in groups)
-                {
-                    var points = new List<Point3d>(group.Value.Count);
-                    var area = 0.0;
-                    foreach (var index in group.Value)
-                    {
-                        points.Add(sites[index].Point);
-                        area += sites[index].AreaM2;
-                    }
-
-                    buckets.Add((points, area / group.Value.Count));
-                }
-
-                return buckets;
-            }
-
-            ratio *= 2.0;
-        }
-    }
-
     private static List<Point3d> MeshVerticesAsPoints(Mesh mesh)
     {
         var points = new List<Point3d>();
@@ -1883,6 +2061,60 @@ public partial class RhinoMCPModFunctions
 
         obj.Attributes.SetUserString(AfterEvaluationKey, payload.ToString(Newtonsoft.Json.Formatting.None));
         obj.CommitChanges();
+    }
+
+    /// <summary>
+    /// A unilateral floor contact carrying its own stiffness per point.
+    /// </summary>
+    /// <remarks>
+    /// Kangaroo's own Floor2 does two things this solver cannot use. It shares one scalar
+    /// strength across every point it is given, which is what made footing stiffness track
+    /// mesh density; and it pins a contacting point laterally to a remembered target, which
+    /// behaves as glue rather than as a resting contact. The glue is not cosmetic: a 13.4 t
+    /// tower whose centre of mass sat 198 mm outside its support stood up at
+    /// floor_strength 1e7 and 1e6, and only broke loose at 1e5. Since the pin strength
+    /// scales with the floor strength, stiffening the floor to keep settling shallow also
+    /// cemented the assembly to the ground, and a real topple went undetected.
+    ///
+    /// This goal pushes a penetrating point straight up to the floor and does nothing at
+    /// all to a point above it - no lateral term, no memory between steps.
+    /// </remarks>
+    private sealed class AreaFloor : GoalObject
+    {
+        private readonly double[] _strengths;
+        private readonly double _limit;
+
+        public AreaFloor(List<Point3d> points, List<double> strengths, double limit)
+        {
+            if (points == null || strengths == null || points.Count != strengths.Count)
+            {
+                throw new ArgumentException("AreaFloor needs one strength per contact point.");
+            }
+
+            _limit = limit;
+            _strengths = strengths.ToArray();
+            PPos = points.ToArray();
+            Move = new Vector3d[points.Count];
+            Weighting = new double[points.Count];
+        }
+
+        public override void Calculate(List<KangarooSolver.Particle> p)
+        {
+            for (var i = 0; i < PIndex.Length; i++)
+            {
+                var height = p[PIndex[i]].Position.Z;
+                if (height < _limit)
+                {
+                    Move[i] = new Vector3d(0.0, 0.0, _limit - height);
+                    Weighting[i] = _strengths[i];
+                }
+                else
+                {
+                    Move[i] = Vector3d.Zero;
+                    Weighting[i] = 0.0;
+                }
+            }
+        }
     }
 
     private sealed class StabilityNode
