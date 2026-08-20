@@ -1343,7 +1343,17 @@ public partial class RhinoMCPModFunctions
 
         var quarter = Math.Max(1, samples.Count / 4);
         var lastStart = samples.Count - quarter;
-        var previousStart = Math.Max(0, lastStart - quarter);
+
+        // Both windows must span the same number of intervals, or the comparison is
+        // meaningless. Taking previousStart as lastStart - quarter made the earlier window
+        // one interval shorter than the later one, so steady non-accelerating growth came
+        // out looking like acceleration by roughly a factor of two, and any assembly
+        // drifting at constant speed was reported as diverging.
+        var previousStart = Math.Max(0, lastStart - 1 - quarter);
+        if (lastStart - 1 <= previousStart)
+        {
+            return false;
+        }
 
         var lastGrowth = samples[samples.Count - 1] - samples[lastStart - 1];
         var previousGrowth = samples[lastStart - 1] - samples[previousStart];
@@ -1374,7 +1384,12 @@ public partial class RhinoMCPModFunctions
 
         var quarter = Math.Max(1, samples.Count / 4);
         var lastStart = samples.Count - quarter;
-        var previousStart = Math.Max(0, lastStart - quarter);
+        // Same equal-window requirement as the motion test; see the note there.
+        var previousStart = Math.Max(0, lastStart - 1 - quarter);
+        if (lastStart - 1 <= previousStart)
+        {
+            return false;
+        }
 
         var lastGrowth = samples[samples.Count - 1] - samples[lastStart - 1];
         var previousGrowth = samples[lastStart - 1] - samples[previousStart];
