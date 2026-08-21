@@ -87,16 +87,26 @@ internal static class StabilityDynamics
     public const double DefaultImperfectionFraction = 1.0 / 1000.0;
 
     /// <summary>
-    /// Notional horizontal load, as a fraction of the vertical load it carries.
+    /// The horizontal probe load, as a fraction of the vertical load carried.
     /// </summary>
     /// <remarks>
-    /// The equivalent horizontal force the codes already require for stability checks -
-    /// EN 1993 puts it at a few parts per thousand of the vertical load. It is not a
-    /// guess at wind: it stands in for the out-of-plumb the structure was built with, and
-    /// it exists here because sway stiffness is what separates a braced structure from one
-    /// held up only by second-order effects.
+    /// This is a measuring instrument, not a design load. Sway stiffness is what separates
+    /// a braced structure from one held up only by second-order effects, and it is read by
+    /// pushing sideways and seeing how far the structure goes.
+    ///
+    /// The codes' equivalent horizontal force is a few parts per thousand, and that is too
+    /// small to measure with here: at 0.5% the stiffest direction of the test bridge moved
+    /// 0.2 micron, under the solver's own settling residual, and the reported stiffness
+    /// duly failed to converge - 9.7e8, 1.9e9, 2.4e9 as the run was lengthened, tracking
+    /// nothing but the residual shrinking. Five percent puts the response at 1.6 to 8 micron,
+    /// clear of that floor.
+    ///
+    /// It stays a secant stiffness, and the linearity is checked rather than assumed:
+    /// quadrupling the probe to 20% changes the stiff direction by 0.2%. The soft direction
+    /// does move, about 7% lower, which is the geometric softening an infinitesimal
+    /// mechanism is expected to show.
     /// </remarks>
-    public const double DefaultNotionalLoadFraction = 0.005;
+    public const double DefaultNotionalLoadFraction = 0.05;
 
     /// <summary>How long to simulate, in seconds, when the caller does not say.</summary>
     /// <remarks>
@@ -106,8 +116,10 @@ internal static class StabilityDynamics
     /// </remarks>
     public const double DefaultDurationSeconds = 0.5;
 
+
     public sealed class Result
     {
+        public bool Settled { get; set; }
         public double TimestepSeconds { get; set; }
         public int Steps { get; set; }
         public double SimulatedSeconds { get; set; }
@@ -134,6 +146,8 @@ internal static class StabilityDynamics
         double durationSeconds,
         double dampingRatio,
         double imperfectionSpeed,
+        double settledSpeed,
+        bool kineticDamping,
         int sampleCount,
         Func<double> measure,
         Func<double, double, bool> stopEarly)
@@ -154,6 +168,8 @@ internal static class StabilityDynamics
         };
 
         var velocity = new Vector3d[particles.Count];
+        var settledFor = 0;
+        var previousKinetic = 0.0;
 
         // The disturbance is a velocity, not a displacement.
         //
@@ -268,6 +284,84 @@ internal static class StabilityDynamics
             result.PeakSpeed = Math.Max(result.PeakSpeed, peakSpeed);
             result.Steps = step + 1;
             result.SimulatedSeconds = result.Steps * timestep;
+
+            // Kinetic damping, for the static runs only.
+            //
+            // A stiffness measurement wants the equilibrium position and nothing else, and
+            // real time is the wrong tool for reaching it: at the structure's own 2% of
+            // critical it rings for tens of periods, and viscous damping sized on each
+            // particle's local stiffness over-damps the slow global mode it most needs to
+            // settle - critical damping per particle made the run four times longer and
+            // still had not converged. Dynamic relaxation is the standard answer. Whenever
+            // the assembly's kinetic energy turns over, every velocity is zeroed: the
+            // structure is at a displacement extreme, so dropping the energy there moves it
+            // straight to equilibrium instead of past it.
+            //
+            // This is a solver for a static problem, not a claim about how the structure
+            // behaves - which is exactly the distinction Kangaroo's own Step blurs, and why
+            // the verdict never uses this path.
+            if (kineticDamping)
+            {
+                var kinetic = 0.0;
+                for (var i = 0; i < particles.Count; i++)
+                {
+                    if (!isFrame[i] && masses[i] > 0.0)
+                    {
+                        kinetic += masses[i] * velocity[i].SquareLength;
+                    }
+                }
+
+                if (kinetic < previousKinetic)
+                {
+                    for (var i = 0; i < velocity.Length; i++)
+                    {
+                        velocity[i] = Vector3d.Zero;
+                        particles[i].Velocity = Vector3d.Zero;
+                    }
+
+                    previousKinetic = 0.0;
+
+                    // The speed reached before this turnover is what is still left to
+                    // settle. Once that is small the position has stopped changing.
+                    if (peakSpeed < settledSpeed)
+                    {
+                        result.Settled = true;
+                        result.TimeSamples.Add(result.SimulatedSeconds);
+                        result.DisplacementSamples.Add(measure());
+                        result.SpeedSamples.Add(peakSpeed);
+                        break;
+                    }
+                }
+                else
+                {
+                    previousKinetic = kinetic;
+                }
+
+                continue;
+            }
+
+            // Nothing is learned by integrating a structure that has stopped moving. The
+            // test is a speed rather than a displacement so that it cannot be passed by a
+            // body at the top of its swing, and it is scaled so that whatever travel is
+            // left over the rest of the requested duration is negligible against the
+            // displacement that would decide the verdict.
+            if (settledSpeed > 0.0 && peakSpeed < settledSpeed)
+            {
+                settledFor++;
+                if (settledFor >= SettledStepsRequired)
+                {
+                    result.Settled = true;
+                    var displacementNow = measure();
+                    result.TimeSamples.Add(result.SimulatedSeconds);
+                    result.DisplacementSamples.Add(displacementNow);
+                    result.SpeedSamples.Add(peakSpeed);
+                    break;
+                }
+            }
+            else
+            {
+                settledFor = 0;
+            }
 
             if ((step + 1) % sampleEvery != 0 && step + 1 != steps)
             {
@@ -395,6 +489,15 @@ internal static class StabilityDynamics
 
         return particles;
     }
+
+    /// <summary>
+    /// How many consecutive steps must be slow before the assembly counts as settled.
+    /// </summary>
+    /// <remarks>
+    /// More than one, because a single step can be slow while the structure is merely
+    /// changing direction. At these timesteps this is a small fraction of one period.
+    /// </remarks>
+    public const int SettledStepsRequired = 200;
 
     /// <summary>The largest stiffness any single mass-carrying particle is held by.</summary>
     private static double PeakStiffness(List<Particle> particles, List<IGoal> goals, bool[] isFrame)
@@ -742,7 +845,12 @@ public partial class RhinoMCPModFunctions
         var imperfectionSpeed = Math.Sqrt(2.0 * gravity * imperfection);
         var collapsed = false;
 
-        StabilityDynamics.Result Integrate(List<IGoal> active, double jolt, bool stopOnThreshold)
+        // Whatever travel is left at this speed, over the rest of the requested duration, is
+        // a thousandth of the displacement that would decide the verdict.
+        var settledSpeed = threshold / Math.Max(durationSeconds, 1e-9) / 1000.0;
+
+        StabilityDynamics.Result Integrate(
+            List<IGoal> active, double jolt, bool stopOnThreshold, bool statics)
         {
             Reset();
             return StabilityDynamics.Run(
@@ -753,6 +861,8 @@ public partial class RhinoMCPModFunctions
                 durationSeconds,
                 dampingRatio,
                 jolt,
+                settledSpeed,
+                statics,
                 MotionSampleCount,
                 MaxPinMotion,
                 (displacement, _) =>
@@ -772,7 +882,7 @@ public partial class RhinoMCPModFunctions
         }
 
         // The verdict run: does it fall over, given the imperfection it was built with.
-        var run = Integrate(goals, imperfectionSpeed, true);
+        var run = Integrate(goals, imperfectionSpeed, true, false);
 
         // Whether it falls is not the whole answer.
         //
@@ -794,7 +904,7 @@ public partial class RhinoMCPModFunctions
         var stiffnessReport = new JObject();
         if (lateralLoadFraction > 0.0 && !collapsed)
         {
-            Integrate(goals, 0.0, false);
+            Integrate(goals, 0.0, false, true);
             var settled = particles.Select(p => p.Position).ToArray();
 
             var softest = double.MaxValue;
@@ -803,7 +913,7 @@ public partial class RhinoMCPModFunctions
             {
                 var loaded = new List<IGoal>(goals);
                 loaded.AddRange(swayGoals[axis]);
-                Integrate(loaded, 0.0, false);
+                Integrate(loaded, 0.0, false, true);
 
                 var sway = 0.0;
                 for (var i = 0; i < particles.Count; i++)
@@ -838,7 +948,7 @@ public partial class RhinoMCPModFunctions
             // fourth full integration is a quarter of the evaluation's cost.
             if (displayDoc != null)
             {
-                Integrate(goals, imperfectionSpeed, true);
+                Integrate(goals, imperfectionSpeed, true, false);
             }
         }
 
@@ -949,6 +1059,8 @@ public partial class RhinoMCPModFunctions
         graph["lateral_load_fraction"] = lateralLoadFraction;
         graph["imperfection_fraction"] = imperfectionFraction;
         graph["peak_speed_m_s"] = run.PeakSpeed;
+        graph["settled"] = run.Settled;
+        graph["settled_speed_m_s"] = settledSpeed;
         graph["total_weight_n"] = totalWeight;
         graph["time_samples_s"] = new JArray(run.TimeSamples.Select(v => (object)v).ToArray());
         graph["motion_samples_m"] = new JArray(run.DisplacementSamples.Select(v => (object)v).ToArray());

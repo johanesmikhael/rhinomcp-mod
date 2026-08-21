@@ -148,8 +148,8 @@ exactly one particle, with every exception a member bearing flat on a pad.
 So `pinned_dynamic` reports **sway stiffness** as well as a verdict, since "does it fall"
 rates that bridge identically to a braced one. Settle, settle again under the notional
 horizontal load the codes prescribe, divide the load by the distance between settled shapes.
-Both horizontal directions, disturbance off. Result: **4.65e8 N/m unbraced against 6.76e8
-braced in y**, the direction the modes move.
+Both horizontal directions, disturbance off. Result: **4.67e8 N/m unbraced against 6.94e8
+braced in y**, the direction the modes move, and about 2.4e9 in x for both.
 
 Those braced figures are post-clustering-fix. Removing seven joints that should never have
 existed made the braced bridge *softer* - 7.27e8 to 6.76e8 in y, and its sag 0.40 mm to
@@ -174,3 +174,26 @@ radius.
   against the 81 J gravity does over the same distance.
 - `KangarooSolver.dll` as built against does **not** expose `PhysicalSystem.Particles`, so
   particle assignment is replicated in `StabilityDynamics.AssignParticles`.
+
+### Cost, and the two solvers inside one mode
+
+A full dynamic evaluation runs in **~10 s**, down from 167 s at its worst. Three things got
+it there, and only the first is about speed:
+
+1. **The verdict run stops when the structure stops.** Settling is tested on speed, not
+   displacement, so it cannot be passed at the top of a swing. 110k steps rather than 767k.
+2. **The stiffness runs use kinetic damping, not real time.** A secant stiffness wants an
+   equilibrium position and nothing else. At the structure's real 2% it rings for tens of
+   periods; viscous damping sized on each particle's *local* stiffness over-damps the slow
+   global mode and was four times slower still, without converging. Zeroing all velocities
+   whenever kinetic energy turns over is standard dynamic relaxation and settles it fast.
+   **This is a static solver, and the verdict never uses it** - which is precisely the
+   distinction Kangaroo's `Step` blurs.
+3. **The probe load is 5% of weight, not the codes' 0.5%.** At 0.5% the stiff direction
+   moved 0.2 micron, under the settling residual, and its reported stiffness tracked the
+   residual rather than the structure: 9.7e8, 1.9e9, 2.4e9 as the run was lengthened.
+   Linearity is checked rather than assumed - quadrupling the probe to 20% moves the stiff
+   direction by 0.2%, while the soft direction drops ~7%, which is the geometric softening
+   an infinitesimal mechanism should show.
+
+The client timeout is back to 120 s. Raising it to 900 s was treating the symptom.

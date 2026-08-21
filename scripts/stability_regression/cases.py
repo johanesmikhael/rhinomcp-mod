@@ -442,10 +442,11 @@ CASES: list[Case] = [
             "order; stands under self-weight but soft in y, the direction the modes move"),
         build=bridge_build(braced=False),
         # The softness is the finding, so it is what gets asserted. Sway stiffness in the
-        # mode's own direction is about 4.7e8 N/m against the braced 6.8e8.
+        # mode's own direction is about 4.7e8 N/m against the braced 6.9e8, while the x
+        # direction the modes do not touch is about 2.4e9 for both.
         expect={
-            "sway.sway_stiffness_y_n_per_m": (3.0e8, 6.0e8),
-            "sway.sway_stiffness_x_n_per_m": (1.2e9, 2.4e9),
+            "sway.sway_stiffness_y_n_per_m": (4.0e8, 5.4e8),
+            "sway.sway_stiffness_x_n_per_m": (2.0e9, 2.9e9),
         },
     ),
     Case(
@@ -453,11 +454,11 @@ CASES: list[Case] = [
         mode="pinned_dynamic",
         tier=FAST,
         stable=True,
-        reason="0 mechanisms; stiffer in y than the unbraced bridge, 6.8e8 against 4.7e8",
+        reason="0 mechanisms; stiffer in y than the unbraced bridge, 6.9e8 against 4.7e8",
         build=bridge_build(braced=True),
         expect={
-            "sway.sway_stiffness_y_n_per_m": (6.0e8, 9.5e8),
-            "sway.sway_stiffness_x_n_per_m": (1.2e9, 2.4e9),
+            "sway.sway_stiffness_y_n_per_m": (6.0e8, 8.0e8),
+            "sway.sway_stiffness_x_n_per_m": (2.0e9, 2.9e9),
         },
     ),
     # Committed failing, like the welded pedestal was. The relaxed pinned mode calls this
