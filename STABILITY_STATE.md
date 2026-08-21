@@ -38,9 +38,12 @@ Welded is an upper bound: it supplies every moment connection the real assembly 
 ## What is NOT trustworthy yet
 
 1. **Collapse detection depends on the iteration budget.** Relaxation converges toward
-   equilibrium; it does not fall. With physical stiffness a mechanism creeps: the unbraced
-   bridge needs ~5250 solver iterations (62 s) to be caught and reads *stable* at the
-   default budget. This is the single biggest open defect.
+   equilibrium; it does not fall, so a mechanism creeps instead of collapsing and the
+   verdict depends on how long it is allowed to creep. Still the single biggest open
+   defect, but no longer unmeasured: the slow tier of the regression suite records, per
+   case, the smallest budget that reaches the right answer, and fails when one rises.
+   Both slow cases now sit at the default budget, where the unbraced bridge previously
+   needed ~5250 iterations (62 s).
 2. **Contact mode's blind band.** Marginal eccentricity is absorbed as elastic tilt.
    Measured on 3-body stairs: -112 mm topples, -75 mm does not. `torque_gain` (default
    0.25) is the suspect term and remains an arbitrary constant.
@@ -49,10 +52,23 @@ Welded is an upper bound: it supplies every moment connection the real assembly 
 4. **Trend labels mislead.** `rotation_trend: steady` is reported while rotation is still
    growing, because the test asks about *acceleration*. Rename or report both windows.
 5. **Imperial units untested** end to end. Millimetres and metres are verified.
+6. **`floor_strength` is not a subgrade modulus.** It is divided by the summed tributary
+   areas of the vertices standing on the floor, which include those corners' share of the
+   side faces meeting there - a 0.3 x 0.4 m pedestal base sums to ~0.47 m2, not 0.12. The
+   product `ground_support_stiffness_n_per_m` is the quantity with physical meaning.
+7. **The unbraced bridge is caught by the divergence trend, not by displacement.** Its pin
+   displacement is 1.47 mm against a 60.8 mm limit, barely different from the braced case's
+   1.60 mm. The verdict is right; the path to it is the weaker of the two.
+8. **Pinned node clustering finds 23 nodes on the unbraced bridge where the geometry has
+   17** (12 bottom + 5 ridge). Unexplained.
 
 ## Agreed next steps, in order
 
-1. Regression suite from the cases below.
+1. ~~Regression suite from the cases below.~~ **Done** - `scripts/stability_regression/`.
+   Cases are built from code, not loaded from a .3dm, so geometry and answer cannot drift
+   apart, and are scoped by GUID because an existing layer makes `LayerTable.Add` return -1
+   and every object lands on layer 0. Two tiers: fast asserts the verdict at the default
+   budget, slow sweeps `solver_substeps` and baselines the ceiling. 10/10 passing.
 2. Dynamics prototype on **pinned only** — own integrator over the same goals
    (`force = Weighting * Move`, `a = F/m`), real timestep. Kangaroo's `PhysicalSystem`
    integrates velocity but applies kinetic damping (`Velocity *= 0.9` on reversal, else
@@ -60,8 +76,13 @@ Welded is an upper bound: it supplies every moment connection the real assembly 
    `AddParticle(Point3d, double m)` does carry mass.
 3. Extend to contact if it holds — that is where it pays, since real dynamics removes the
    blind band and the `torque_gain` fudge.
-4. Leave welded on relaxation as the unchanged reference; it has an independent
-   `support_margin` cross-check that agrees.
+4. Welded is **no longer** the untouched reference - that premise did not survive the
+   suite. Its fixed 1e5 subgrade modulus decided the verdict on its own and read every
+   cantilever case as unstable, margin or no margin. The floor is now sized as
+   `K = W / settlement` from the load standing on it, at the same 0.1 mm the contact mode
+   uses, and welded discriminates across its own tipping point: +121 mm stable, -40 mm
+   unstable. The independent `support_margin` cross-check matches hand statics to 0.1 mm
+   and did *not* agree with the solver before this fix - it was what exposed it.
 
 Timestep note: stability wants `dt < 2 sqrt(m/k)`; at k = 1e9, m = 100 kg that is ~0.6 ms,
 so 0.5 s of simulation is ~800 steps — affordable.
