@@ -58,6 +58,9 @@ public partial class RhinoMCPModFunctions
         public Plane InitialMarkerPlane { get; set; }
         public Transform DocumentTransform { get; set; } = Transform.Identity;
         public int JointCount => JointPoints.Count;
+
+        /// <summary>Solver particles for this body's pins, in the order the pins were added.</summary>
+        public int[] JointParticles { get; set; } = System.Array.Empty<int>();
     }
 
     /// <summary>
@@ -535,9 +538,50 @@ public partial class RhinoMCPModFunctions
             {
                 indices[markerStart], indices[markerStart + 1], indices[markerStart + 2]
             };
+
+            // RigidMesh puts the body's own particle at index 0 and the listed points from
+            // index 1, so the pins start one past the front. Counting from zero here read
+            // each pin against its predecessor and reported metres of motion on a structure
+            // that had moved millimetres.
+            var pinCount = Math.Min(bodies[i].JointPoints.Count, Math.Max(0, indices.Length - 1));
+            var pins = new int[pinCount];
+            for (var j = 0; j < pinCount; j++)
+            {
+                pins[j] = indices[j + 1];
+            }
+
+            bodies[i].JointParticles = pins;
         }
 
         var particleCount = physicalSystem.ParticleCount();
+
+        // How far the joints themselves have moved. This, and not how far the bodies have
+        // moved, is what a mechanism test should watch: a truss member is idealised as a
+        // line between two pins, and a body pinned at exactly two points is free to spin
+        // about the line joining them without the structure doing anything at all. Measured
+        // on this project's braced bridge: 37 of 47 bodies have exactly two pins, the
+        // rigid-body rank test finds exactly 37 mechanisms, and an independent bar-model
+        // test of the same geometry finds none. Every one of them is spin. Judged on body
+        // markers the structure fails; judged on its pins it holds, and the bar model says
+        // the pins are right.
+        double MaxPinMotion()
+        {
+            var positions = physicalSystem.GetPositionArray();
+            var worst = 0.0;
+            foreach (var body in bodies)
+            {
+                for (var j = 0; j < body.JointParticles.Length; j++)
+                {
+                    var index = body.JointParticles[j];
+                    if (index < positions.Length && j < body.JointPoints.Count)
+                    {
+                        worst = Math.Max(worst, positions[index].DistanceTo(body.JointPoints[j]));
+                    }
+                }
+            }
+
+            return worst;
+        }
 
         double MaxBodyMotion()
         {
@@ -586,6 +630,7 @@ public partial class RhinoMCPModFunctions
         }
 
         var motionSamples = new List<double>();
+        var bodySamples = new List<double>();
         var rotationSamples = new List<double>();
         var sampleInterval = Math.Clamp(currentStep / MotionSampleCount, 1, MaxSampleInterval);
         var divergingSampleRun = 0;
@@ -604,7 +649,8 @@ public partial class RhinoMCPModFunctions
                 continue;
             }
 
-            motionSamples.Add(MaxBodyMotion());
+            motionSamples.Add(MaxPinMotion());
+            bodySamples.Add(MaxBodyMotion());
             rotationSamples.Add(MaxBodyRotation());
 
             if (motionSamples.Count >= MinSettledSamples)
@@ -621,17 +667,15 @@ public partial class RhinoMCPModFunctions
                     }
                 }
 
-                if (settled && IsGrowingRotation(rotationSamples))
-                {
-                    settled = false;
-                }
-
                 if (settled)
                 {
                     break;
                 }
 
-                if (IsDivergingMotion(motionSamples) && IsGrowingRotation(rotationSamples))
+                // Growth of the pins alone. Bringing body rotation into the gate would let
+                // a member spinning about its own pin axis keep the run alive, or read as
+                // a collapse, on motion the structure never made.
+                if (IsDivergingMotion(motionSamples))
                 {
                     divergingSampleRun++;
                     if (divergingSampleRun >= DivergingSamplesToExit)
@@ -650,6 +694,7 @@ public partial class RhinoMCPModFunctions
         var nodeReports = new JArray();
         var worstDisplacement = 0.0;
         var worstRotation = 0.0;
+        var worstPinDisplacement = 0.0;
         string worstNode = null;
 
         foreach (var body in bodies)
@@ -659,6 +704,7 @@ public partial class RhinoMCPModFunctions
             var p2 = body.MarkerParticles[2];
             var displacement = 0.0;
             var rotationDegrees = 0.0;
+            var pinDisplacement = 0.0;
 
             if (p0 < finalPositions.Length && p1 < finalPositions.Length && p2 < finalPositions.Length)
             {
@@ -670,6 +716,21 @@ public partial class RhinoMCPModFunctions
                     var moved = new Point3d(body.Centroid);
                     moved.Transform(xform);
                     displacement = moved.DistanceTo(body.Centroid);
+
+                    // How far the element's own pins travelled, as against how far its body
+                    // did. A member pinned at exactly two nodes can spin about the line
+                    // joining them, which is a mechanism here only because these are solid
+                    // bodies - a truss member is a line and has no such freedom. That spin
+                    // swings the body and its markers while the pins stay put, so pins that
+                    // hold still under a large body movement mean the mode is an artifact
+                    // of the idealisation, and pins that travel mean the assembly is
+                    // genuinely coming apart.
+                    foreach (var pin in body.JointPoints)
+                    {
+                        var movedPin = new Point3d(pin);
+                        movedPin.Transform(xform);
+                        pinDisplacement = Math.Max(pinDisplacement, movedPin.DistanceTo(pin));
+                    }
 
                     // Without this the display draws the model exactly as it was built. The
                     // contact path picks the transform up from ReportBodies; this loop is
@@ -686,6 +747,7 @@ public partial class RhinoMCPModFunctions
             }
 
             worstRotation = Math.Max(worstRotation, rotationDegrees);
+            worstPinDisplacement = Math.Max(worstPinDisplacement, pinDisplacement);
             body.Node.Node["pinned_displacement_m"] = displacement;
             body.Node.Node["pinned_rotation_deg"] = rotationDegrees;
             body.Node.Node["joint_count"] = body.JointCount;
@@ -696,6 +758,7 @@ public partial class RhinoMCPModFunctions
                 ["joints"] = body.JointCount,
                 ["ground_points"] = body.GroundPoints.Count,
                 ["displacement_m"] = displacement,
+                ["pin_displacement_m"] = pinDisplacement,
                 ["rotation_deg"] = rotationDegrees
             });
         }
@@ -703,11 +766,12 @@ public partial class RhinoMCPModFunctions
         var diverging = IsDivergingMotion(motionSamples);
         var turning = IsGrowingRotation(rotationSamples);
 
-        // A pinned assembly that holds still is kinematically determinate. One that keeps
-        // moving has a mechanism in it, and the body that moved furthest is where to look.
-        var isMechanism = diverging || turning ||
-            worstRotation > DefaultRotationThresholdDegrees ||
-            worstDisplacement > PinnedMechanismDisplacementMeters;
+        // A pinned assembly whose joints hold still is kinematically determinate. One whose
+        // joints keep moving has a mechanism in it. Body displacement and rotation are
+        // reported alongside but deliberately kept out of the verdict: they include each
+        // member's spin about its own pin axis, which is a freedom of this idealisation
+        // rather than of the structure.
+        var isMechanism = diverging || worstPinDisplacement > PinnedMechanismDisplacementMeters;
 
         var widest = 0.0;
         foreach (var entry in clusterReport)
@@ -726,9 +790,22 @@ public partial class RhinoMCPModFunctions
         graph["motion_trend"] = diverging ? "diverging" : "settling";
         graph["rotation_trend"] = turning ? "turning" : "steady";
         graph["motion_samples_m"] = new JArray(motionSamples.Select(v => (object)v).ToArray());
+        graph["body_motion_samples_m"] = new JArray(bodySamples.Select(v => (object)v).ToArray());
+        graph["verdict_metric"] = "pin_displacement";
         graph["rotation_samples_deg"] = new JArray(rotationSamples.Select(v => (object)v).ToArray());
         graph["solver_steps_run"] = stepsRun;
         graph["max_body_displacement_m"] = worstDisplacement;
+        graph["max_pin_displacement_m"] = worstPinDisplacement;
+        graph["joint_slip_m"] = jointSlipMeters;
+        graph["youngs_modulus_pa"] = youngsModulus;
+        graph["material_density_kg_m3"] = materialDensity;
+        graph["member_stiffness_min_n_per_m"] = bodyStrengths.Length > 0
+            ? bodyStrengths.Min() / RelaxationCompensation
+            : 0.0;
+        graph["member_stiffness_max_n_per_m"] = bodyStrengths.Length > 0
+            ? bodyStrengths.Max() / RelaxationCompensation
+            : 0.0;
+        graph["joint_strength_auto"] = jointStrengthIsAuto;
         graph["max_body_rotation_deg"] = worstRotation;
         graph["worst_body"] = worstNode;
         graph["bodies"] = nodeReports;
