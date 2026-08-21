@@ -15,6 +15,8 @@ async def evaluate_stability(
     joint_penetration: float | None = None,
     ground_settlement: float | None = None,
     torque_gain: float | None = None,
+    duration_seconds: float | None = None,
+    damping_ratio: float | None = None,
     stability_threshold: float | None = None,
     rigid_strength: float | None = None,
     floor_strength: float | None = None,
@@ -97,7 +99,17 @@ async def evaluate_stability(
             When omitted, Rhino converts the canonical 0.000001 m default.
         threshold: Solver displacement threshold in document units. When
             omitted, Rhino converts the canonical 0.001 m default.
-        solver_substeps: Kangaroo substeps per solver step.
+        duration_seconds: pinned_dynamic mode only. How long to simulate, in seconds.
+            Unlike a step count this means the same thing on every model: a mechanism
+            with a tenth of gravity available to it covers 50 mm in 0.32 s, so the
+            default 0.5 s separates falling from standing with room to spare.
+        damping_ratio: pinned_dynamic mode only. Viscous damping as a fraction of
+            critical, per particle. Defaults to 0.02, the low end of what codes assume
+            for steel framing. With none at all a sound structure oscillates forever
+            about its static deflection and peaks at twice it.
+        solver_substeps: Kangaroo substeps per solver step. Ignored by pinned_dynamic,
+            which derives its own timestep from the stiffest spring holding the
+            lightest mass.
         display: Cache evaluated geometry in Rhino for display when true.
         graph: Optional connectivity graph JSON. Overrides every other source.
         layer: Layer name, or list of names, to evaluate.
@@ -139,6 +151,10 @@ async def evaluate_stability(
         params["joint_penetration"] = joint_penetration
     if ground_settlement is not None:
         params["ground_settlement"] = ground_settlement
+    if duration_seconds is not None:
+        params["duration_seconds"] = duration_seconds
+    if damping_ratio is not None:
+        params["damping_ratio"] = damping_ratio
     if torque_gain is not None:
         params["torque_gain"] = torque_gain
     if current_step is not None:

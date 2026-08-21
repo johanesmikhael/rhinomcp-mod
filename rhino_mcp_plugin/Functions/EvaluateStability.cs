@@ -332,7 +332,11 @@ public partial class RhinoMCPModFunctions
             // welded catches an assembly tipping over, pinned catches a mechanism. See the
             // remarks on the pinned solver for why a pin cannot see overturning.
             var modeText = parameters?["mode"]?.ToString();
-            var pinned = string.Equals(modeText, "pinned", StringComparison.OrdinalIgnoreCase) ||
+            var dynamicMode = string.Equals(modeText, "dynamic", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(modeText, "pinned_dynamic", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(modeText, PinnedDynamicEvaluationMode, StringComparison.OrdinalIgnoreCase);
+            var pinned = dynamicMode ||
+                string.Equals(modeText, "pinned", StringComparison.OrdinalIgnoreCase) ||
                 string.Equals(modeText, PinnedEvaluationMode, StringComparison.OrdinalIgnoreCase);
             if (!pinned && !string.IsNullOrWhiteSpace(modeText) &&
                 !string.Equals(modeText, "welded", StringComparison.OrdinalIgnoreCase) &&
@@ -341,7 +345,7 @@ public partial class RhinoMCPModFunctions
                 !string.Equals(modeText, EvaluationMode, StringComparison.OrdinalIgnoreCase))
             {
                 throw new ArgumentException(
-                    $"Unknown evaluation mode '{modeText}'; use 'welded', 'pinned' or 'contact'.");
+                    $"Unknown evaluation mode '{modeText}'; use 'welded', 'pinned', 'contact' or 'pinned_dynamic'.");
             }
 
             var contactMode = string.Equals(modeText, "contact", StringComparison.OrdinalIgnoreCase) ||
@@ -437,6 +441,57 @@ public partial class RhinoMCPModFunctions
                 var materialDensity = ReadFiniteParameter(
                     parameters, "material_density", DefaultMaterialDensityKgM3, 0.0,
                     inclusiveMinimum: false);
+
+                if (dynamicMode)
+                {
+                    // Same bodies, same pins, same member stiffness - Newton's second law
+                    // instead of Kangaroo's weighted average. See StabilityDynamics.
+                    var duration = ReadFiniteParameter(
+                        parameters, "duration_seconds", StabilityDynamics.DefaultDurationSeconds,
+                        0.0, inclusiveMinimum: false);
+                    var damping = ReadFiniteParameter(
+                        parameters, "damping_ratio", StabilityDynamics.DefaultDampingRatio, 0.0);
+                    var imperfection = ReadFiniteParameter(
+                        parameters, "imperfection_fraction",
+                        StabilityDynamics.DefaultImperfectionFraction, 0.0);
+
+                    var dynamicStable = SolvePinnedDynamicFromGraph(
+                        graph,
+                        stabilityNodes,
+                        rigidStrength,
+                        rigidStrengthIsAuto,
+                        unitContext.ToMeters(pinnedSlip),
+                        youngsModulus,
+                        materialDensity,
+                        rigidStrength * AutoRigidFloorRatio,
+                        unitContext.ToMeters(floorZ),
+                        gravity,
+                        unitContext.ToMeters(assignTol),
+                        duration,
+                        damping,
+                        imperfection,
+                        unitContext.LengthToMeters,
+                        WantsDisplay(parameters) ? doc : null);
+
+                    var dynamicResult = BuildPinnedResult(graph, doc, unitContext, dynamicStable,
+                        gravity, floorZ, floorZIsAuto, rigidStrength, totalMassKilograms,
+                        unitWarnings);
+                    dynamicResult["evaluation_mode"] = PinnedDynamicEvaluationMode;
+                    foreach (var key in new[]
+                    {
+                        "max_pin_displacement_m", "timestep_s", "steps_run", "simulated_seconds",
+                        "duration_requested_s", "damping_ratio", "peak_speed_m_s", "total_weight_n",
+                        "imperfection_m", "imperfection_fraction", "imperfection_speed_m_s",
+                        "time_samples_s", "speed_samples_m_s", "member_stiffness_min_n_per_m",
+                        "member_stiffness_max_n_per_m", "node_count_clustered", "node_widest_m",
+                        "nodes", "span_m"
+                    })
+                    {
+                        dynamicResult[key] = graph[key];
+                    }
+
+                    return dynamicResult;
+                }
 
                 var pinnedStable = SolvePinnedFromGraph(
                     graph,
