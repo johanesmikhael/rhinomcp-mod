@@ -9,6 +9,7 @@ answers are known independently of the solver.
 | mode | bodies | joints | question |
 | --- | --- | --- | --- |
 | `welded` | whole scope as one rigid body | none | does the assembly tip or slide? |
+| `pinned_dynamic` | one rigid body per element, pinned | real seconds | how far does it move, and how stiff is it? |
 | `multi_body_contact` | one per element | bearing patches, compression only, friction 0.6 | can an element rotate off, lift, slide? |
 | `multi_body_pinned` | one per element | shared particles at clustered nodes | is it a mechanism? |
 
@@ -56,9 +57,8 @@ Welded is an upper bound: it supplies every moment connection the real assembly 
    areas of the vertices standing on the floor, which include those corners' share of the
    side faces meeting there - a 0.3 x 0.4 m pedestal base sums to ~0.47 m2, not 0.12. The
    product `ground_support_stiffness_n_per_m` is the quantity with physical meaning.
-7. **The unbraced bridge is caught by the divergence trend, not by displacement.** Its pin
-   displacement is 1.47 mm against a 60.8 mm limit, barely different from the braced case's
-   1.60 mm. The verdict is right; the path to it is the weaker of the two.
+7. **The relaxed pinned mode reports a false positive on the unbraced bridge**, through its
+   divergence trend rather than displacement. Committed as a failing regression case.
 8. **Pinned node clustering finds 23 nodes on the unbraced bridge where the geometry has
    17** (12 bottom + 5 ridge). Unexplained.
 
@@ -69,7 +69,7 @@ Welded is an upper bound: it supplies every moment connection the real assembly 
    apart, and are scoped by GUID because an existing layer makes `LayerTable.Add` return -1
    and every object lands on layer 0. Two tiers: fast asserts the verdict at the default
    budget, slow sweeps `solver_substeps` and baselines the ceiling. 10/10 passing.
-2. Dynamics prototype on **pinned only** — own integrator over the same goals
+2. ~~Dynamics prototype on **pinned only**~~ **Done** - mode `pinned_dynamic`. — own integrator over the same goals
    (`force = Weighting * Move`, `a = F/m`), real timestep. Kangaroo's `PhysicalSystem`
    integrates velocity but applies kinetic damping (`Velocity *= 0.9` on reversal, else
    zeroed), so it is an equilibrium finder and cannot be used as a simulator directly.
@@ -120,3 +120,45 @@ bottom plane. The bridge needs either 4-5 diagonals at 2828 mm, or a true octet 
 - **Rebuilding the .rhp while Rhino has it loaded corrupts the running plugin** — symptom
   is "Bad IL range." on every MCP call. Always quit Rhino before `dotnet build` into
   `bin/Debug`; type-check by building a copied tree in the scratchpad.
+
+## Infinitesimal mechanisms, and why the bridge stands
+
+The unbraced bridge has four modes by rank test, and it does not collapse. Both are true.
+
+Under the mode a tie's ends separate as `2*sqrt(1 + (0.71t)^2)`: length preserved to first
+order, growing at second. These are *infinitesimal* mechanisms, stiffened quadratically by
+the five states of self-stress the same rank test reports beside them. **A rank test counts
+modes; it does not predict collapse.** Reading "4 mechanisms" as "unstable" was an inference
+laid on top of the test, and it was wrong - it is the one place the suite's ground truth had
+to be corrected rather than the solver.
+
+Three independent checks agree the structure stands: the integrator settles it at 0.60 mm
+(braced: 0.40 mm) and does not run away undamped or over 2 s; 10% of its weight applied
+sideways moves it 1 micron further than no load; and 161 of 167 connected body pairs share
+exactly one particle, with every exception a member bearing flat on a pad.
+
+So `pinned_dynamic` reports **sway stiffness** as well as a verdict, since "does it fall"
+rates that bridge identically to a braced one. Settle, settle again under the notional
+horizontal load the codes prescribe, divide the load by the distance between settled shapes.
+Both horizontal directions, disturbance off. Result: **4.65e8 N/m unbraced against 7.27e8
+braced in y**, the direction the modes move, and an identical 1.7e9 in x, which they do not
+touch.
+
+### Dynamics notes
+
+- `Weighting * Move` is a force: Kangaroo's `Unary` carries an applied force as `Move`
+  against a weight of exactly 1. Dividing the sum by mass rather than by accumulated weight
+  is the whole change.
+- Timestep is derived, not set: the stability limit of the stiffest spring holding the
+  lightest mass. ~6e-7 s here, 828k steps for half a second in 13 s.
+- A `RigidMesh`'s first particle keeps the projective update - it carries the body's fitted
+  frame, and its `Move` is the fit's correction rather than a force on anything.
+- Mass is distributed over each body's particles, so gravity acts where the inertia is.
+  Verified: 81415 N against 8302 kg modelled.
+- **The imperfection is a modelling assumption, not a numerical trick.** Symmetric gravity
+  does not excite an antisymmetric mode, so from perfect geometry both bridges moved
+  identically to the micron. Applied as a velocity `v = sqrt(2*g*delta)`, `delta = span/1000`:
+  displacing particles instead would store the flaw as strain in 3.6e8 N/m springs, ~26 kJ
+  against the 81 J gravity does over the same distance.
+- `KangarooSolver.dll` as built against does **not** expose `PhysicalSystem.Particles`, so
+  particle assignment is replicated in `StabilityDynamics.AssignParticles`.
