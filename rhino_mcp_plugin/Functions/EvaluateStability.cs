@@ -478,7 +478,10 @@ public partial class RhinoMCPModFunctions
                 currentStep,
                 stabilityThreshold,
                 rigidStrength,
+                rigidStrengthIsAuto,
                 floorStrength,
+                floorStrengthIsAuto,
+                DefaultGroundSettlementMeters,
                 unitContext.ToMeters(floorZ),
                 gravity,
                 unitContext.ToMeters(assignTol),
@@ -497,6 +500,10 @@ public partial class RhinoMCPModFunctions
             // Report the solver inputs that the caller did not necessarily supply, so a
             // result can be explained without re-running the evaluation to discover them.
             graph["total_mass_kg"] = totalMassKilograms;
+            // The sized value, not the value read from the parameters: an auto run picks
+            // its own subgrade and reporting the placeholder would explain nothing.
+            floorStrength = graph["floor_strength_sized"]?.Value<double>() ?? floorStrength;
+            rigidStrength = graph["rigid_strength_sized"]?.Value<double>() ?? rigidStrength;
             graph["floor_strength"] = floorStrength;
             graph["floor_strength_auto"] = floorStrengthIsAuto;
             graph["rigid_strength"] = rigidStrength;
@@ -695,6 +702,9 @@ public partial class RhinoMCPModFunctions
                 ["total_mass_kg"] = totalMassKilograms,
                 ["floor_strength"] = floorStrength,
                 ["floor_strength_auto"] = floorStrengthIsAuto,
+                ["ground_bearing_area_m2"] = graph["ground_bearing_area_m2"],
+                ["ground_support_stiffness_n_per_m"] = graph["ground_support_stiffness_n_per_m"],
+                ["ground_settlement_m"] = graph["ground_settlement_m"],
                 // Reported for the same reason as the floor pair: the rigid strength is
                 // now derived rather than fixed, so a result cannot be explained without
                 // knowing which value the solver actually used.
@@ -1000,7 +1010,10 @@ public partial class RhinoMCPModFunctions
         int currentStep,
         double stabilityThreshold,
         double rigidStrength,
+        bool rigidStrengthIsAuto,
         double floorStrength,
+        bool floorStrengthIsAuto,
+        double groundSettlementMeters,
         double floorZMeters,
         double gravity,
         double assignToleranceMeters,
@@ -1173,11 +1186,6 @@ public partial class RhinoMCPModFunctions
             throw new InvalidOperationException("Kangaroo could not create a rigid body from the assembly mesh.");
         }
 
-        // All source vertices intentionally form one welded rigid body.
-        var rigidGoalPoints = new List<Point3d>(vertexPoints);
-        var rbGoal = new RigidBody2(bodyBrep, solverPlane, rigidGoalPoints, rigidStrength);
-        var goals = new List<IGoal> { rbGoal };
-
         // Sorted by grid key so that goal order - and with it particle numbering and the
         // order the solver sums contributions in - depends only on the geometry, never on
         // dictionary insertion order or on which node the graph listed first.
@@ -1186,11 +1194,6 @@ public partial class RhinoMCPModFunctions
             .ThenBy(key => key.Item2)
             .ThenBy(key => key.Item3)
             .ToList();
-
-        foreach (var key in siteKeys)
-        {
-            goals.Add(new Unary(sitePoints[key], new Vector3d(0.0, 0.0, -gravity * siteMasses[key])));
-        }
 
         var contactSites = new List<(Point3d Point, double AreaM2)>();
         var totalContactArea = 0.0;
@@ -1204,6 +1207,75 @@ public partial class RhinoMCPModFunctions
 
             contactSites.Add((sitePoints[key], area));
             totalContactArea += area;
+        }
+
+        // The ground is sized from the load standing on it, not from a constant.
+        //
+        // A fixed subgrade modulus decides the verdict on its own, and in both directions.
+        // Too soft and an eccentric assembly tilts on its own foundation until its centre
+        // of mass leaves the base, so a block with 121 mm of margin topples; too stiff and
+        // a genuine overturning develops too slowly to be seen inside the step budget. The
+        // constant that used to sit here, 1e5, was a compromise between those two wrong
+        // answers, and it read every case in the regression sweep as unstable, margin or no
+        // margin.
+        //
+        // Sizing it the way the contact mode sizes its joints removes the choice: the
+        // ground is a spring that settles a stated distance under the weight it actually
+        // carries, so K = W / settlement, and the per-area modulus is that over the bearing
+        // area. The result is a real subgrade stiffness in Pa/m rather than a tuning knob,
+        // and it moves with the model instead of having to be re-picked for each one.
+        //
+        // AreaFloor proposes its full correction rather than Kangaroo's usual quarter, so
+        // no relaxation compensation belongs here - unlike RigidMesh, see
+        // RelaxationCompensation.
+        if (floorStrengthIsAuto)
+        {
+            // The tributary areas of the vertices standing on the floor - which is what
+            // AreaFloor multiplies its strength by, so it is the right denominator for
+            // making the total support stiffness come out at W / settlement. It is not the
+            // bearing footprint and is larger than it: a bottom corner's tributary area
+            // includes its share of the two side faces meeting there, so a 0.3 x 0.4 m
+            // pedestal base sums to about 0.47 m2. The product is what carries physical
+            // meaning here; floor_strength on its own is not a subgrade modulus.
+            var bearingArea = 0.0;
+            foreach (var site in contactSites)
+            {
+                if (site.Point.Z <= floorZMeters + GroundContactToleranceMeters)
+                {
+                    bearingArea += site.AreaM2;
+                }
+            }
+
+            var weightNewtons = gravity * massTotal;
+            if (bearingArea > 0.0 && weightNewtons > 0.0 && groundSettlementMeters > 0.0)
+            {
+                floorStrength = weightNewtons / (groundSettlementMeters * bearingArea);
+                if (rigidStrengthIsAuto)
+                {
+                    // Kangaroo blends goals by weight, so a floor heavier than the rigid
+                    // goal deforms the very assembly it is supporting.
+                    rigidStrength = Math.Min(
+                        Math.Max(floorStrength * AutoRigidFloorRatio, DefaultRigidStrength),
+                        MaxAutoRigidStrength);
+                }
+            }
+
+            graph["ground_bearing_area_m2"] = bearingArea;
+            graph["ground_support_stiffness_n_per_m"] = floorStrength * bearingArea;
+        }
+
+        graph["floor_strength_sized"] = floorStrength;
+        graph["rigid_strength_sized"] = rigidStrength;
+        graph["ground_settlement_m"] = groundSettlementMeters;
+
+        // All source vertices intentionally form one welded rigid body.
+        var rigidGoalPoints = new List<Point3d>(vertexPoints);
+        var rbGoal = new RigidBody2(bodyBrep, solverPlane, rigidGoalPoints, rigidStrength);
+        var goals = new List<IGoal> { rbGoal };
+
+        foreach (var key in siteKeys)
+        {
+            goals.Add(new Unary(sitePoints[key], new Vector3d(0.0, 0.0, -gravity * siteMasses[key])));
         }
 
         if (contactSites.Count > 0)

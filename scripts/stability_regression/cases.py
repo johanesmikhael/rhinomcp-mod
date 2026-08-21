@@ -173,6 +173,49 @@ def pedestal_build() -> str:
 
 
 # --------------------------------------------------------------------------------------
+# Cantilever: a slab overhanging a narrow pedestal, swept across the tipping point
+# --------------------------------------------------------------------------------------
+#
+# Pedestal 300 x 400 x 1000 mm over x = 0..300, carrying a 2000 x 400 x 200 mm slab that
+# covers it completely, so the bearing contact is never a sliver however far the slab is
+# pushed. Only the slab's position changes:
+#
+#     margin = 300 - (288*150 + 384*cx) / 672
+#
+# with 288 kg of pedestal at x = 150 and 384 kg of slab at its own centre cx. This sweeps
+# a welded assembly across its own tipping point, which is the one thing welded mode is
+# supposed to answer. It matters in both directions: a floor too soft tips an assembly
+# whose centre of mass is still inside its base, and a floor too stiff holds up one whose
+# centre of mass is outside it. Only cases either side of zero can tell those apart.
+
+CANTILEVER_PEDESTAL = (300.0, 400.0, 1000.0)
+CANTILEVER_SLAB = (2000.0, 400.0, 200.0)
+
+
+def cantilever_margin_mm(slab_centre_x: float) -> float:
+    pedestal = concrete_mass(*CANTILEVER_PEDESTAL)
+    slab = concrete_mass(*CANTILEVER_SLAB)
+    centre = (pedestal * CANTILEVER_PEDESTAL[0] / 2.0 + slab * slab_centre_x) / (pedestal + slab)
+    return CANTILEVER_PEDESTAL[0] - centre
+
+
+def cantilever_build(slab_centre_x: float) -> Callable[[], str]:
+    def build() -> str:
+        pedestal = concrete_mass(*CANTILEVER_PEDESTAL)
+        slab = concrete_mass(*CANTILEVER_SLAB)
+        half = CANTILEVER_SLAB[0] / 2.0
+        top = CANTILEVER_PEDESTAL[2]
+        return (
+            f'world_box("PEDESTAL", 0.0, 0.0, 0.0, {CANTILEVER_PEDESTAL[0]!r}, '
+            f'{CANTILEVER_PEDESTAL[1]!r}, {top!r}, {pedestal!r})\n'
+            f'world_box("SLAB", {slab_centre_x - half!r}, 0.0, {top!r}, '
+            f'{slab_centre_x + half!r}, {CANTILEVER_SLAB[1]!r}, '
+            f'{top + CANTILEVER_SLAB[2]!r}, {slab!r})')
+
+    return build
+
+
+# --------------------------------------------------------------------------------------
 # Bridge: a triangular-prism Warren girder over a 10 m span
 # --------------------------------------------------------------------------------------
 #
@@ -344,6 +387,32 @@ CASES: list[Case] = [
             "welded mode cannot see one element leave another; the combined centre of mass "
             "is still over the pedestal, so stable here is correct for what this mode asks"),
         build=pedestal_build,
+    ),
+    Case(
+        name="cantilever_margin_plus120",
+        mode="welded",
+        tier=FAST,
+        stable=True,
+        reason=f"centre of mass {cantilever_margin_mm(200.0):+.0f} mm inside the pedestal face",
+        build=cantilever_build(200.0),
+    ),
+    Case(
+        name="cantilever_margin_minus40",
+        mode="welded",
+        tier=FAST,
+        stable=False,
+        reason=(
+            f"centre of mass {abs(cantilever_margin_mm(482.5)):.0f} mm outside the pedestal "
+            "face; the closest case to the tipping point in either direction"),
+        build=cantilever_build(482.5),
+    ),
+    Case(
+        name="cantilever_margin_minus220",
+        mode="welded",
+        tier=FAST,
+        stable=False,
+        reason=f"centre of mass {abs(cantilever_margin_mm(800.0)):.0f} mm outside the pedestal face",
+        build=cantilever_build(800.0),
     ),
     Case(
         name="bridge_braced",
