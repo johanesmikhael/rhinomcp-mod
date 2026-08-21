@@ -527,20 +527,22 @@ CASES: list[Case] = [
             "integrator": "particles",
         },
     ),
-    # Committed failing, like the welded pedestal was. The relaxed pinned mode calls this
-    # structure unstable through its divergence trend, which is the weaker of its two paths
-    # to a verdict and the one that does not survive being checked: the integrator, a
-    # notional lateral load, and the second-order reading of the mode shape all say it
-    # stands. Left in the suite because a false positive that nothing asserts is a false
-    # positive nobody fixes.
+    # This case was committed failing for as long as a relaxed pinned solver existed. It
+    # called the structure unstable through its divergence trend - the weaker of its two
+    # paths to a verdict, and the one that did not survive being checked, firing at 1.47 mm
+    # of pin motion against a 60.8 mm limit while an integrator, a lateral load test and the
+    # mode shape all said it stands.
+    #
+    # It passes now because "pinned" is an alias for the dynamic solver and the relaxed one
+    # is deleted. The defect is gone rather than tolerated, and the assertion never moved.
     Case(
-        name="bridge_unbraced_relaxed",
+        name="bridge_unbraced_pinned_alias",
         mode="pinned",
         tier=FAST,
         stable=True,
         reason=(
-            "infinitesimal mechanisms stiffen at second order; the relaxed mode reports "
-            "unstable from its divergence trend, which is a false positive"),
+            "infinitesimal mechanisms stiffen at second order, so it stands; and \"pinned\" "
+            "must now answer identically to \"pinned_dynamic\""),
         build=bridge_build(braced=False),
     ),
 ]

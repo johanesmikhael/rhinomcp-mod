@@ -332,12 +332,14 @@ public partial class RhinoMCPModFunctions
             // welded catches an assembly tipping over, pinned catches a mechanism. See the
             // remarks on the pinned solver for why a pin cannot see overturning.
             var modeText = parameters?["mode"]?.ToString();
-            var dynamicMode = string.Equals(modeText, "dynamic", StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(modeText, "pinned_dynamic", StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(modeText, PinnedDynamicEvaluationMode, StringComparison.OrdinalIgnoreCase);
-            var pinned = dynamicMode ||
+            // "pinned" and "pinned_dynamic" are the same thing: the relaxed pinned solver
+            // is gone, and the names are kept only so existing callers keep working.
+            var pinned =
                 string.Equals(modeText, "pinned", StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(modeText, PinnedEvaluationMode, StringComparison.OrdinalIgnoreCase);
+                string.Equals(modeText, "dynamic", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(modeText, "pinned_dynamic", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(modeText, PinnedEvaluationMode, StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(modeText, PinnedDynamicEvaluationMode, StringComparison.OrdinalIgnoreCase);
             if (!pinned && !string.IsNullOrWhiteSpace(modeText) &&
                 !string.Equals(modeText, "welded", StringComparison.OrdinalIgnoreCase) &&
                 !string.Equals(modeText, "contact", StringComparison.OrdinalIgnoreCase) &&
@@ -442,7 +444,13 @@ public partial class RhinoMCPModFunctions
                     parameters, "material_density", DefaultMaterialDensityKgM3, 0.0,
                     inclusiveMinimum: false);
 
-                if (dynamicMode)
+                // Every pinned request is answered by the dynamic solver now. The relaxed
+                // one asked the same question of the same model and reached its verdict
+                // through a divergence trend rather than a displacement, which fired on the
+                // one structure where the displacement test was right: it called the
+                // unbraced bridge unstable at 1.47 mm of pin motion against a 60.8 mm
+                // limit, while an integrator, a lateral load test and the mode shape all
+                // said it stands. Deleting it removes the defect rather than patching it.
                 {
                     // Same bodies, same pins, same member stiffness - Newton's second law
                     // instead of Kangaroo's weighted average. See StabilityDynamics.
@@ -561,38 +569,6 @@ public partial class RhinoMCPModFunctions
                     return dynamicResult;
                 }
 
-                var pinnedStable = SolvePinnedFromGraph(
-                    graph,
-                    stabilityNodes,
-                    currentStep,
-                    rigidStrength,
-                    rigidStrengthIsAuto,
-                    unitContext.ToMeters(pinnedSlip),
-                    youngsModulus,
-                    materialDensity,
-                    rigidStrength * AutoRigidFloorRatio,
-                    unitContext.ToMeters(floorZ),
-                    gravity,
-                    unitContext.ToMeters(assignTol),
-                    unitContext.ToMeters(threshold),
-                    solverSubsteps,
-                    unitContext.LengthToMeters,
-                    WantsDisplay(parameters) ? doc : null);
-
-                var pinnedResult = BuildPinnedResult(graph, doc, unitContext, pinnedStable, gravity,
-                    floorZ, floorZIsAuto, rigidStrength, totalMassKilograms, unitWarnings);
-                pinnedResult["max_pin_displacement_m"] = graph["max_pin_displacement_m"];
-                pinnedResult["joint_slip"] = pinnedSlip;
-                pinnedResult["joint_slip_m"] = graph["joint_slip_m"];
-                pinnedResult["joint_strength_auto"] = graph["joint_strength_auto"];
-                pinnedResult["youngs_modulus_pa"] = graph["youngs_modulus_pa"];
-                pinnedResult["material_density_kg_m3"] = graph["material_density_kg_m3"];
-                pinnedResult["member_stiffness_min_n_per_m"] = graph["member_stiffness_min_n_per_m"];
-                pinnedResult["member_stiffness_max_n_per_m"] = graph["member_stiffness_max_n_per_m"];
-                pinnedResult["node_count_clustered"] = graph["node_count_clustered"];
-                pinnedResult["node_widest_m"] = graph["node_widest_m"];
-                pinnedResult["nodes"] = graph["nodes"];
-                return pinnedResult;
             }
 
             var stable = SolveFromGraph(

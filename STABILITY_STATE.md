@@ -57,8 +57,10 @@ Welded is an upper bound: it supplies every moment connection the real assembly 
    areas of the vertices standing on the floor, which include those corners' share of the
    side faces meeting there - a 0.3 x 0.4 m pedestal base sums to ~0.47 m2, not 0.12. The
    product `ground_support_stiffness_n_per_m` is the quantity with physical meaning.
-7. **The relaxed pinned mode reports a false positive on the unbraced bridge**, through its
-   divergence trend rather than displacement. Committed as a failing regression case.
+7. ~~The relaxed pinned mode reports a false positive on the unbraced bridge.~~ **Fixed by
+   deletion.** `pinned` is now an alias for the dynamic solver and the 407-line relaxed path
+   is gone; the regression case passes without its assertion moving. See
+   `SIMPLIFICATION_PLAN.md`.
 8. ~~Pinned node clustering finds 23 nodes where the geometry has 17.~~ **Explained and
    fixed.** 23 = 17 structural nodes, all correct, plus 6 genuine pad contacts (the test
    members are drawn as 150 mm boxes centred on the node axes, so they really do intersect
