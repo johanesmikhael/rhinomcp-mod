@@ -425,11 +425,28 @@ public partial class RhinoMCPModFunctions
 
             if (pinned)
             {
+                var pinnedSlip = ReadFiniteParameter(
+                    parameters,
+                    "joint_penetration",
+                    unitContext.FromMeters(DefaultJointPenetrationMeters),
+                    0.0,
+                    inclusiveMinimum: false);
+
+                var youngsModulus = ReadFiniteParameter(
+                    parameters, "youngs_modulus", DefaultYoungsModulusPa, 0.0, inclusiveMinimum: false);
+                var materialDensity = ReadFiniteParameter(
+                    parameters, "material_density", DefaultMaterialDensityKgM3, 0.0,
+                    inclusiveMinimum: false);
+
                 var pinnedStable = SolvePinnedFromGraph(
                     graph,
                     stabilityNodes,
                     currentStep,
                     rigidStrength,
+                    rigidStrengthIsAuto,
+                    unitContext.ToMeters(pinnedSlip),
+                    youngsModulus,
+                    materialDensity,
                     rigidStrength * AutoRigidFloorRatio,
                     unitContext.ToMeters(floorZ),
                     gravity,
@@ -441,6 +458,14 @@ public partial class RhinoMCPModFunctions
 
                 var pinnedResult = BuildPinnedResult(graph, doc, unitContext, pinnedStable, gravity,
                     floorZ, floorZIsAuto, rigidStrength, totalMassKilograms, unitWarnings);
+                pinnedResult["max_pin_displacement_m"] = graph["max_pin_displacement_m"];
+                pinnedResult["joint_slip"] = pinnedSlip;
+                pinnedResult["joint_slip_m"] = graph["joint_slip_m"];
+                pinnedResult["joint_strength_auto"] = graph["joint_strength_auto"];
+                pinnedResult["youngs_modulus_pa"] = graph["youngs_modulus_pa"];
+                pinnedResult["material_density_kg_m3"] = graph["material_density_kg_m3"];
+                pinnedResult["member_stiffness_min_n_per_m"] = graph["member_stiffness_min_n_per_m"];
+                pinnedResult["member_stiffness_max_n_per_m"] = graph["member_stiffness_max_n_per_m"];
                 pinnedResult["node_count_clustered"] = graph["node_count_clustered"];
                 pinnedResult["node_widest_m"] = graph["node_widest_m"];
                 pinnedResult["nodes"] = graph["nodes"];

@@ -171,6 +171,130 @@ public partial class RhinoMCPModFunctions
         return bodies;
     }
 
+    /// <summary>
+    /// Axial stiffness of the member a body represents, EA/L, taken from its mass rather
+    /// than from a modelled section.
+    /// </summary>
+    /// <remarks>
+    /// A prismatic member of mass m, length L and density rho has area A = m/(rho L), so
+    /// EA/L = (E/rho) m / L^2. That reads the real section even when the geometry is drawn
+    /// solid, which is the usual case for a catalogue part: the bridge's members are drawn
+    /// as 150 mm solid boxes but massed as hollow sections, and this returns the hollow
+    /// section's stiffness.
+    ///
+    /// Falls back to the load-referenced figure when the geometry gives no usable length -
+    /// a blob with no long axis is not a member and has no EA/L to speak of.
+    /// </remarks>
+    private static double MemberAxialStiffness(
+        PinnedBody body, double youngsModulus, double density, double carriedNewtons, double slipMeters)
+    {
+        var box = body.SolverMesh.GetBoundingBox(true);
+        var length = box.IsValid
+            ? Math.Max(box.Diagonal.X, Math.Max(box.Diagonal.Y, box.Diagonal.Z))
+            : 0.0;
+        var mass = body.Node.MassKilograms;
+
+        if (!(length > 0.0) || !(mass > 0.0) || !(youngsModulus > 0.0) || !(density > 0.0))
+        {
+            return Math.Max(carriedNewtons, MinimumJointLoadNewtons) / slipMeters;
+        }
+
+        return youngsModulus * mass / (density * length * length);
+    }
+
+    /// <summary>
+    /// Kangaroo's rigid goal proposes a quarter of its correction each iteration, so
+    /// equilibrium sits at four times the error a full correction would leave. Passing four
+    /// times the intended stiffness cancels it.
+    /// </summary>
+    public const double RelaxationCompensation = 4.0;
+
+    /// <summary>Young's modulus and density of structural steel, the default material.</summary>
+    public const double DefaultYoungsModulusPa = 210e9;
+
+    public const double DefaultMaterialDensityKgM3 = 7850.0;
+
+    /// <summary>
+    /// The load each body carries down to its supports, for a pinned assembly.
+    /// </summary>
+    /// <remarks>
+    /// The same descent the contact mode makes over its patches, expressed over shared pin
+    /// points instead: bodies are taken from the top down, and each sheds what it has
+    /// accumulated through the joints below it and the ground beneath it. A body that hangs
+    /// from its neighbours keeps its load, which is correct - it is not carrying anything
+    /// down.
+    /// </remarks>
+    private static double[] PinnedCarriedLoads(List<PinnedBody> bodies, double gravity)
+    {
+        var carried = new double[bodies.Count];
+        var height = new double[bodies.Count];
+        for (var i = 0; i < bodies.Count; i++)
+        {
+            carried[i] = gravity * bodies[i].Node.MassKilograms;
+            height[i] = bodies[i].BodyPlane.Origin.Z;
+        }
+
+        // Which bodies meet at a pin, found from the points they share.
+        var atPoint = new Dictionary<(long, long, long), List<int>>();
+        for (var i = 0; i < bodies.Count; i++)
+        {
+            foreach (var pin in bodies[i].JointPoints)
+            {
+                if (!TrySiteKey(pin, DefaultAssignToleranceMeters, out var key))
+                {
+                    continue;
+                }
+
+                if (!atPoint.TryGetValue(key, out var list))
+                {
+                    list = new List<int>();
+                    atPoint[key] = list;
+                }
+
+                if (!list.Contains(i))
+                {
+                    list.Add(i);
+                }
+            }
+        }
+
+        var order = Enumerable.Range(0, bodies.Count).OrderByDescending(i => height[i]).ToList();
+        foreach (var index in order)
+        {
+            var below = new List<int>();
+            foreach (var pin in bodies[index].JointPoints)
+            {
+                if (!TrySiteKey(pin, DefaultAssignToleranceMeters, out var key) ||
+                    !atPoint.TryGetValue(key, out var list))
+                {
+                    continue;
+                }
+
+                foreach (var other in list)
+                {
+                    if (other != index && height[other] < height[index] && !below.Contains(other))
+                    {
+                        below.Add(other);
+                    }
+                }
+            }
+
+            var ways = below.Count + (bodies[index].GroundPoints.Count > 0 ? 1 : 0);
+            if (ways == 0)
+            {
+                continue;
+            }
+
+            var share = carried[index] / ways;
+            foreach (var other in below)
+            {
+                carried[other] += share;
+            }
+        }
+
+        return carried;
+    }
+
     /// <summary>One graph edge read as a joint: the two bodies and where they bear.</summary>
     private sealed class JointLink
     {
@@ -335,12 +459,23 @@ public partial class RhinoMCPModFunctions
             }
 
             var centre = nodePoints[pair.Key];
+
+            // Which bodies meet here, not merely how many. Counts cannot tell a node that
+            // gathered the right elements from one that gathered a plausible number of the
+            // wrong ones, and the pinned verdict is only as good as this topology.
+            var memberList = new JArray();
+            foreach (var member in members)
+            {
+                memberList.Add(bodies[member].Node.Node["g"]?.ToString());
+            }
+
             report.Add(new JObject
             {
                 ["bodies"] = members.Count,
                 ["edges"] = pair.Value.Count,
                 ["diameter_m"] = diameter,
-                ["centre_m"] = new JArray(centre.X, centre.Y, centre.Z)
+                ["centre_m"] = new JArray(centre.X, centre.Y, centre.Z),
+                ["members"] = memberList
             });
         }
     }
@@ -469,6 +604,10 @@ public partial class RhinoMCPModFunctions
         List<StabilityNode> nodes,
         int currentStep,
         double jointStrength,
+        bool jointStrengthIsAuto,
+        double jointSlipMeters,
+        double youngsModulus,
+        double materialDensity,
         double anchorStrength,
         double floorZMeters,
         double gravity,
@@ -492,8 +631,41 @@ public partial class RhinoMCPModFunctions
         var rigidGoals = new List<RigidMesh>(bodies.Count);
         var anchoredGround = 0;
 
-        foreach (var body in bodies)
+        // A pin is exact - one shared particle - but what ties a body to that particle is
+        // the rigid goal, and its weight is the structure's only compliance here. Sizing it
+        // from a chosen slip made the reported deflection a consequence of that choice
+        // rather than of the structure: asking for 0.01 mm of slip produced 26 mm of sag.
+        //
+        // Take the member's own axial stiffness instead, which is a property of the thing
+        // being modelled rather than of the solver: k = EA/L. The section area does not
+        // have to be modelled explicitly - the mass already carries it, since A = m/(rho L)
+        // for a prismatic member - so k = (E/rho) m / L^2 and nothing has to be guessed. On
+        // this project's bridge that returns 3.6e8 N/m for a member drawn as a 150 mm solid
+        // box but massed as SHS 150x150x6, which is the real section's EA/L to two figures.
+        //
+        // The factor of four is Kangaroo's, not ours: RigidMesh proposes only a quarter of
+        // its correction each iteration (Move = 0.25 * error), so equilibrium sits at
+        // error = 4F/Strength. Passing 4k therefore realises k. Verified against a single
+        // anchored body: predicted 0.40 mm, measured 0.547 mm with the ground springs in
+        // series.
+        var carried = PinnedCarriedLoads(bodies, gravity);
+        var bodyStrengths = new double[bodies.Count];
+        for (var i = 0; i < bodies.Count; i++)
         {
+            if (!jointStrengthIsAuto)
+            {
+                bodyStrengths[i] = jointStrength;
+                continue;
+            }
+
+            bodyStrengths[i] = RelaxationCompensation *
+                MemberAxialStiffness(bodies[i], youngsModulus, materialDensity, carried[i], jointSlipMeters);
+        }
+
+        var stiffest = bodyStrengths.Length > 0 ? bodyStrengths.Max() : jointStrength;
+        for (var i = 0; i < bodies.Count; i++)
+        {
+            var body = bodies[i];
             AssignBodyMarkers(body);
 
             var points = new List<Point3d>();
@@ -501,7 +673,7 @@ public partial class RhinoMCPModFunctions
             points.AddRange(body.GroundPoints);
             points.AddRange(body.Markers);
 
-            var rigid = new RigidMesh(body.SolverMesh, body.BodyPlane, points, jointStrength);
+            var rigid = new RigidMesh(body.SolverMesh, body.BodyPlane, points, bodyStrengths[i]);
             rigidGoals.Add(rigid);
             goals.Add(rigid);
 
@@ -510,9 +682,13 @@ public partial class RhinoMCPModFunctions
             // still for want of anywhere to apply the load.
             goals.Add(new Unary(body.BodyPlane.Origin, new Vector3d(0.0, 0.0, -gravity * body.Node.MassKilograms)));
 
+            // The ground has to hold against the stiffest joint in the model, or a footing
+            // drifts while the assembly above it stays put and the motion reads as a
+            // mechanism that is really a soft support.
+            var anchor = jointStrengthIsAuto ? stiffest * AutoBodyStiffnessRatio : anchorStrength;
             foreach (var groundPoint in body.GroundPoints)
             {
-                goals.Add(new Anchor(groundPoint, anchorStrength));
+                goals.Add(new Anchor(groundPoint, anchor));
                 anchoredGround++;
             }
         }
