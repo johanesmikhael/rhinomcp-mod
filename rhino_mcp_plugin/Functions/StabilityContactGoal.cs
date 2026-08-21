@@ -35,9 +35,35 @@ internal sealed class ContactPatch : GoalObject
     private readonly Point3d _centreA;
     private readonly Point3d _centreB;
     private readonly double _friction;
+    private readonly double _torqueGain;
 
     /// <summary>Contact points that carried load on the most recent Calculate.</summary>
     public int ActivePoints { get; private set; }
+
+    /// <summary>Number of springs across this patch, and their total area in square metres.</summary>
+    public int PointCount => _points.Length;
+
+    /// <summary>Where the compression across the patch actually acts, on the most recent
+    /// Calculate. A patch carrying its load centrally reports its own centre; one about to
+    /// open reports a point at the closing edge. Reported for diagnosis: if this sits well
+    /// inside the patch while statics says the resultant is outside it, the patch is
+    /// carrying a moment it should not.</summary>
+    public Point3d Resultant { get; private set; } = Point3d.Unset;
+
+    /// <summary>The patch's own centre, for comparison against <see cref="Resultant"/>.</summary>
+    public Point3d Centre
+    {
+        get
+        {
+            var sum = Point3d.Origin;
+            for (var i = 0; i < _points.Length; i++)
+            {
+                sum += _points[i];
+            }
+
+            return _points.Length > 0 ? sum / _points.Length : Point3d.Unset;
+        }
+    }
 
     /// <summary>Total compression across the patch on the most recent Calculate.</summary>
     public double Compression { get; private set; }
@@ -49,7 +75,8 @@ internal sealed class ContactPatch : GoalObject
         IReadOnlyList<double> patchAreas,
         Vector3d normal,
         double strength,
-        double friction)
+        double friction,
+        double torqueGain)
     {
         if (patchPoints == null || patchAreas == null || patchPoints.Count != patchAreas.Count ||
             patchPoints.Count == 0)
@@ -66,6 +93,7 @@ internal sealed class ContactPatch : GoalObject
         }
 
         _friction = Math.Max(0.0, friction);
+        _torqueGain = torqueGain;
         _normal = normal;
         _normal.Unitize();
         _centreA = bodyA.Origin;
@@ -99,6 +127,7 @@ internal sealed class ContactPatch : GoalObject
         var weight = 0.0;
         var active = 0;
         var compression = 0.0;
+        var resultantMoment = Vector3d.Zero;
 
         for (var i = 0; i < _points.Length; i++)
         {
@@ -146,6 +175,7 @@ internal sealed class ContactPatch : GoalObject
             weight += stiffness;
             active++;
             compression += -gap * stiffness;
+            resultantMoment += new Vector3d(onA) * (-gap * stiffness);
 
             // The same lever-arm construction SolidCollide uses: the angle swept by moving
             // the contact point, about each body's own centre.
@@ -155,6 +185,7 @@ internal sealed class ContactPatch : GoalObject
 
         ActivePoints = active;
         Compression = compression;
+        Resultant = compression > 0.0 ? new Point3d(resultantMoment / compression) : Point3d.Unset;
 
         if (active == 0 || weight <= 0.0)
         {
@@ -167,8 +198,12 @@ internal sealed class ContactPatch : GoalObject
 
         Move[0] = moveA / weight;
         Move[1] = moveB / weight;
-        Torque[0] = 0.25 * (torqueA / weight);
-        Torque[1] = 0.25 * (torqueB / weight);
+        // How much of the patch's eccentric compression turns into rotation of the bodies
+        // it joins. A dry joint opens only when the body above it rotates, so a gain that
+        // is too low keeps the compression spread evenly across the patch, the joint never
+        // opens, and an assembly that has to topple instead settles.
+        Torque[0] = _torqueGain * (torqueA / weight);
+        Torque[1] = _torqueGain * (torqueB / weight);
         Weighting[0] = Weighting[1] = weight;
         TorqueWeighting[0] = TorqueWeighting[1] = weight;
     }

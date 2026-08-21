@@ -639,6 +639,7 @@ public partial class RhinoMCPModFunctions
         bool groundStrengthIsAuto,
         double jointPenetrationMeters,
         double groundSettlementMeters,
+        double torqueGain,
         double bodyStrength,
         bool bodyStrengthIsAuto,
         double floorZMeters,
@@ -717,7 +718,6 @@ public partial class RhinoMCPModFunctions
                 : contactStrength * areaSum;
         }
 
-        var stiffestJoint = patchWeights.Length > 0 ? patchWeights.Max() : 0.0;
         var groundWeights = new double[bodies.Count];
         for (var i = 0; i < bodies.Count; i++)
         {
@@ -729,6 +729,16 @@ public partial class RhinoMCPModFunctions
             groundWeights[i] = groundStrengthIsAuto
                 ? Math.Max(loads.Ground[i], MinimumJointLoadNewtons) / groundSettlementMeters
                 : groundStrength * GroundPatchAreaPerPoint(bodies[i]) * bodies[i].GroundPoints.Count;
+        }
+
+        if (contactStrengthIsAuto && groundStrengthIsAuto)
+        {
+            NormaliseBodyWeights(bodies, specs, loads, jointPenetrationMeters, patchWeights, groundWeights);
+        }
+
+        var stiffestJoint = patchWeights.Length > 0 ? patchWeights.Max() : 0.0;
+        for (var i = 0; i < bodies.Count; i++)
+        {
             stiffestJoint = Math.Max(stiffestJoint, groundWeights[i]);
         }
 
@@ -785,7 +795,7 @@ public partial class RhinoMCPModFunctions
             var strength = areaSum > 0.0 ? patchWeights[i] / areaSum : patchWeights[i];
             var patch = new ContactPatch(
                 bodies[spec.A].BodyPlane, bodies[spec.B].BodyPlane, spec.Points, spec.Areas,
-                spec.Normal, strength, DefaultContactFriction);
+                spec.Normal, strength, DefaultContactFriction, torqueGain);
             patches.Add(patch);
             goals.Add(patch);
             bodies[spec.A].JointPoints.Add(spec.Contact);
@@ -877,13 +887,46 @@ public partial class RhinoMCPModFunctions
 
         var report = ReportBodies(physicalSystem, bodies, graph, lengthToMeters);
         var openJoints = 0;
-        foreach (var patch in patches)
+        var contactReport = new JArray();
+        for (var i = 0; i < patches.Count; i++)
         {
+            var patch = patches[i];
             if (patch.ActivePoints == 0)
             {
                 openJoints++;
             }
+
+            // Where the compression sits on the patch is the one number that separates a
+            // joint carrying its load honestly from one quietly resisting a moment it
+            // cannot: statics says the resultant of everything above must land inside the
+            // patch, and if the solver reports it inside while the geometry puts it
+            // outside, the patch is inventing restraint.
+            var spec = specs[i];
+            contactReport.Add(new JObject
+            {
+                ["a"] = spec.A,
+                ["b"] = spec.B,
+                ["points"] = patch.PointCount,
+                ["active_points"] = patch.ActivePoints,
+                ["area_m2"] = spec.Areas.Sum(),
+                ["weight_n_per_m"] = patchWeights[i],
+                ["compression_n"] = patch.Compression,
+                ["normal"] = new JArray(spec.Normal.X, spec.Normal.Y, spec.Normal.Z),
+                ["graph_contact_m"] = new JArray(
+                    spec.Contact.X, spec.Contact.Y, spec.Contact.Z),
+                ["patch_centre_m"] = patch.Centre.IsValid
+                    ? new JArray(patch.Centre.X, patch.Centre.Y, patch.Centre.Z)
+                    : null,
+                ["resultant_m"] = patch.Resultant.IsValid
+                    ? new JArray(patch.Resultant.X, patch.Resultant.Y, patch.Resultant.Z)
+                    : null,
+                ["patch_corners_m"] = new JArray(spec.Points
+                    .Select(pt => (object)new JArray(pt.X, pt.Y, pt.Z))
+                    .ToArray())
+            });
         }
+
+        graph["contacts"] = contactReport;
 
         var diverging = IsDivergingMotion(motionSamples);
         var turning = IsGrowingRotation(rotationSamples);
@@ -899,6 +942,7 @@ public partial class RhinoMCPModFunctions
         graph["ground_contact_points"] = groundSites;
         graph["joint_weight_min_n_per_m"] = patchWeights.Length > 0 ? patchWeights.Min() : 0.0;
         graph["joint_weight_max_n_per_m"] = stiffestJoint;
+        graph["torque_gain"] = torqueGain;
         graph["motion_trend"] = diverging ? "diverging" : "settling";
         graph["rotation_trend"] = turning ? "turning" : "steady";
         graph["motion_samples_m"] = new JArray(motionSamples.Select(v => (object)v).ToArray());
@@ -920,6 +964,89 @@ public partial class RhinoMCPModFunctions
         }
 
         return !failed;
+    }
+
+    /// <summary>
+    /// Holds each body's total goal weight to the load it carries, so that the pseudo-time
+    /// step is set by the load and not by how many joints a body happens to have.
+    /// </summary>
+    /// <remarks>
+    /// Sizing each joint from its own load fixes the magnitude but not the sum. Kangaroo
+    /// divides the residual that drives a collapse by the total weight on the body, so a
+    /// body held by two joints moves at half the rate of one held by a single joint, and a
+    /// long chain that has to rotate as a unit develops its topple several times slower
+    /// than a short one. Measured: a three-block stair whose upper pair sat 150 mm outside
+    /// its base toppled at 28.8 deg, while a six-block stair at exactly the same 150 mm
+    /// settled at 0.08 deg and read as stable.
+    ///
+    /// Scaling every joint on a body so its weights sum to load/d restores one clock for
+    /// the whole model. A joint is shared, so it takes the smaller of the two scales its
+    /// bodies ask for - erring towards the softer side, which slows nothing down and keeps
+    /// the joint from being stiffer than either body can justify. Two passes are enough to
+    /// settle the mutual dependency; a third changes the weights by well under a percent.
+    /// </remarks>
+    private static void NormaliseBodyWeights(
+        List<PinnedBody> bodies,
+        List<PatchSpec> specs,
+        LoadPath loads,
+        double jointPenetrationMeters,
+        double[] patchWeights,
+        double[] groundWeights)
+    {
+        var targets = new double[bodies.Count];
+        for (var i = 0; i < bodies.Count; i++)
+        {
+            // What this body carries is what leaves it downwards: the ground under it plus
+            // the joints it stands on. Counting the joints above as well would count the
+            // same load twice - it arrives through them and departs through the supports -
+            // and the target would then equal the actual by construction, making the whole
+            // pass a no-op. It did, on first writing.
+            var carried = loads.Ground[i];
+            for (var s = 0; s < specs.Count; s++)
+            {
+                var spec = specs[s];
+                if (spec.A != i && spec.B != i)
+                {
+                    continue;
+                }
+
+                var other = spec.A == i ? spec.B : spec.A;
+                if (bodies[other].BodyPlane.Origin.Z < bodies[i].BodyPlane.Origin.Z)
+                {
+                    carried += loads.Patch[s];
+                }
+            }
+
+            targets[i] = Math.Max(carried, MinimumJointLoadNewtons) / jointPenetrationMeters;
+        }
+
+        for (var pass = 0; pass < 2; pass++)
+        {
+            var scales = new double[bodies.Count];
+            for (var i = 0; i < bodies.Count; i++)
+            {
+                var actual = groundWeights[i];
+                for (var s = 0; s < specs.Count; s++)
+                {
+                    if (specs[s].A == i || specs[s].B == i)
+                    {
+                        actual += patchWeights[s];
+                    }
+                }
+
+                scales[i] = actual > 0.0 ? targets[i] / actual : 1.0;
+            }
+
+            for (var s = 0; s < specs.Count; s++)
+            {
+                patchWeights[s] *= Math.Min(scales[specs[s].A], scales[specs[s].B]);
+            }
+
+            for (var i = 0; i < bodies.Count; i++)
+            {
+                groundWeights[i] *= scales[i];
+            }
+        }
     }
 
     /// <summary>One bearing surface, resolved from the geometry before any stiffness is chosen.</summary>
@@ -1067,6 +1194,11 @@ public partial class RhinoMCPModFunctions
     // sum(w) = P/d for a body carrying its own weight P = g*M, the step down is exactly d
     // whatever the mass, the bearing area or the document's units. Collapse then develops
     // over the same number of steps in every model.
+    // Fraction of a patch's eccentric compression that becomes rotation of the bodies it
+    // joins. Carried as a knob because it is the term that decides whether a marginally
+    // eccentric joint opens at all.
+    public const double DefaultTorqueGain = 0.25;
+
     public const double DefaultJointPenetrationMeters = 1e-4;
     public const double DefaultGroundSettlementMeters = 1e-4;
 

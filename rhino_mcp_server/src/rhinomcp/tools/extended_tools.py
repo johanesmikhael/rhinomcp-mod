@@ -14,6 +14,7 @@ async def evaluate_stability(
     contact_strength: float | None = None,
     joint_penetration: float | None = None,
     ground_settlement: float | None = None,
+    torque_gain: float | None = None,
     stability_threshold: float | None = None,
     rigid_strength: float | None = None,
     floor_strength: float | None = None,
@@ -138,6 +139,8 @@ async def evaluate_stability(
         params["joint_penetration"] = joint_penetration
     if ground_settlement is not None:
         params["ground_settlement"] = ground_settlement
+    if torque_gain is not None:
+        params["torque_gain"] = torque_gain
     if current_step is not None:
         params["current_step"] = current_step
     if assign_tol is not None:

@@ -374,6 +374,8 @@ public partial class RhinoMCPModFunctions
                     unitContext.FromMeters(DefaultGroundSettlementMeters),
                     0.0,
                     inclusiveMinimum: false);
+                var torqueGain = ReadFiniteParameter(
+                    parameters, "torque_gain", DefaultTorqueGain, 0.0, inclusiveMinimum: false);
                 var bodyStrength = rigidStrengthIsAuto
                     ? contactStrength * AutoRigidFloorRatio
                     : rigidStrength;
@@ -388,6 +390,7 @@ public partial class RhinoMCPModFunctions
                     groundStrengthIsAuto,
                     unitContext.ToMeters(jointPenetration),
                     unitContext.ToMeters(groundSettlement),
+                    torqueGain,
                     bodyStrength,
                     rigidStrengthIsAuto,
                     unitContext.ToMeters(floorZ),
@@ -414,6 +417,8 @@ public partial class RhinoMCPModFunctions
                 contactResult["contact_count"] = graph["contact_count"];
                 contactResult["open_contacts"] = graph["open_contacts"];
                 contactResult["ground_contact_points"] = graph["ground_contact_points"];
+                contactResult["contacts"] = graph["contacts"];
+                contactResult["torque_gain"] = torqueGain;
                 contactResult["contact_strength"] = contactStrength;
                 return contactResult;
             }
