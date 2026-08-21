@@ -1,17 +1,21 @@
 # Stability evaluator — state of the work
 
 Branch `MultiBodyStability`, current as of 2026-08-21. Written to survive a context
-reset: what the three modes do, what is trustworthy, what is not, and the cases whose
+reset: what the modes do, what is trustworthy, what is not, and the cases whose
 answers are known independently of the solver.
 
-## The three modes
+## The modes
 
 | mode | bodies | joints | question |
 | --- | --- | --- | --- |
 | `welded` | whole scope as one rigid body | none | does the assembly tip or slide? |
-| `pinned_dynamic` | one rigid body per element, pinned | real seconds | how far does it move, and how stiff is it? |
-| `multi_body_contact` | one per element | bearing patches, compression only, friction 0.6 | can an element rotate off, lift, slide? |
-| `multi_body_pinned` | one per element | shared particles at clustered nodes | is it a mechanism? |
+| `contact` | one per element | bearing patches, compression only, friction 0.6 | can an element rotate off, lift, slide? |
+| `pinned_dynamic` | one per element | pins at clustered nodes, integrated in real seconds | is it a mechanism, how far does it move, and how stiff is it? |
+| `pinned` | alias for `pinned_dynamic` | - | the relaxed solver is deleted; see `SIMPLIFICATION_PLAN.md` |
+
+`pinned_dynamic` carries two integrators. Particles is the default and is calibrated but
+cannot represent free motion; `integrator: "rigid_bodies"` falls correctly and is opt-in
+until it agrees on stiffness. Deleting one of them is item 2 of the simplification plan.
 
 Welded is an upper bound: it supplies every moment connection the real assembly lacks.
 
