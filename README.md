@@ -190,7 +190,17 @@ Keep only one server enabled at a time (`rhino` or `rhino-dev`) to avoid duplica
 
 ## 0.3.0-beta.1: Experimental Assembly Stability
 
-This prerelease introduces an initial assembly stability workflow. All valid objects represented by the connectivity graph are combined into a single rigid body and evaluated as one assembly. It answers whether the welded whole assembly settles, slides, or tips under gravity; graph edges are not simulated as joints, and individual parts cannot move relative to one another.
+This prerelease introduces an assembly stability workflow with three evaluation modes. They answer different questions, and none subsumes the others - run more than one.
+
+| Mode | Bodies | Joints | Answers |
+| --- | --- | --- | --- |
+| `welded` (default) | the whole scope as one rigid body | none; graph edges are not simulated | does the assembly as a whole settle, slide or tip under gravity? |
+| `multi_body_contact` | one per element | bearing surfaces carrying compression and no tension, with friction | can an element rotate off its support, lift, or slide? |
+| `multi_body_pinned` | one per element | the graph's contact points, shared and so bilateral | is the assembly a mechanism? |
+
+Welded is an upper bound: it silently supplies every moment connection the real assembly lacks, so it passes structures that a dry stack would not hold. Contact is the closest of the three to dry-stacked masonry and the only one that can fail a single element rather than the whole scope. Pinned holds in tension, so it cannot see an element toppling off another.
+
+Read the limitations at the end of this section before trusting any verdict.
 
 Stability evaluation requires Rhino 8 with Grasshopper/Kangaroo installed. The plugin loads Rhino's installed `KangarooSolver.dll` at runtime. Developers can override its build/runtime location with `KangarooSolverPath` and `RHINOMCP_KANGAROO_PATH`, respectively; the Yak package does not ship a private Kangaroo copy.
 
@@ -243,6 +253,12 @@ mcpmodmassfromlayerdensity
 
 The command calculates each object's volume and derives its mass from the density stored on its layer.
 
+#### Option C: Assign Mass over MCP
+
+The `assign_mass` tool assigns mass without prompting, which is what makes the workflow scriptable - the Rhino commands above stop per object or per layer and cannot be driven from an MCP client.
+
+Scope by `ids`, `names`, `layer`, or `selected`; omit every scope argument to take the whole document. Then either give a `density` in kg/m^3, and each object's mass follows from its own closed volume, or give one `mass` in kg applied to every object in scope. Objects with no computable volume are reported under `skipped` with the reason rather than guessed at.
+
 Unit handling is important:
 
 - Metric documents accept mass in `kg` and density in `kg/m³`.
@@ -258,13 +274,35 @@ Run:
 mcpmodevaluatestability
 ```
 
-The command combines the graph assembly into one rigid body and runs the stability solver. Solver geometry, floor elevation, tolerances, and mass are normalized internally to meters and kilograms, and gravity defaults to standard gravity (`9.80665 m/s²`). The returned displacement, transform, floor elevation, and explicit length parameters remain in the active Rhino document's units.
+The command first asks for the evaluation mode - `Welded`, `Contact`, or `PinnedJoints` - and then runs the corresponding solver over the selected scope. Solver geometry, floor elevation, tolerances, and mass are normalized internally to meters and kilograms, and gravity defaults to standard gravity (`9.80665 m/s²`). The returned displacement, transform, floor elevation, and explicit length parameters remain in the active Rhino document's units.
 
 When omitted, the stability threshold (`0.01 m`), solver threshold (`0.001 m`), and particle-assignment tolerance (`0.000001 m`) are converted into document units at runtime. Rigid and floor strengths remain Kangaroo tuning weights. Invalid graph nodes, missing or non-positive mass, unsupported or non-finite units/values, and invalid iteration counts fail explicitly rather than being classified as instability.
 
 Choose a stability threshold that is appropriate for the model's scale and units. The assembly is classified as stable when its normalized maximum displacement does not exceed the normalized threshold. Results expose displacement in both document units and meters.
 
-The MCP `evaluate_stability` tool exposes the same solver parameters, allowing an AI client such as Claude to adjust them for a particular case.
+The MCP `evaluate_stability` tool exposes the same solver parameters through `mode`, allowing an AI client such as Claude to adjust them for a particular case.
+
+#### Multi-body parameters
+
+The multi-body modes report per-element displacement and rotation, name the element that moved furthest, and carry no assembly transform or support margin - there is no single transform to report. Contact mode also reports each bearing surface: how many of its springs carry load, the compression across it, its corners, and where that compression acts.
+
+Contact stiffness is derived from the load each bearing surface carries and needs no tuning. An absolute stiffness is not a material property in this solver but the size of the pseudo-time step: Kangaroo blends goals by weight, so pinning the stiffness ties the rate of collapse to the model's mass and bearing area, and the same structure can read as stable or as toppling depending on the number chosen. The knobs are therefore stated as lengths:
+
+- `joint_penetration` - how far a bearing surface may close under its own load. This sets the per-step motion directly.
+- `ground_settlement` - how far a body may settle into the ground under its own load. Separate from the joints because the ground is a soil and the joints are not.
+- `contact_strength` and `floor_strength` - pin the joints or the ground to an absolute modulus instead, for study rather than for use.
+- `torque_gain` - how much of a patch's eccentric compression becomes rotation of the bodies it joins.
+
+### Limitations
+
+These are measured against hand-computed statics, not estimated:
+
+- **Contact mode absorbs marginal eccentricity.** A joint whose resultant falls well outside its bearing surface topples correctly; one only marginally outside settles into a tilted equilibrium and reads as stable. On three-block stairs, 112 mm of eccentricity past the patch edge topples and 75 mm does not.
+- **Pinned mode makes almost everything a mechanism.** Each graph edge merges into one shared particle, and a body pinned at a single point is free to rotate about it. Kangaroo offers no middle ground - one shared point rotates freely, two give a hinge, three or more weld - so with one contact point per edge, a dry stack comes apart regardless of its geometry. Treat an unstable pinned verdict as a statement about the joint model, not about the structure.
+- **Joints cannot be typed individually.** A mode applies one joint model to every edge in the scope, so a structure mixing bolted, pinned and dry-bearing connections cannot be expressed.
+- **Self-weight only.** No lateral load, no strength or crushing limit, so a design can pass on stability while its bearing stress is absurd.
+- **A body that leaves its support falls through the ground.** Ground bearing is built only for points that start at floor level. The verdict is unaffected; the trajectory afterwards is meaningless.
+- **Contact patches are computed once, from the initial pose,** as the overlap of the two elements' bounding boxes. This is exact for axis-aligned boxes and an over-estimate of the bearing area for rotated ones.
 
 This normalization makes equivalent metric and imperial models comparable. It does not turn Kangaroo's dynamic-relaxation result into an engineering-certified structural analysis.
 
@@ -276,7 +314,7 @@ Run the following command and choose `On` or `Off` to control the evaluated-geom
 mcpmodstabilitydisplay
 ```
 
-The display visualizes the geometry cached from the latest stability evaluation. It does not modify the original Rhino objects.
+The display visualizes the geometry cached from the latest stability evaluation, in every mode. It does not modify the original Rhino objects.
 
 ## Credits
 
