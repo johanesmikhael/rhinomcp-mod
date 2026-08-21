@@ -833,8 +833,13 @@ public partial class RhinoMCPModFunctions
             stiffnessReport["sway_stiffness_min_n_per_m"] =
                 double.IsInfinity(softest) ? (JToken)JValue.CreateNull() : softest;
 
-            // Restore the verdict run's end state so the display shows what was judged.
-            Integrate(goals, imperfectionSpeed, true);
+            // Only worth re-running to restore the judged shape if something will draw it:
+            // the stiffness runs leave the particles in their last loaded position, and a
+            // fourth full integration is a quarter of the evaluation's cost.
+            if (displayDoc != null)
+            {
+                Integrate(goals, imperfectionSpeed, true);
+            }
         }
 
         graph["sway"] = stiffnessReport;

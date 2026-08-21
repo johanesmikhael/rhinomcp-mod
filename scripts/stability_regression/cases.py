@@ -442,8 +442,7 @@ CASES: list[Case] = [
             "order; stands under self-weight but soft in y, the direction the modes move"),
         build=bridge_build(braced=False),
         # The softness is the finding, so it is what gets asserted. Sway stiffness in the
-        # mode's own direction is about 4.7e8 N/m against the braced 7.3e8, while the x
-        # direction the modes do not touch is the same for both.
+        # mode's own direction is about 4.7e8 N/m against the braced 6.8e8.
         expect={
             "sway.sway_stiffness_y_n_per_m": (3.0e8, 6.0e8),
             "sway.sway_stiffness_x_n_per_m": (1.2e9, 2.4e9),
@@ -454,7 +453,7 @@ CASES: list[Case] = [
         mode="pinned_dynamic",
         tier=FAST,
         stable=True,
-        reason="0 mechanisms; stiffer in y than the unbraced bridge, identical in x",
+        reason="0 mechanisms; stiffer in y than the unbraced bridge, 6.8e8 against 4.7e8",
         build=bridge_build(braced=True),
         expect={
             "sway.sway_stiffness_y_n_per_m": (6.0e8, 9.5e8),

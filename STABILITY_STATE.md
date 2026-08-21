@@ -59,8 +59,16 @@ Welded is an upper bound: it supplies every moment connection the real assembly 
    product `ground_support_stiffness_n_per_m` is the quantity with physical meaning.
 7. **The relaxed pinned mode reports a false positive on the unbraced bridge**, through its
    divergence trend rather than displacement. Committed as a failing regression case.
-8. **Pinned node clustering finds 23 nodes on the unbraced bridge where the geometry has
-   17** (12 bottom + 5 ridge). Unexplained.
+8. ~~Pinned node clustering finds 23 nodes where the geometry has 17.~~ **Explained and
+   fixed.** 23 = 17 structural nodes, all correct, plus 6 genuine pad contacts (the test
+   members are drawn as 150 mm boxes centred on the node axes, so they really do intersect
+   the pads). The actual bug was elsewhere and worse: the per-body merge radius was a
+   statistical knee, so adding five bottom diagonals split seven nodes the diagonals do not
+   touch, three at the ridge. The radius is now the body's own cross-section - contacts
+   spread over a member's thickness (111-134 mm measured for a 150 mm section) while two
+   joints on one member are a member length apart (2000 mm), so the scales are known and do
+   not need discovering. Braced went 32 clusters to 25 with 0 splits, and its spurious
+   hinge pairs from 13 to 6, exactly the 7 the splits were creating.
 
 ## Agreed next steps, in order
 
@@ -140,9 +148,13 @@ exactly one particle, with every exception a member bearing flat on a pad.
 So `pinned_dynamic` reports **sway stiffness** as well as a verdict, since "does it fall"
 rates that bridge identically to a braced one. Settle, settle again under the notional
 horizontal load the codes prescribe, divide the load by the distance between settled shapes.
-Both horizontal directions, disturbance off. Result: **4.65e8 N/m unbraced against 7.27e8
-braced in y**, the direction the modes move, and an identical 1.7e9 in x, which they do not
-touch.
+Both horizontal directions, disturbance off. Result: **4.65e8 N/m unbraced against 6.76e8
+braced in y**, the direction the modes move.
+
+Those braced figures are post-clustering-fix. Removing seven joints that should never have
+existed made the braced bridge *softer* - 7.27e8 to 6.76e8 in y, and its sag 0.40 mm to
+0.62 mm. It had been held up in part by constraints that were an artefact of the merge
+radius.
 
 ### Dynamics notes
 

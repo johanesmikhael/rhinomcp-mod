@@ -135,7 +135,10 @@ class RhinoConnection:
             self.sock.sendall(json.dumps(command).encode('utf-8'))
             logger.info(f"Command sent, waiting for response...")
             
-            response_timeout = 120.0 if command_type == "evaluate_stability" else 15.0
+            # A dynamic evaluation integrates millions of real timesteps and legitimately
+            # runs for minutes; giving up at two would report a working solver as broken,
+            # and leaves Rhino writing into a socket nobody is reading any more.
+            response_timeout = 900.0 if command_type == "evaluate_stability" else 15.0
             self.sock.settimeout(response_timeout)
             
             # Receive the response using the improved receive_full_response method

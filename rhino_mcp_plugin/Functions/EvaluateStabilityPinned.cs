@@ -448,10 +448,26 @@ public partial class RhinoMCPModFunctions
                 continue;
             }
 
+            // The merge distance is the body's own cross-section, not a knee found in its
+            // contact points.
+            //
+            // A knee is a statistical cut, and a per-body one moves whenever that body's
+            // set of contacts changes - which happens for reasons that have nothing to do
+            // with the body. Adding five diagonals to the bottom plane of the bridge split
+            // seven nodes that the diagonals do not touch, three of them at the ridge, one
+            // fragment landing 0.1 mm from the true node and the other 30 mm away. A node
+            // split in two is worse than a node found approximately: the members meeting
+            // there stop sharing a particle, and the joint silently stops being a joint.
+            //
+            // The separation of scales is already known and does not have to be discovered.
+            // Contact between two members spreads over the thickness of the thinner one -
+            // measured at 111 to 134 mm here for a 150 mm section - while two distinct
+            // joints on the same member are a member length apart, 2000 mm. Merging within
+            // one cross-section therefore captures a joint and cannot reach the next one,
+            // and unlike a knee it gives the same answer whatever else is in the model.
             var box = bodies[b].SolverMesh.GetBoundingBox(true);
             var section = Math.Min(box.Diagonal.X, Math.Min(box.Diagonal.Y, box.Diagonal.Z));
-            var ceiling = Math.Max(section, DefaultAssignToleranceMeters);
-            var radius = Math.Min(KneeRadius(links, indices, ceiling), ceiling);
+            var radius = Math.Max(section, DefaultAssignToleranceMeters);
             if (!(radius > 0.0))
             {
                 continue;
