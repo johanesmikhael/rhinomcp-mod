@@ -44,6 +44,76 @@ public partial class RhinoMCPModFunctions
     // far below any movement worth calling a collapse.
     public const double PinnedMechanismDisplacementMeters = 0.01;
 
+    /// <summary>
+    /// A mechanism is judged against the span it sits in, not against a fixed length.
+    /// </summary>
+    /// <remarks>
+    /// An absolute limit answers a different question at every scale: ten millimetres is
+    /// gross collapse in a bookshelf and is inside the elastic deflection of a motorway
+    /// bridge. L/200 is the deflection limit ordinary serviceability rules already use, so
+    /// a structure that passes it is one whose joints are holding still relative to how far
+    /// apart they are.
+    /// </remarks>
+    public const double PinnedSpanDivisor = 200.0;
+
+    /// <summary>
+    /// Below this the span-relative limit would sit inside the solver's own equilibrium
+    /// error, so it is held here instead. It is not a physical statement about the
+    /// structure - it is the floor of what this solver can resolve.
+    /// </summary>
+    public const double PinnedMechanismFloorMeters = 0.001;
+
+    /// <summary>
+    /// The span the mechanism limit is taken against: how far apart this assembly's
+    /// supports are, or its own extent when it has none to measure between.
+    /// </summary>
+    private static double PinnedSpanMeters(List<PinnedBody> bodies)
+    {
+        var supports = new List<Point3d>();
+        foreach (var body in bodies)
+        {
+            supports.AddRange(body.GroundPoints);
+        }
+
+        // Support spacing is the honest span: it is the distance the structure has to
+        // bridge. Two supports one metre apart do not get a wider allowance because the
+        // assembly happens to cantilever past them.
+        var span = WidestSeparation(supports);
+        if (span > 0.0)
+        {
+            return span;
+        }
+
+        // Nothing is anchored, so there is no spacing to measure. The assembly's own extent
+        // is the only length available.
+        var all = new List<Point3d>();
+        foreach (var body in bodies)
+        {
+            all.AddRange(body.JointPoints);
+            all.Add(body.BodyPlane.Origin);
+        }
+
+        return WidestSeparation(all);
+    }
+
+    private static double WidestSeparation(List<Point3d> points)
+    {
+        if (points.Count < 2)
+        {
+            return 0.0;
+        }
+
+        // The bounding box diagonal, rather than every pair: the same answer for the
+        // spacing that matters and linear in the number of points.
+        var box = new BoundingBox(points);
+        return box.IsValid ? box.Diagonal.Length : 0.0;
+    }
+
+    private static double PinnedMechanismThresholdMeters(List<PinnedBody> bodies)
+    {
+        return Math.Max(PinnedSpanMeters(bodies) / PinnedSpanDivisor, PinnedMechanismFloorMeters);
+    }
+
     /// <summary>Everything the pinned solver needs to know about one element.</summary>
     private sealed class PinnedBody
     {
@@ -947,7 +1017,8 @@ public partial class RhinoMCPModFunctions
         // reported alongside but deliberately kept out of the verdict: they include each
         // member's spin about its own pin axis, which is a freedom of this idealisation
         // rather than of the structure.
-        var isMechanism = diverging || worstPinDisplacement > PinnedMechanismDisplacementMeters;
+        var mechanismThreshold = PinnedMechanismThresholdMeters(bodies);
+        var isMechanism = diverging || worstPinDisplacement > mechanismThreshold;
 
         var widest = 0.0;
         foreach (var entry in clusterReport)
@@ -968,6 +1039,8 @@ public partial class RhinoMCPModFunctions
         graph["motion_samples_m"] = new JArray(motionSamples.Select(v => (object)v).ToArray());
         graph["body_motion_samples_m"] = new JArray(bodySamples.Select(v => (object)v).ToArray());
         graph["verdict_metric"] = "pin_displacement";
+        graph["mechanism_threshold_m"] = mechanismThreshold;
+        graph["span_m"] = PinnedSpanMeters(bodies);
         graph["rotation_samples_deg"] = new JArray(rotationSamples.Select(v => (object)v).ToArray());
         graph["solver_steps_run"] = stepsRun;
         graph["max_body_displacement_m"] = worstDisplacement;
@@ -1048,7 +1121,9 @@ public partial class RhinoMCPModFunctions
             ["worst_body"] = graph["worst_body"],
             ["bodies"] = graph["bodies"],
             ["rotation_threshold_deg"] = DefaultRotationThresholdDegrees,
-            ["mechanism_displacement_threshold_m"] = PinnedMechanismDisplacementMeters,
+            ["mechanism_displacement_threshold_m"] = graph["mechanism_threshold_m"],
+            ["span_m"] = graph["span_m"],
+            ["max_pin_displacement_m"] = graph["max_pin_displacement_m"],
             ["unit_warnings"] = unitWarnings,
             ["evaluation_graph_key"] = EvaluationGraphKey
         };
