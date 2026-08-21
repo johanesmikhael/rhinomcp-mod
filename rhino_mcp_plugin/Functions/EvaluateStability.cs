@@ -870,7 +870,37 @@ public partial class RhinoMCPModFunctions
 
         if (string.IsNullOrWhiteSpace(graphText))
         {
-            graphText = doc.Strings.GetValue(GraphKey);
+            // The stored graph is only rewritten when someone asks for an unscoped graph,
+            // so it can describe a model that no longer exists. Serving it silently is the
+            // worst failure this evaluator has: it answers confidently about geometry the
+            // caller cannot see. Measured on this project - five bracing members were added
+            // and an unscoped evaluation returned byte-identical results for the model
+            // without them.
+            //
+            // Check the stored copy against the document it claims to describe, and
+            // recompute when it does not match.
+            var fingerprint = MCPConnectivityGraphBuilder.ComputeFingerprint(doc);
+            if (MCPConnectivityGraphStore.TryLoad(doc, fingerprint, out var stored) &&
+                stored != null && stored.Nodes.Count > 0)
+            {
+                return MCPConnectivityGraphStore.BuildGraphPayload(doc, stored);
+            }
+
+            var recomputed = MCPConnectivityGraphController.GetOrComputeGraph(doc, persist: true);
+            if (recomputed == null || recomputed.Nodes.Count == 0)
+            {
+                throw new Exception(
+                    "Connectivity graph is empty for this document; nothing to evaluate.");
+            }
+
+            if (recomputed.Truncated)
+            {
+                throw new Exception(
+                    $"Connectivity graph is truncated ({recomputed.ExaminedCount} of " +
+                    $"{recomputed.CandidateCount} objects examined); scope the evaluation.");
+            }
+
+            return MCPConnectivityGraphStore.BuildGraphPayload(doc, recomputed);
         }
 
         if (string.IsNullOrWhiteSpace(graphText))
