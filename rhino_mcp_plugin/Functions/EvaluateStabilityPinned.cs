@@ -394,6 +394,12 @@ public partial class RhinoMCPModFunctions
                     var moved = new Point3d(body.Centroid);
                     moved.Transform(xform);
                     displacement = moved.DistanceTo(body.Centroid);
+
+                    // Without this the display draws the model exactly as it was built. The
+                    // contact path picks the transform up from ReportBodies; this loop is
+                    // the pinned mode's own report and has to record it too.
+                    body.DocumentTransform =
+                        StabilityUnits.SolverTransformToDocument(xform, lengthToMeters);
                 }
             }
 
