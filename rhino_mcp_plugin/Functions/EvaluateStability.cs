@@ -489,6 +489,9 @@ public partial class RhinoMCPModFunctions
                             damping,
                             imperfection,
                             lateralLoad,
+                            ReadFiniteParameter(
+                                parameters, "timestep_safety",
+                                StabilityRigidBodies.TimestepSafety, 0.0, inclusiveMinimum: false),
                             unitContext.LengthToMeters,
                             WantsDisplay(parameters) ? doc : null);
 
@@ -498,7 +501,7 @@ public partial class RhinoMCPModFunctions
                         rigidResult["evaluation_mode"] = PinnedDynamicEvaluationMode;
                         foreach (var key in new[]
                         {
-                            "integrator", "max_pin_displacement_m", "timestep_s", "steps_run",
+                            "integrator", "max_pin_displacement_m", "timestep_s", "timestep_safety", "steps_run",
                             "simulated_seconds", "duration_requested_s", "damping_ratio",
                             "peak_speed_m_s", "total_weight_n", "time_samples_s",
                             "speed_samples_m_s", "member_stiffness_min_n_per_m",

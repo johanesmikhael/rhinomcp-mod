@@ -33,6 +33,19 @@ namespace RhinoMCPModPlugin.Functions;
 /// </remarks>
 internal static class StabilityRigidBodies
 {
+    /// <summary>
+    /// Fraction of the explicit stability limit this integrator uses.
+    /// </summary>
+    /// <remarks>
+    /// Finer than the particle integrator's tenth, because measurement said so rather than
+    /// caution. At a tenth the assembly never settled at all: the response held the same
+    /// amplitude after 896k steps, damping saturated - zeta of 0.9, essentially critical,
+    /// decaying it only to 0.60 over half a second - and the step was evidently returning as
+    /// much energy as the damping removed. Quartering it settles the same model in 168k
+    /// steps. The oscillation was marginal stability, not a missing damping term.
+    /// </remarks>
+    public const double TimestepSafety = 0.025;
+
     /// <summary>One rigid body, integrated.</summary>
     internal sealed class Body
     {
@@ -520,6 +533,7 @@ public partial class RhinoMCPModFunctions
         double dampingRatio,
         double imperfectionFraction,
         double lateralLoadFraction,
+        double timestepSafety,
         double lengthToMeters,
         RhinoDoc displayDoc)
     {
@@ -620,7 +634,7 @@ public partial class RhinoMCPModFunctions
         var imperfection = span * imperfectionFraction;
         var jolt = Math.Sqrt(2.0 * gravity * imperfection);
         var settledSpeed = threshold / Math.Max(durationSeconds, 1e-9) / 1000.0;
-        var timestep = StabilityRigidBodies.Timestep(bodies, sites, StabilityDynamics.TimestepSafety);
+        var timestep = StabilityRigidBodies.Timestep(bodies, sites, timestepSafety);
 
         double Measure()
         {
@@ -727,6 +741,7 @@ public partial class RhinoMCPModFunctions
         graph["span_m"] = span;
         graph["max_pin_displacement_m"] = worstPin;
         graph["timestep_s"] = timestep;
+        graph["timestep_safety"] = timestepSafety;
         graph["steps_run"] = run.Steps;
         graph["simulated_seconds"] = run.SimulatedSeconds;
         graph["duration_requested_s"] = durationSeconds;

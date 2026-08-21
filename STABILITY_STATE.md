@@ -320,10 +320,29 @@ Two fixes since, both real:
   sag from 22.1 mm to 4.24 mm and the braced from 0.739 to 0.656 against a particle
   reference of 0.623 - within 5%.
 
-**Still not settling**, so sway is not yet reported on this path, and that is the open work.
-Damping saturates: zeta = 0.9, near critical, decays the response only to 0.60 over half a
-second where it should be gone in a couple of periods. Something in the dominant mode is
-still not being damped, or the explicit step is marginally stable there.
+**It settles now, and the cause was the step, not the damping.** Halving told the two
+apart: at a tenth of the stability limit the assembly never settled however long it ran; at
+a fortieth it settles the same model in 168k steps. The step was returning about as much
+energy as the damping removed, which is why damping saturated - zeta of 0.9, essentially
+critical, decayed the response only to 0.60 over half a second. `TimestepSafety` on this
+path is 0.025, and it is opened as `timestep_safety` so the trade can be re-measured rather
+than trusted.
+
+Where it stands against the validated particle answers:
+
+| | rigid-body | particle | difference |
+| --- | --- | --- | --- |
+| braced sag | 0.656 mm | 0.623 mm | +5% |
+| braced sway `Ky` | 6.11e8 | 6.94e8 | -12% |
+| braced sway `Kx` | 8.91e8 | 2.32e9 | -62% |
+| **unbraced sag** | **3.869 mm** | 0.595 mm | **6.5x** |
+
+Braced is close; unbraced is not, and **it is not established which of the two is right**.
+The unbraced bridge is the one carrying the infinitesimal mechanisms, whose stiffness comes
+entirely from second-order geometry - and a rigid-body model updates that geometry honestly
+where the particle model holds each body to a fitted frame that may be stiffening the very
+mode in question. The larger deflection may be the more correct one. Settling that needs an
+independent check, not a preference.
 
 **It is not the default, because its joints are not calibrated.** Where the particle model
 shares a particle outright - an exact pin - this one uses springs, and the assembly comes out
