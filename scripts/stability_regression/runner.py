@@ -94,7 +94,11 @@ def evaluate(
 def check_numbers(case: Case, result: dict[str, Any]) -> list[str]:
     problems = []
     for key, (low, high) in case.expect.items():
-        value = result.get(key)
+        # Dotted keys reach into nested reports, so a case can assert on a measured
+        # stiffness without the result having to be flattened.
+        value = result
+        for part in key.split("."):
+            value = value.get(part) if isinstance(value, dict) else None
         if value is None:
             problems.append(f"{key} missing from result")
         elif not (low <= float(value) <= high):
@@ -110,7 +114,8 @@ def run_once(connection: RhinoConnection, case: Case, substeps: int) -> dict[str
         "objects": len(ids),
         "stable": bool(result.get("stable")),
         "correct": bool(result.get("stable")) == case.stable,
-        "iterations": result.get("solver_steps_run"),
+        # pinned_dynamic reports timesteps rather than solver iterations.
+        "iterations": result.get("solver_steps_run") or result.get("steps_run"),
         "seconds": time.monotonic() - started,
         "problems": check_numbers(case, result),
         "result": result,

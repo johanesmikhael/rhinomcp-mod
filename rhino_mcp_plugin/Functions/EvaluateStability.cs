@@ -451,6 +451,9 @@ public partial class RhinoMCPModFunctions
                         0.0, inclusiveMinimum: false);
                     var damping = ReadFiniteParameter(
                         parameters, "damping_ratio", StabilityDynamics.DefaultDampingRatio, 0.0);
+                    var lateralLoad = ReadFiniteParameter(
+                        parameters, "lateral_load_fraction",
+                        StabilityDynamics.DefaultNotionalLoadFraction, 0.0);
                     var imperfection = ReadFiniteParameter(
                         parameters, "imperfection_fraction",
                         StabilityDynamics.DefaultImperfectionFraction, 0.0);
@@ -470,6 +473,7 @@ public partial class RhinoMCPModFunctions
                         duration,
                         damping,
                         imperfection,
+                        lateralLoad,
                         unitContext.LengthToMeters,
                         WantsDisplay(parameters) ? doc : null);
 
@@ -482,6 +486,8 @@ public partial class RhinoMCPModFunctions
                         "max_pin_displacement_m", "timestep_s", "steps_run", "simulated_seconds",
                         "duration_requested_s", "damping_ratio", "peak_speed_m_s", "total_weight_n",
                         "imperfection_m", "imperfection_fraction", "imperfection_speed_m_s",
+                        "joint_sharing_histogram", "joint_max_shared_particles",
+                        "joint_welded_examples", "joint_count", "lateral_load_fraction", "sway",
                         "time_samples_s", "speed_samples_m_s", "member_stiffness_min_n_per_m",
                         "member_stiffness_max_n_per_m", "node_count_clustered", "node_widest_m",
                         "nodes", "span_m"

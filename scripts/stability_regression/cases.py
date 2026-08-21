@@ -423,14 +423,58 @@ CASES: list[Case] = [
         build=bridge_build(braced=True),
         expect={"max_pin_displacement_m": (0.0, 0.005)},
     ),
+    # The unbraced bridge's four modes are INFINITESIMAL mechanisms, and the distinction
+    # decides the answer. Under the mode a tie's ends separate as 2*sqrt(1 + (0.71t)^2), so
+    # its length is preserved to first order and grows only at second: the structure
+    # stiffens quadratically as it moves rather than collapsing, held by the five states of
+    # self-stress the same rank test reports beside the modes. It stands under its own
+    # weight, measurably softer than the braced version but standing.
+    #
+    # A rank test counts modes; it does not predict collapse. Reading "4 mechanisms" as
+    # "unstable" was an inference laid on top of it, and it was wrong.
     Case(
-        name="bridge_unbraced",
-        mode="pinned",
-        tier=SLOW,
-        stable=False,
+        name="bridge_unbraced_dynamic",
+        mode="pinned_dynamic",
+        tier=FAST,
+        stable=True,
         reason=(
-            f"rank test finds {BRIDGE_UNBRACED_MECHANISMS} mechanisms, one per interior "
-            "transverse tie; the bottom plane is unbraced squares"),
+            f"{BRIDGE_UNBRACED_MECHANISMS} infinitesimal mechanisms, stiffened at second "
+            "order; stands under self-weight but soft in y, the direction the modes move"),
+        build=bridge_build(braced=False),
+        # The softness is the finding, so it is what gets asserted. Sway stiffness in the
+        # mode's own direction is about 4.7e8 N/m against the braced 7.3e8, while the x
+        # direction the modes do not touch is the same for both.
+        expect={
+            "sway.sway_stiffness_y_n_per_m": (3.0e8, 6.0e8),
+            "sway.sway_stiffness_x_n_per_m": (1.2e9, 2.4e9),
+        },
+    ),
+    Case(
+        name="bridge_braced_dynamic",
+        mode="pinned_dynamic",
+        tier=FAST,
+        stable=True,
+        reason="0 mechanisms; stiffer in y than the unbraced bridge, identical in x",
+        build=bridge_build(braced=True),
+        expect={
+            "sway.sway_stiffness_y_n_per_m": (6.0e8, 9.5e8),
+            "sway.sway_stiffness_x_n_per_m": (1.2e9, 2.4e9),
+        },
+    ),
+    # Committed failing, like the welded pedestal was. The relaxed pinned mode calls this
+    # structure unstable through its divergence trend, which is the weaker of its two paths
+    # to a verdict and the one that does not survive being checked: the integrator, a
+    # notional lateral load, and the second-order reading of the mode shape all say it
+    # stands. Left in the suite because a false positive that nothing asserts is a false
+    # positive nobody fixes.
+    Case(
+        name="bridge_unbraced_relaxed",
+        mode="pinned",
+        tier=FAST,
+        stable=True,
+        reason=(
+            "infinitesimal mechanisms stiffen at second order; the relaxed mode reports "
+            "unstable from its divergence trend, which is a false positive"),
         build=bridge_build(braced=False),
     ),
 ]

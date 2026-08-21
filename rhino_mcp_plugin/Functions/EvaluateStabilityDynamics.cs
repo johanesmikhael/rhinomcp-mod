@@ -86,6 +86,18 @@ internal static class StabilityDynamics
     /// </remarks>
     public const double DefaultImperfectionFraction = 1.0 / 1000.0;
 
+    /// <summary>
+    /// Notional horizontal load, as a fraction of the vertical load it carries.
+    /// </summary>
+    /// <remarks>
+    /// The equivalent horizontal force the codes already require for stability checks -
+    /// EN 1993 puts it at a few parts per thousand of the vertical load. It is not a
+    /// guess at wind: it stands in for the out-of-plumb the structure was built with, and
+    /// it exists here because sway stiffness is what separates a braced structure from one
+    /// held up only by second-order effects.
+    /// </remarks>
+    public const double DefaultNotionalLoadFraction = 0.005;
+
     /// <summary>How long to simulate, in seconds, when the caller does not say.</summary>
     /// <remarks>
     /// A mechanism with even a tenth of gravity available to it covers 50 mm in 0.32 s.
@@ -528,6 +540,7 @@ public partial class RhinoMCPModFunctions
         double durationSeconds,
         double dampingRatio,
         double imperfectionFraction,
+        double lateralLoadFraction,
         double lengthToMeters,
         RhinoDoc displayDoc)
     {
@@ -644,6 +657,47 @@ public partial class RhinoMCPModFunctions
             totalWeight += gravity * masses[i];
         }
 
+        // A notional horizontal load, as a fraction of weight.
+        //
+        // Self-weight alone cannot tell a stiff structure from one that is merely balanced.
+        // A first-order mechanism can sit in stable equilibrium under gravity the way a
+        // hanging chain does - it has a mode, but gravity restores it - and no amount of
+        // vertical load will reveal that. The codes handle this with equivalent horizontal
+        // forces, a small fraction of the vertical load applied sideways, precisely because
+        // sway stiffness is what separates the two cases. A structure braced against its
+        // own mechanism barely notices such a load; one relying on gravity to stand up
+        // does not.
+        // Held aside rather than added: the stiffness measurement runs the same assembly
+        // with the load on and off, so the goals have to be switchable.
+        var swayGoals = new Dictionary<int, List<IGoal>>();
+        var swayTotal = new Dictionary<int, double>();
+        if (lateralLoadFraction > 0.0)
+        {
+            for (var axis = 0; axis < 2; axis++)
+            {
+                var forAxis = new List<IGoal>();
+                var total = 0.0;
+                for (var i = 0; i < particles.Count; i++)
+                {
+                    if (isFrame[i] || !(masses[i] > 0.0))
+                    {
+                        continue;
+                    }
+
+                    var magnitude = lateralLoadFraction * gravity * masses[i];
+                    var direction = axis == 0
+                        ? new Vector3d(magnitude, 0.0, 0.0)
+                        : new Vector3d(0.0, magnitude, 0.0);
+                    forAxis.Add(new Unary(particles[i].Position, direction));
+                    total += magnitude;
+                }
+
+                swayGoals[axis] = forAxis;
+                swayTotal[axis] = total;
+                gravityGoals.AddRange(forAxis);
+            }
+        }
+
         // Re-assigning would renumber every particle, so the gravity goals are indexed
         // against the particles that already exist. Each was created at one of their
         // positions, so none of them adds a particle.
@@ -653,6 +707,18 @@ public partial class RhinoMCPModFunctions
         }
 
         var startPositions = particles.Select(p => p.Position).ToArray();
+        var startOrientations = particles.Select(p => p.Orientation).ToArray();
+
+        void Reset()
+        {
+            for (var i = 0; i < particles.Count; i++)
+            {
+                particles[i].Position = startPositions[i];
+                particles[i].Velocity = Vector3d.Zero;
+                particles[i].Orientation = startOrientations[i];
+                particles[i].ClearForces();
+            }
+        }
 
         double MaxPinMotion()
         {
@@ -676,25 +742,102 @@ public partial class RhinoMCPModFunctions
         var imperfectionSpeed = Math.Sqrt(2.0 * gravity * imperfection);
         var collapsed = false;
 
-        var run = StabilityDynamics.Run(
-            particles,
-            goals,
-            isFrame,
-            masses,
-            durationSeconds,
-            dampingRatio,
-            imperfectionSpeed,
-            MotionSampleCount,
-            MaxPinMotion,
-            (displacement, _) =>
-            {
-                if (displacement > threshold)
+        StabilityDynamics.Result Integrate(List<IGoal> active, double jolt, bool stopOnThreshold)
+        {
+            Reset();
+            return StabilityDynamics.Run(
+                particles,
+                active,
+                isFrame,
+                masses,
+                durationSeconds,
+                dampingRatio,
+                jolt,
+                MotionSampleCount,
+                MaxPinMotion,
+                (displacement, _) =>
                 {
-                    collapsed = true;
+                    if (!stopOnThreshold)
+                    {
+                        return false;
+                    }
+
+                    if (displacement > threshold)
+                    {
+                        collapsed = true;
+                    }
+
+                    return collapsed;
+                });
+        }
+
+        // The verdict run: does it fall over, given the imperfection it was built with.
+        var run = Integrate(goals, imperfectionSpeed, true);
+
+        // Whether it falls is not the whole answer.
+        //
+        // Four of this bridge's modes are infinitesimal mechanisms: the tie's ends separate
+        // as 2*sqrt(1 + (0.71t)^2), so its length is preserved to first order and grows only
+        // at second. A rank test counts such a mode as a mechanism, but the structure does
+        // not collapse - it stiffens quadratically as it moves, held by the states of
+        // self-stress that accompany the mode. Answering only "does it fall" would rate that
+        // bridge identically to a properly braced one, which is not what an engineer needs
+        // to know.
+        //
+        // Sway stiffness separates them, and it is measured rather than inferred: settle the
+        // assembly, settle it again under a notional horizontal load of the kind codes
+        // already prescribe, and divide the load by the distance between the two settled
+        // shapes. That is a secant stiffness in N/m, taken in both horizontal directions
+        // because the soft direction is a property of the structure rather than something to
+        // assume. The disturbance is switched off for these runs so that what is measured is
+        // the response to the load and nothing else.
+        var stiffnessReport = new JObject();
+        if (lateralLoadFraction > 0.0 && !collapsed)
+        {
+            Integrate(goals, 0.0, false);
+            var settled = particles.Select(p => p.Position).ToArray();
+
+            var softest = double.MaxValue;
+            string softestAxis = null;
+            foreach (var axis in swayGoals.Keys.OrderBy(k => k))
+            {
+                var loaded = new List<IGoal>(goals);
+                loaded.AddRange(swayGoals[axis]);
+                Integrate(loaded, 0.0, false);
+
+                var sway = 0.0;
+                for (var i = 0; i < particles.Count; i++)
+                {
+                    if (!isFrame[i])
+                    {
+                        sway = Math.Max(sway, settled[i].DistanceTo(particles[i].Position));
+                    }
                 }
 
-                return collapsed;
-            });
+                var name = axis == 0 ? "x" : "y";
+                var stiffness = sway > 0.0 ? swayTotal[axis] / sway : double.PositiveInfinity;
+                stiffnessReport[$"sway_{name}_m"] = sway;
+                stiffnessReport[$"sway_{name}_drift_ratio"] = span > 0.0 ? sway / span : 0.0;
+                stiffnessReport[$"sway_stiffness_{name}_n_per_m"] =
+                    double.IsInfinity(stiffness) ? (JToken)JValue.CreateNull() : stiffness;
+
+                if (stiffness < softest)
+                {
+                    softest = stiffness;
+                    softestAxis = name;
+                }
+            }
+
+            stiffnessReport["notional_load_n"] = swayTotal.Values.FirstOrDefault();
+            stiffnessReport["softest_direction"] = softestAxis;
+            stiffnessReport["sway_stiffness_min_n_per_m"] =
+                double.IsInfinity(softest) ? (JToken)JValue.CreateNull() : softest;
+
+            // Restore the verdict run's end state so the display shows what was judged.
+            Integrate(goals, imperfectionSpeed, true);
+        }
+
+        graph["sway"] = stiffnessReport;
 
         var worstPin = run.DisplacementSamples.Count > 0 ? run.DisplacementSamples.Max() : 0.0;
         var isMechanism = worstPin > threshold;
@@ -710,6 +853,67 @@ public partial class RhinoMCPModFunctions
                     lengthToMeters);
             }
         }
+
+        // How pinned the pins actually are.
+        //
+        // Two bodies sharing one particle are pinned: the connection carries force in three
+        // directions and no moment at all. Sharing two makes a hinge, free about that line
+        // only. Sharing three non-collinear particles is a welded joint however the mode is
+        // labelled, because three points fix a frame. This is not an inference from the
+        // solver's behaviour - it is what the assembled system literally is - so it settles
+        // whether a pinned run is modelling pins without appealing to a rank test.
+        var sharing = new Dictionary<int, int>();
+        var worstShare = 0;
+        var weldedPairs = new JArray();
+        for (var i = 0; i < rigidGoals.Count; i++)
+        {
+            var mine = new HashSet<int>();
+            for (var k = 1; k < rigidGoals[i].PIndex.Length; k++)
+            {
+                mine.Add(rigidGoals[i].PIndex[k]);
+            }
+
+            for (var j = i + 1; j < rigidGoals.Count; j++)
+            {
+                var shared = new List<int>();
+                for (var k = 1; k < rigidGoals[j].PIndex.Length; k++)
+                {
+                    if (mine.Contains(rigidGoals[j].PIndex[k]))
+                    {
+                        shared.Add(rigidGoals[j].PIndex[k]);
+                    }
+                }
+
+                if (shared.Count == 0)
+                {
+                    continue;
+                }
+
+                sharing.TryGetValue(shared.Count, out var seen);
+                sharing[shared.Count] = seen + 1;
+                worstShare = Math.Max(worstShare, shared.Count);
+
+                if (shared.Count >= 2 && weldedPairs.Count < 24)
+                {
+                    weldedPairs.Add(new JObject
+                    {
+                        ["a"] = bodies[i].Node.Node["g"],
+                        ["b"] = bodies[j].Node.Node["g"],
+                        ["shared_particles"] = shared.Count
+                    });
+                }
+            }
+        }
+
+        var sharingReport = new JObject();
+        foreach (var entry in sharing.OrderBy(pair => pair.Key))
+        {
+            sharingReport[entry.Key.ToString()] = entry.Value;
+        }
+
+        graph["joint_sharing_histogram"] = sharingReport;
+        graph["joint_max_shared_particles"] = worstShare;
+        graph["joint_welded_examples"] = weldedPairs;
 
         var widest = 0.0;
         foreach (var entry in clusterReport)
@@ -737,6 +941,7 @@ public partial class RhinoMCPModFunctions
         graph["damping_ratio"] = dampingRatio;
         graph["imperfection_m"] = imperfection;
         graph["imperfection_speed_m_s"] = imperfectionSpeed;
+        graph["lateral_load_fraction"] = lateralLoadFraction;
         graph["imperfection_fraction"] = imperfectionFraction;
         graph["peak_speed_m_s"] = run.PeakSpeed;
         graph["total_weight_n"] = totalWeight;
