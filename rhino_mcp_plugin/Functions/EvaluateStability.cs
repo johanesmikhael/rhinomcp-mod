@@ -458,6 +458,63 @@ public partial class RhinoMCPModFunctions
                         parameters, "imperfection_fraction",
                         StabilityDynamics.DefaultImperfectionFraction, 0.0);
 
+                    // Two integrators, and the particle one is still the default.
+                    //
+                    // "rigid_bodies" makes the body the thing that moves, so an element with
+                    // nothing under it falls at g - verified against 0.5*g*t^2 to one part
+                    // in ten thousand, where the particle model reached 0.2% of it. That is
+                    // the defect it exists to fix and it fixes it outright.
+                    //
+                    // It is not the default yet because its joints are not calibrated: the
+                    // pins are springs where the particle model shared a particle outright,
+                    // and the assembly comes out far softer than the deflections already
+                    // checked against hand statics. Making it default would trade a defect
+                    // that is understood and documented for numbers that are not, so it
+                    // stays opt-in until it reproduces the validated cases.
+                    var integrator = parameters?["integrator"]?.ToString();
+                    if (string.Equals(integrator, "rigid_bodies", StringComparison.OrdinalIgnoreCase))
+                    {
+                        var rigidStable = SolvePinnedRigidFromGraph(
+                            graph,
+                            stabilityNodes,
+                            rigidStrength,
+                            rigidStrengthIsAuto,
+                            unitContext.ToMeters(pinnedSlip),
+                            youngsModulus,
+                            materialDensity,
+                            rigidStrength * AutoRigidFloorRatio,
+                            unitContext.ToMeters(floorZ),
+                            gravity,
+                            duration,
+                            damping,
+                            imperfection,
+                            lateralLoad,
+                            unitContext.LengthToMeters,
+                            WantsDisplay(parameters) ? doc : null);
+
+                        var rigidResult = BuildPinnedResult(graph, doc, unitContext, rigidStable,
+                            gravity, floorZ, floorZIsAuto, rigidStrength, totalMassKilograms,
+                            unitWarnings);
+                        rigidResult["evaluation_mode"] = PinnedDynamicEvaluationMode;
+                        foreach (var key in new[]
+                        {
+                            "integrator", "max_pin_displacement_m", "timestep_s", "steps_run",
+                            "simulated_seconds", "duration_requested_s", "damping_ratio",
+                            "peak_speed_m_s", "total_weight_n", "time_samples_s",
+                            "speed_samples_m_s", "member_stiffness_min_n_per_m",
+                            "member_stiffness_max_n_per_m", "node_count_clustered", "nodes",
+                            "span_m", "imperfection_m", "imperfection_speed_m_s", "settled",
+                            "verdict", "conclusive", "converged", "decay_ratio_per_swing",
+                            "projected_displacement_m", "lateral_load_fraction", "sway",
+                            "joint_count"
+                        })
+                        {
+                            rigidResult[key] = graph[key];
+                        }
+
+                        return rigidResult;
+                    }
+
                     var dynamicStable = SolvePinnedDynamicFromGraph(
                         graph,
                         stabilityNodes,

@@ -482,16 +482,50 @@ CASES: list[Case] = [
         mode="pinned_dynamic",
         tier=FAST,
         stable=False,
-        reason="nothing supports them; free fall is 1226 mm in 0.5 s, they move 2.82 mm",
-        # The verdict alone would pass here, and passing would be misleading: with nothing
-        # supporting them even 2.82 mm of travel clears the threshold this small assembly
-        # gets, so "unstable" comes out right while the motion is wrong by a factor of 400.
-        # What is asserted is therefore the distance, which is the thing that is broken.
-        expect={"max_pin_displacement_m": (0.5, 2.0)},
+        reason="nothing supports them; they must fall at g, reaching the 10 mm limit in 0.045 s",
+        # The verdict alone proves nothing here - with nothing holding them up, even the
+        # 2.82 mm the old particle integrator managed cleared the threshold, so "unstable"
+        # came out right while the motion was wrong by a factor of 400. What is asserted is
+        # the *rate*: the run stops the moment displacement crosses the limit, so the time
+        # at which that happens is a direct measurement of the acceleration. Falling 10 mm
+        # under gravity takes sqrt(2 * 0.010 / 9.81) = 0.045 s, and anything slower is a
+        # body not falling at g.
+        expect={"simulated_seconds": (0.030, 0.075)},
         build=lambda: (
             'axis_box("A", (0.0,0.0,5000.0), (2000.0,0.0,5000.0), 150.0, 54.0)\n'
             'axis_box("B", (2000.0,0.0,5000.0), (4000.0,0.0,5000.0), 150.0, 54.0)'),
-        params={"floor_z": -100000.0, "lateral_load_fraction": 0.0},
+        params={
+            "floor_z": -100000.0,
+            "lateral_load_fraction": 0.0,
+            # No disturbance, so what is measured is gravity and nothing else: the jolt is
+            # 0.198 m/s here, comparable to the fall itself over so short a time.
+            "imperfection_fraction": 0.0,
+            # The rigid-body integrator, which is what can represent free motion at all.
+            # The default particle integrator fails this case by a factor of 400 and is
+            # covered separately below.
+            "integrator": "rigid_bodies",
+        },
+    ),
+    # The same drop on the default integrator, committed failing. It is the case that
+    # motivated the rigid-body work: a body there is a handful of particles held to a fitted
+    # frame that is measured rather than integrated, so it can leave that frame by only
+    # mg/k - about 1.5 micron - and descends at the solver's update rate instead of at g.
+    Case(
+        name="free_fall_two_members_particles",
+        mode="pinned_dynamic",
+        tier=FAST,
+        stable=False,
+        reason="the particle integrator cannot represent free motion; it reaches 0.2% of g",
+        build=lambda: (
+            'axis_box("A", (0.0,0.0,5000.0), (2000.0,0.0,5000.0), 150.0, 54.0)\n'
+            'axis_box("B", (2000.0,0.0,5000.0), (4000.0,0.0,5000.0), 150.0, 54.0)'),
+        expect={"simulated_seconds": (0.030, 0.075)},
+        params={
+            "floor_z": -100000.0,
+            "lateral_load_fraction": 0.0,
+            "imperfection_fraction": 0.0,
+            "integrator": "particles",
+        },
     ),
     # Committed failing, like the welded pedestal was. The relaxed pinned mode calls this
     # structure unstable through its divergence trend, which is the weaker of its two paths

@@ -651,7 +651,7 @@ internal static class StabilityDynamics
     /// verdict every time it is asked, and a stability answer that moves between runs is
     /// not an answer. The three components are decorrelated by using different multipliers.
     /// </remarks>
-    private static Vector3d ImperfectionDirection(int index)
+    internal static Vector3d ImperfectionDirection(int index)
     {
         double Component(uint salt)
         {

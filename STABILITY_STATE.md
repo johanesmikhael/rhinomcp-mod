@@ -273,3 +273,39 @@ What this does and does not invalidate:
 
 The fix is to give each body's frame its mass and inertia and integrate it, with the pins
 supplying constraint forces - rigid-body dynamics in place of a fitted frame.
+
+### The rigid-body integrator: built, verified for falling, not yet calibrated
+
+`integrator: "rigid_bodies"` (`StabilityRigidBodies.cs`) makes the body the primitive: mass,
+centre of mass, inertia from its own mesh, position, orientation, linear and angular
+velocity, obeying `F = ma` and Euler's equations. Pins are springs pulling every body meeting
+there toward their common point, applied at the attachment so they deliver moment as well as
+force. `RelaxationCompensation` has no place in it - a spring of stiffness k delivers k times
+its extension, with no quarter-correction to cancel.
+
+**It falls correctly.** Two members dropped in mid-air track `0.5*g*t^2` to one part in ten
+thousand, against 0.2% of it for the particle integrator. Regression case
+`free_fall_two_members` asserts the *time* to cross the limit, 0.045 s, which measures the
+acceleration directly; `free_fall_two_members_particles` is the same drop on the default
+integrator, committed failing.
+
+Two bugs were found and fixed on the way, both of which would have quietly reintroduced the
+defect being fixed:
+
+- **Damping belongs to the joint, not the body.** Applied to a body's absolute velocity it
+  is air drag: it resists free fall and imposes a terminal velocity of `mg/c`. The assembly
+  descended at 0.095 m/s, covering 10.5 mm where gravity asks for 76.6. Real structural
+  damping is internal, so it now opposes each attachment's velocity relative to its joint -
+  a body falling freely has nothing moving relative to anything and loses nothing.
+- **Convergence must be monotone.** Without that test a ringing structure - increments
+  alternating in sign while shrinking on average - projected 41.7 mm of sag where the truth
+  was nearer 1.
+
+**It is not the default, because its joints are not calibrated.** Where the particle model
+shares a particle outright - an exact pin - this one uses springs, and the assembly comes out
+far softer than deflections already checked against hand statics: sway stiffness around
+3.8e5 N/m against the particle model's 4.7e8, and the kinetic-damping static runs do not
+settle for these bodies. Making it default would trade a defect that is understood and
+documented for numbers that are not. Each end spring is already at `2k` so the pair delivers
+`EA/L` along a member; that was necessary and is not sufficient. The remaining work is the
+joint model and the static settling, not the integrator.
