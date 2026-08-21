@@ -197,3 +197,34 @@ it there, and only the first is about speed:
    an infinitesimal mechanism should show.
 
 The client timeout is back to 120 s. Raising it to 900 s was treating the symptom.
+
+### It does not scale, and the ceiling is ~66 elements
+
+Measured on N-panel versions of the test bridge, all 2 m members:
+
+| panels | span | elements | steps | wall | settled |
+| --- | --- | --- | --- | --- | --- |
+| 2 | 4 m | 18 | 51k | 3.2 s | yes |
+| 3 | 6 m | 26 | 51k | 7.5 s | yes |
+| 5 | 10 m | 42 | 110k | 9.6 s | yes |
+| 8 | 16 m | 66 | 554k | 60 s | yes, at 0.36 s |
+| 12 | 24 m | 98 | 767k | 97 s | **no** |
+| 18 | 36 m | 146 | - | >120 s | - |
+
+Cost grows as about **N^2.1**: per-step work is linear in elements, but the step count also
+grows, because settling time is set by the structure's lowest natural frequency (`f1 ~ 1/L^2`)
+while `dt` stays pinned by the stiffest member. Local and global timescales diverge - the
+classic stiff-ODE problem.
+
+**A run that has not settled no longer claims stability.** At 24 m the assembly was still
+moving when time ran out, 5.2 mm and growing, and it reported `stable`. That means only "it
+had not fallen yet" - the same budget-dependence this mode exists to remove. `stable` now
+requires settled and below the limit; otherwise the verdict is `inconclusive` and the
+stiffness probe is skipped, since a secant stiffness about a structure that never reached
+equilibrium is meaningless. The 24 m case does not settle even at a 2 s cap.
+
+Ways out, cheapest first: raise `TimestepSafety` from 0.1 (2.5x); decide the verdict from
+whether the speed envelope is decaying rather than waiting for full settlement, since a
+mechanism *accelerates* and that shows in a few periods rather than tens; selective mass
+scaling, standard in explicit FE, to lift `dt`; implicit integration, which is the real fix
+and the largest job.

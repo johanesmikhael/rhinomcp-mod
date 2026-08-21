@@ -902,7 +902,7 @@ public partial class RhinoMCPModFunctions
         // assume. The disturbance is switched off for these runs so that what is measured is
         // the response to the load and nothing else.
         var stiffnessReport = new JObject();
-        if (lateralLoadFraction > 0.0 && !collapsed)
+        if (lateralLoadFraction > 0.0 && !collapsed && run.Settled)
         {
             Integrate(goals, 0.0, false, true);
             var settled = particles.Select(p => p.Position).ToArray();
@@ -956,6 +956,21 @@ public partial class RhinoMCPModFunctions
 
         var worstPin = run.DisplacementSamples.Count > 0 ? run.DisplacementSamples.Max() : 0.0;
         var isMechanism = worstPin > threshold;
+
+        // A run that was still moving when time ran out has not shown anything.
+        //
+        // Settling time is set by the structure's lowest natural frequency, which falls as
+        // it gets larger, while the timestep stays pinned by the stiffest member in it. On a
+        // 24 m version of the test bridge the assembly was still moving at the end of the
+        // requested half second, 5.2 mm and growing, and reporting "stable" there would mean
+        // no more than "it had not fallen yet" - the same budget-dependence this mode exists
+        // to remove, wearing different clothes.
+        //
+        // So stable means settled and below the limit. An unsettled run is reported as
+        // inconclusive and does not claim stability; the caller can raise duration_seconds
+        // and ask again.
+        var conclusive = run.Settled || isMechanism;
+        var stable = conclusive && !isMechanism;
 
         for (var i = 0; i < bodies.Count; i++)
         {
@@ -1044,7 +1059,9 @@ public partial class RhinoMCPModFunctions
         graph["node_widest_m"] = widest;
         graph["nodes"] = clusterReport;
         graph["anchored_ground_points"] = anchoredGround;
-        graph["stable"] = !isMechanism;
+        graph["stable"] = stable;
+        graph["verdict"] = isMechanism ? "unstable" : (conclusive ? "stable" : "inconclusive");
+        graph["conclusive"] = conclusive;
         graph["verdict_metric"] = "pin_displacement";
         graph["mechanism_threshold_m"] = threshold;
         graph["span_m"] = span;
@@ -1079,6 +1096,6 @@ public partial class RhinoMCPModFunctions
             global::RhinoMCPModPlugin.MCPStabilityController.SetEnabled(true);
         }
 
-        return !isMechanism;
+        return stable;
     }
 }
