@@ -633,6 +633,24 @@ internal static class MCPConnectivityGraphBuilder
 
     private static bool TryGetGeometryContactPoint(in Node a, in Node b, double tolerance, out Point3d contactPoint)
     {
+        // Where two elements bear on one another is the region in which their surfaces come
+        // within contact distance - not the curve along which those surfaces cross. Asking
+        // the intersection routines instead makes the answer depend on a degenerate case:
+        // face-to-face bearing is coplanar, and coplanar intersection returns nothing, or
+        // the boundary of the shared region, or a single point, according to triangulation
+        // and rounding. Measured on this project: two mirror-image chords bearing on the
+        // same pad, one reported the exact centre of its bearing rectangle and the other a
+        // far corner of it.
+        //
+        // Sample the region directly instead. It is deterministic, it is symmetric in the
+        // two elements because it samples both, and it degrades sensibly for skew contacts
+        // where no shared plane exists.
+        if (a.ProxyMesh != null && b.ProxyMesh != null &&
+            TryGetBearingCentroid(a.ProxyMesh, b.ProxyMesh, ContactGap(tolerance), out contactPoint))
+        {
+            return true;
+        }
+
         if (a.ProxyMesh != null && b.ProxyMesh != null)
         {
             var lines = Intersection.MeshMeshFast(a.ProxyMesh, b.ProxyMesh);
@@ -669,6 +687,164 @@ internal static class MCPConnectivityGraphBuilder
 
         contactPoint = Point3d.Unset;
         return false;
+    }
+
+    /// <summary>
+    /// Centroid of the region in which two meshes come within <paramref name="maxGap"/> of
+    /// one another - the surface they actually bear on.
+    /// </summary>
+    /// <remarks>
+    /// Both meshes are sampled and each sample kept if it lies within the gap of the other,
+    /// so the result does not depend on which element is asked first. Samples are spread at
+    /// a common spacing rather than a fixed count per face, so a large face is not
+    /// out-voted by a small one and the average approximates an area-weighted centroid.
+    /// </remarks>
+    private static bool TryGetBearingCentroid(Mesh a, Mesh b, double maxGap, out Point3d contactPoint)
+    {
+        contactPoint = Point3d.Unset;
+        if (a.Faces.Count == 0 || b.Faces.Count == 0)
+        {
+            return false;
+        }
+
+        var boxA = a.GetBoundingBox(true);
+        var boxB = b.GetBoundingBox(true);
+        if (!boxA.IsValid || !boxB.IsValid)
+        {
+            return false;
+        }
+
+        // Spacing from the smaller of the two elements, so a slender member bearing on a
+        // large pad is still sampled across its own width rather than at a single point.
+        var span = Math.Min(boxA.Diagonal.Length, boxB.Diagonal.Length);
+        if (!(span > 0.0))
+        {
+            return false;
+        }
+
+        var spacing = Math.Max(span / BearingSamplesAcross, maxGap);
+        var sum = Point3d.Origin;
+        var count = 0;
+
+        Accumulate(a, b);
+        Accumulate(b, a);
+
+        if (count == 0)
+        {
+            return false;
+        }
+
+        var centroid = sum / count;
+        if (!centroid.IsValid)
+        {
+            return false;
+        }
+
+        contactPoint = centroid;
+        return true;
+
+        void Accumulate(Mesh source, Mesh target)
+        {
+            var targetBox = target.GetBoundingBox(true);
+            targetBox.Inflate(maxGap);
+
+            for (var f = 0; f < source.Faces.Count; f++)
+            {
+                var face = source.Faces[f];
+                var p0 = source.Vertices[face.A];
+                var p1 = source.Vertices[face.B];
+                var p2 = source.Vertices[face.C];
+                var p3 = face.IsQuad ? source.Vertices[face.D] : p2;
+
+                var faceBox = new BoundingBox(new[]
+                {
+                    new Point3d(p0), new Point3d(p1), new Point3d(p2), new Point3d(p3)
+                });
+                if (!faceBox.IsValid)
+                {
+                    continue;
+                }
+
+                // Skip faces that cannot reach the other element at all.
+                faceBox.Inflate(maxGap);
+                if (!BoundingBoxesOverlap(faceBox, targetBox))
+                {
+                    continue;
+                }
+
+                var steps = SampleSteps(faceBox, spacing);
+                for (var i = 0; i <= steps; i++)
+                {
+                    for (var j = 0; j <= steps; j++)
+                    {
+                        var u = steps == 0 ? 0.5 : (double)i / steps;
+                        var v = steps == 0 ? 0.5 : (double)j / steps;
+                        var point = face.IsQuad
+                            ? BilinearPoint(p0, p1, p2, p3, u, v)
+                            : BarycentricPoint(p0, p1, p2, u, v);
+                        if (!point.IsValid)
+                        {
+                            continue;
+                        }
+
+                        var onTarget = target.ClosestPoint(point);
+                        if (!onTarget.IsValid || point.DistanceTo(onTarget) > maxGap)
+                        {
+                            continue;
+                        }
+
+                        // The midpoint of the pair lies in the shared surface, which is
+                        // where the bearing actually is.
+                        sum += (point + onTarget) * 0.5;
+                        count++;
+                    }
+                }
+            }
+        }
+    }
+
+    /// <summary>Samples across the smaller element, per axis. Ten gives a bearing centroid
+    /// within a percent of exact for a rectangular contact without making the graph slow.</summary>
+    private const int BearingSamplesAcross = 10;
+
+    private const int MaxBearingSamplesPerFace = 24;
+
+    private static int SampleSteps(BoundingBox faceBox, double spacing)
+    {
+        var extent = Math.Max(faceBox.Diagonal.X, Math.Max(faceBox.Diagonal.Y, faceBox.Diagonal.Z));
+        if (!(spacing > 0.0) || !(extent > 0.0))
+        {
+            return 0;
+        }
+
+        return Math.Clamp((int)Math.Ceiling(extent / spacing), 1, MaxBearingSamplesPerFace);
+    }
+
+    private static bool BoundingBoxesOverlap(BoundingBox x, BoundingBox y)
+    {
+        return x.Min.X <= y.Max.X && y.Min.X <= x.Max.X &&
+            x.Min.Y <= y.Max.Y && y.Min.Y <= x.Max.Y &&
+            x.Min.Z <= y.Max.Z && y.Min.Z <= x.Max.Z;
+    }
+
+    private static Point3d BilinearPoint(Point3f p0, Point3f p1, Point3f p2, Point3f p3, double u, double v)
+    {
+        var a = new Point3d(p0) * (1.0 - u) + new Point3d(p1) * u;
+        var b = new Point3d(p3) * (1.0 - u) + new Point3d(p2) * u;
+        return a * (1.0 - v) + b * v;
+    }
+
+    private static Point3d BarycentricPoint(Point3f p0, Point3f p1, Point3f p2, double u, double v)
+    {
+        // Fold the unit square onto the triangle so one sampling loop serves both face kinds.
+        if (u + v > 1.0)
+        {
+            u = 1.0 - u;
+            v = 1.0 - v;
+        }
+
+        return new Point3d(p0) + (new Point3d(p1) - new Point3d(p0)) * u +
+            (new Point3d(p2) - new Point3d(p0)) * v;
     }
 
     /// <summary>
