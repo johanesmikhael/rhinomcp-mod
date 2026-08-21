@@ -693,8 +693,17 @@ internal static class MCPConnectivityGraphBuilder
         var source = walkA ? a : b;
         var target = walkA ? b : a;
 
+        // Two elements resting face to face tie at zero gap across their whole overlap, so
+        // keeping the first minimum found reports whichever vertex the walk happened to
+        // reach first - always a corner of the box, since those are the vertices there are.
+        // A bearing surface labelled at its corner is misleading on screen and, in the
+        // pinned mode, wrong: that point is where the two bodies get pinned. Average the
+        // tied set instead, which puts the label in the middle of the surface actually in
+        // contact.
+        var tie = Math.Max(RhinoMath.ZeroTolerance, Functions.DocumentUnits.AbsoluteTolerance());
         var bestGap = double.MaxValue;
-        var bestPoint = Point3d.Unset;
+        var sum = Point3d.Origin;
+        var tiedCount = 0;
         foreach (var vertex in source.Vertices)
         {
             var point = new Point3d(vertex.X, vertex.Y, vertex.Z);
@@ -705,23 +714,38 @@ internal static class MCPConnectivityGraphBuilder
             }
 
             var gap = point.DistanceTo(onTarget);
-            if (gap < bestGap)
+            if (gap > bestGap + tie)
             {
-                bestGap = gap;
-                bestPoint = (point + onTarget) * 0.5;
-                if (bestGap <= RhinoMath.ZeroTolerance)
-                {
-                    break;
-                }
+                continue;
             }
+
+            var midpoint = (point + onTarget) * 0.5;
+            if (gap < bestGap - tie)
+            {
+                // A genuinely closer approach: everything gathered so far was not contact.
+                bestGap = gap;
+                sum = midpoint;
+                tiedCount = 1;
+                continue;
+            }
+
+            bestGap = Math.Min(bestGap, gap);
+            sum += midpoint;
+            tiedCount++;
         }
 
-        if (bestGap > maxGap || !bestPoint.IsValid)
+        if (tiedCount == 0 || bestGap > maxGap)
         {
             return false;
         }
 
-        contactPoint = bestPoint;
+        var averaged = sum / tiedCount;
+        if (!averaged.IsValid)
+        {
+            return false;
+        }
+
+        contactPoint = averaged;
         return true;
     }
 
