@@ -223,8 +223,53 @@ requires settled and below the limit; otherwise the verdict is `inconclusive` an
 stiffness probe is skipped, since a secant stiffness about a structure that never reached
 equilibrium is meaningless. The 24 m case does not settle even at a 2 s cap.
 
-Ways out, cheapest first: raise `TimestepSafety` from 0.1 (2.5x); decide the verdict from
-whether the speed envelope is decaying rather than waiting for full settlement, since a
-mechanism *accelerates* and that shows in a few periods rather than tens; selective mass
-scaling, standard in explicit FE, to lift `dt`; implicit integration, which is the real fix
-and the largest job.
+**Convergence replaced waiting**, and lifted the ceiling to ~146 elements. A damped response
+does not have to be simulated to be bounded: its increments shrink geometrically, so once a
+window of samples agrees on a ratio the limit is `d + delta*r/(1-r)`. If that is under the
+threshold the structure cannot reach it however long the run continues. Validated where it
+fires - 98 elements went 97 s to 12 s, and an 8-panel bridge projected 1.61 mm against a
+known settled 1.595 mm.
+
+Three false convergences had to be killed first, each of which would have reported a moving
+structure as stable:
+
+- **Kinetic-energy turnovers** fire at the stiffest *local* mode - one every two steps -
+  and say nothing about where the structure is going. Converged in 1385 steps, predicted
+  0.29 mm where the truth was 0.60. Convergence is now read from the measured displacement.
+- **Terminal velocity looks like convergence** between neighbouring samples. A falling
+  structure damped by viscosity has *constant* increments, a ratio of one that noise pushes
+  under any limit set just below one. Decay is now measured across a 7-sample window, where
+  constant increments give a ratio of exactly one.
+- **The final sample spans a shorter interval** than the rest, so its increment is smaller
+  purely from being measured over less time. Three unrelated models "converged" at a ratio
+  of 0.31 the moment their budget ran out. Only uniform intervals now feed the test.
+
+Remaining ways to go faster: raise `TimestepSafety` from 0.1 (about 2.5x); selective mass
+scaling, standard in explicit FE; implicit integration, the real fix and the largest job.
+
+## The dynamic mode does not simulate free-body motion
+
+**Two members hanging in mid-air with nothing holding them up move 2.82 mm in half a second.
+Free fall is 1226 mm.** Committed as a failing regression case, `free_fall_two_members`,
+which asserts the *distance* rather than the verdict - the verdict comes out "unstable"
+regardless, because even 2.82 mm clears the threshold such a small assembly gets, and
+passing on that would hide the defect.
+
+The cause is structural. A body's frame particle carries its best-fit frame and is updated
+projectively rather than integrated, while the particles carrying its mass are held to that
+frame by a penalty of 3.6e8 N/m. They can depart from it by only `mg/k`, about 1.5 micron,
+and the frame then follows at a quarter of that per step, so a free body falls at the
+solver's update rate rather than at `g`.
+
+What this does and does not invalidate:
+
+- **Deformation dynamics is sound** and separately validated - sag against hand statics,
+  sway stiffness convergent and linear, projections matching settled values to 0.1%.
+- **Gross rigid-body motion is not modelled.** An element toppling off its support or a
+  fragment dropping away does not accelerate. An unstable verdict can currently be reached
+  only by deformation crossing the limit.
+- The claim that "a mechanism is caught because it accelerates under gravity" is therefore
+  **not true of this implementation**, whatever its merits as physics.
+
+The fix is to give each body's frame its mass and inertia and integrate it, with the pins
+supplying constraint forces - rigid-body dynamics in place of a fitted frame.

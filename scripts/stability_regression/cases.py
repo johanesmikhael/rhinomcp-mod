@@ -461,6 +461,38 @@ CASES: list[Case] = [
             "sway.sway_stiffness_x_n_per_m": (2.0e9, 2.9e9),
         },
     ),
+    # Committed failing. Two members hanging in mid-air with nothing holding them up must
+    # fall: 1226 mm in half a second. They move 2.82 mm.
+    #
+    # The cause is structural. Each body's frame particle carries its best-fit frame and is
+    # updated projectively rather than integrated, while the particles that do carry mass
+    # are held to that frame by a penalty of 3.6e8 N/m - so they can depart from it by only
+    # mg/k, about 1.5 micron, and the frame then follows at a quarter of that per step. A
+    # free body's fall is therefore paced by the solver's update rate instead of by gravity.
+    #
+    # Deformation dynamics is unaffected and is separately validated: sag matches hand
+    # statics, sway stiffness converges, and projected displacements match settled ones to
+    # 0.1%. But gross rigid-body motion - an element toppling off its support, a fragment
+    # dropping - is not simulated, so an unstable verdict can currently only be reached by
+    # deformation crossing the limit. Fixing it means giving the frame the body's mass and
+    # inertia and integrating it, with the pins supplying constraint forces: rigid-body
+    # dynamics rather than a fitted frame.
+    Case(
+        name="free_fall_two_members",
+        mode="pinned_dynamic",
+        tier=FAST,
+        stable=False,
+        reason="nothing supports them; free fall is 1226 mm in 0.5 s, they move 2.82 mm",
+        # The verdict alone would pass here, and passing would be misleading: with nothing
+        # supporting them even 2.82 mm of travel clears the threshold this small assembly
+        # gets, so "unstable" comes out right while the motion is wrong by a factor of 400.
+        # What is asserted is therefore the distance, which is the thing that is broken.
+        expect={"max_pin_displacement_m": (0.5, 2.0)},
+        build=lambda: (
+            'axis_box("A", (0.0,0.0,5000.0), (2000.0,0.0,5000.0), 150.0, 54.0)\n'
+            'axis_box("B", (2000.0,0.0,5000.0), (4000.0,0.0,5000.0), 150.0, 54.0)'),
+        params={"floor_z": -100000.0, "lateral_load_fraction": 0.0},
+    ),
     # Committed failing, like the welded pedestal was. The relaxed pinned mode calls this
     # structure unstable through its divergence trend, which is the weaker of its two paths
     # to a verdict and the one that does not survive being checked: the integrator, a

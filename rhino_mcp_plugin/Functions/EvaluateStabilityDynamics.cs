@@ -117,9 +117,55 @@ internal static class StabilityDynamics
     public const double DefaultDurationSeconds = 0.5;
 
 
+    /// <summary>
+    /// How many consecutive sampling intervals must agree before a projection is trusted.
+    /// </summary>
+    public const int ConvergenceIntervalsRequired = 4;
+
+    /// <summary>
+    /// Intervals spanned when measuring how much the motion has decayed.
+    /// </summary>
+    public const int ConvergenceWindow = 7;
+
+    /// <summary>
+    /// The decay per interval, averaged over the window, that counts as converging.
+    /// </summary>
+    /// <remarks>
+    /// Measured across a window rather than between neighbours, because a single pair of
+    /// intervals says almost nothing. A mechanism falling against viscous damping reaches
+    /// terminal velocity and its increments become constant - a ratio of one, which noise
+    /// alone pushes under any limit set just below one. A bridge held at one end and
+    /// dropped did exactly that: increments of 0.26, 0.28, 0.28, 0.26 mm read as convergent
+    /// and projected 13.1 mm against a 14.1 mm threshold, a tenth away from reporting a
+    /// collapsing structure as stable.
+    ///
+    /// Over a window those same increments go nowhere - first and last are equal, so the
+    /// average ratio is one and no projection is offered. A structure genuinely approaching
+    /// equilibrium shrinks by a compounding factor that a few noisy samples cannot
+    /// manufacture.
+    /// </remarks>
+    public const double ConvergenceDecayPerInterval = 0.96;
+
+    /// <summary>
+    /// The largest decay per interval that still counts as converging.
+    /// </summary>
+    /// <remarks>
+    /// Only just below one, because the ratio is not the safety test - the projection is.
+    /// A ratio close to one produces a correspondingly distant limit, so a series creeping
+    /// down slowly is not mistaken for one that has arrived; it simply projects further. A
+    /// 24 m bridge decays at 0.95 to 0.96 per interval and is perfectly convergent, and an
+    /// arbitrary cut at 0.95 rejected it. What must be excluded is division by nothing, and
+    /// growth, which is a ratio at or above one.
+    /// </remarks>
+    public const double ConvergenceRatioLimit = 0.99;
+
     public sealed class Result
     {
         public bool Settled { get; set; }
+        public bool Converged { get; set; }
+        public double ProjectedDisplacement { get; set; }
+        public double DecayRatio { get; set; }
+        public int Turnovers { get; set; }
         public double TimestepSeconds { get; set; }
         public int Steps { get; set; }
         public double SimulatedSeconds { get; set; }
@@ -170,6 +216,9 @@ internal static class StabilityDynamics
         var velocity = new Vector3d[particles.Count];
         var settledFor = 0;
         var previousKinetic = 0.0;
+        var lastSampled = -1.0;
+        var decayRatio = 0.0;
+        var recentDeltas = new List<double>(ConvergenceWindow);
 
         // The disturbance is a velocity, not a displacement.
         //
@@ -281,6 +330,15 @@ internal static class StabilityDynamics
                 peakSpeed = Math.Max(peakSpeed, velocity[i].Length);
             }
 
+            var kinetic = 0.0;
+            for (var i = 0; i < particles.Count; i++)
+            {
+                if (!isFrame[i] && masses[i] > 0.0)
+                {
+                    kinetic += masses[i] * velocity[i].SquareLength;
+                }
+            }
+
             result.PeakSpeed = Math.Max(result.PeakSpeed, peakSpeed);
             result.Steps = step + 1;
             result.SimulatedSeconds = result.Steps * timestep;
@@ -302,15 +360,6 @@ internal static class StabilityDynamics
             // the verdict never uses this path.
             if (kineticDamping)
             {
-                var kinetic = 0.0;
-                for (var i = 0; i < particles.Count; i++)
-                {
-                    if (!isFrame[i] && masses[i] > 0.0)
-                    {
-                        kinetic += masses[i] * velocity[i].SquareLength;
-                    }
-                }
-
                 if (kinetic < previousKinetic)
                 {
                     for (var i = 0; i < velocity.Length; i++)
@@ -363,7 +412,13 @@ internal static class StabilityDynamics
                 settledFor = 0;
             }
 
-            if ((step + 1) % sampleEvery != 0 && step + 1 != steps)
+            // The last step is always sampled so the run reports where it finished, but
+            // that sample spans a shorter interval than the rest. Comparing it with the
+            // others makes the motion look as though it collapsed, purely because it was
+            // measured over less time - three unrelated models all "converged" at a ratio
+            // of 0.31 at the moment their budget ran out, two of them falling.
+            var uniformInterval = (step + 1) % sampleEvery == 0;
+            if (!uniformInterval && step + 1 != steps)
             {
                 continue;
             }
@@ -372,6 +427,67 @@ internal static class StabilityDynamics
             result.TimeSamples.Add(result.SimulatedSeconds);
             result.DisplacementSamples.Add(displacement);
             result.SpeedSamples.Add(peakSpeed);
+
+            // Convergence, rather than waiting for the structure to finish arriving.
+            //
+            // Ringing out at 2% of critical takes tens of periods, and settling time is set
+            // by the lowest natural frequency, so it grows with the span while the timestep
+            // stays pinned by the stiffest member. That is what put a 24 m bridge out of
+            // reach - still moving after 2 s of simulated time.
+            //
+            // A damped response does not have to be simulated to be bounded. What it has
+            // left to travel shrinks geometrically, so once successive intervals agree on a
+            // ratio the rest of the journey is the sum of a geometric series,
+            // d + delta*r/(1-r). If that limit is under the threshold the structure cannot
+            // reach it however long the run goes on, and the answer is already known.
+            //
+            // This is read from the measured displacement, at the sampling interval, and
+            // not from kinetic energy. Kinetic energy turns over at the frequency of the
+            // stiffest local mode - measured at one turnover every two steps - which says
+            // nothing about where the structure is going: projecting from it converged in
+            // 1385 steps and predicted 0.29 mm where the true settled value was 0.60.
+            //
+            // What matters is not how far it has moved but whether the series converges at
+            // all. A mechanism accelerates, its increments grow rather than shrink, no
+            // projection is offered, and the run continues until it crosses the threshold or
+            // time runs out.
+            if (lastSampled >= 0.0 && uniformInterval)
+            {
+                var delta = displacement - lastSampled;
+                recentDeltas.Add(Math.Abs(delta));
+                if (recentDeltas.Count > ConvergenceWindow)
+                {
+                    recentDeltas.RemoveAt(0);
+                }
+
+                if (recentDeltas.Count == ConvergenceWindow &&
+                    recentDeltas[0] > 0.0 && recentDeltas[ConvergenceWindow - 1] > 0.0)
+                {
+                    // How much the motion shrank across the whole window, expressed per
+                    // interval. Compounding over several samples is what noise cannot fake.
+                    var span = recentDeltas[ConvergenceWindow - 1] / recentDeltas[0];
+                    var ratio = Math.Pow(span, 1.0 / (ConvergenceWindow - 1));
+                    decayRatio = ratio;
+
+                    if (ratio < ConvergenceDecayPerInterval && ratio < ConvergenceRatioLimit)
+                    {
+                        var projected = displacement +
+                            recentDeltas[ConvergenceWindow - 1] * ratio / (1.0 - ratio);
+                        result.Converged = true;
+                        result.DecayRatio = ratio;
+                        result.ProjectedDisplacement = projected;
+                        result.DisplacementSamples.Add(projected);
+                        result.TimeSamples.Add(result.SimulatedSeconds);
+                        result.SpeedSamples.Add(peakSpeed);
+                        break;
+                    }
+                }
+            }
+
+            if (uniformInterval)
+            {
+                lastSampled = displacement;
+            }
 
             // A collapse under way does not reverse, so there is nothing to learn from
             // simulating the rest of it.
@@ -902,7 +1018,7 @@ public partial class RhinoMCPModFunctions
         // assume. The disturbance is switched off for these runs so that what is measured is
         // the response to the load and nothing else.
         var stiffnessReport = new JObject();
-        if (lateralLoadFraction > 0.0 && !collapsed && run.Settled)
+        if (lateralLoadFraction > 0.0 && !collapsed && (run.Settled || run.Converged))
         {
             Integrate(goals, 0.0, false, true);
             var settled = particles.Select(p => p.Position).ToArray();
@@ -969,7 +1085,9 @@ public partial class RhinoMCPModFunctions
         // So stable means settled and below the limit. An unsettled run is reported as
         // inconclusive and does not claim stability; the caller can raise duration_seconds
         // and ask again.
-        var conclusive = run.Settled || isMechanism;
+        // Converged counts as an answer: the projection bounds where the structure ends up,
+        // so continuing the run cannot change the verdict.
+        var conclusive = run.Settled || run.Converged || isMechanism;
         var stable = conclusive && !isMechanism;
 
         for (var i = 0; i < bodies.Count; i++)
@@ -1077,6 +1195,10 @@ public partial class RhinoMCPModFunctions
         graph["imperfection_fraction"] = imperfectionFraction;
         graph["peak_speed_m_s"] = run.PeakSpeed;
         graph["settled"] = run.Settled;
+        graph["converged"] = run.Converged;
+        graph["decay_ratio_per_swing"] = run.DecayRatio;
+        graph["projected_displacement_m"] = run.ProjectedDisplacement;
+        graph["turnovers"] = run.Turnovers;
         graph["settled_speed_m_s"] = settledSpeed;
         graph["total_weight_n"] = totalWeight;
         graph["time_samples_s"] = new JArray(run.TimeSamples.Select(v => (object)v).ToArray());
