@@ -198,7 +198,8 @@ public partial class RhinoMCPModFunctions
         double assignToleranceMeters,
         double solverThresholdMeters,
         int solverSubsteps,
-        double lengthToMeters)
+        double lengthToMeters,
+        RhinoDoc displayDoc)
     {
         var bodies = BuildPinnedBodies(
             graph, nodes, lengthToMeters, floorZMeters, GroundContactToleranceMeters);
@@ -441,6 +442,16 @@ public partial class RhinoMCPModFunctions
         graph["worst_body"] = worstNode;
         graph["bodies"] = nodeReports;
         graph["stable"] = !isMechanism;
+
+        // The same cache the contact mode writes. Without it a pinned run reports numbers
+        // and draws nothing, whether it was asked for from the command or over MCP.
+        if (displayDoc != null)
+        {
+            ClearAfterEvaluationCache(displayDoc);
+            WriteMultiBodyDisplay(displayDoc, bodies);
+            global::RhinoMCPModPlugin.MCPStabilityController.SetEnabled(true);
+        }
+
         return !isMechanism;
     }
 

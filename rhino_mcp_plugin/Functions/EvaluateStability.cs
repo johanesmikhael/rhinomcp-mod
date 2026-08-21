@@ -431,7 +431,8 @@ public partial class RhinoMCPModFunctions
                     unitContext.ToMeters(assignTol),
                     unitContext.ToMeters(threshold),
                     solverSubsteps,
-                    unitContext.LengthToMeters);
+                    unitContext.LengthToMeters,
+                    WantsDisplay(parameters) ? doc : null);
 
                 return BuildPinnedResult(graph, doc, unitContext, pinnedStable, gravity, floorZ,
                     floorZIsAuto, rigidStrength, totalMassKilograms, unitWarnings);
