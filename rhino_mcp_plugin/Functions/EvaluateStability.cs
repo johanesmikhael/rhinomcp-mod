@@ -439,8 +439,12 @@ public partial class RhinoMCPModFunctions
                     unitContext.LengthToMeters,
                     WantsDisplay(parameters) ? doc : null);
 
-                return BuildPinnedResult(graph, doc, unitContext, pinnedStable, gravity, floorZ,
-                    floorZIsAuto, rigidStrength, totalMassKilograms, unitWarnings);
+                var pinnedResult = BuildPinnedResult(graph, doc, unitContext, pinnedStable, gravity,
+                    floorZ, floorZIsAuto, rigidStrength, totalMassKilograms, unitWarnings);
+                pinnedResult["node_count_clustered"] = graph["node_count_clustered"];
+                pinnedResult["node_widest_m"] = graph["node_widest_m"];
+                pinnedResult["nodes"] = graph["nodes"];
+                return pinnedResult;
             }
 
             var stable = SolveFromGraph(

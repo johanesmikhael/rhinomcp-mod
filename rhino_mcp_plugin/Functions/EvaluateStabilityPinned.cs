@@ -70,7 +70,8 @@ public partial class RhinoMCPModFunctions
         double lengthToMeters,
         double floorZMeters,
         double groundToleranceMeters,
-        bool sharePins = true)
+        bool sharePins = true,
+        JArray clusterReport = null)
     {
         var bodies = new List<PinnedBody>(nodes.Count);
         foreach (var node in nodes)
@@ -132,6 +133,7 @@ public partial class RhinoMCPModFunctions
             return bodies;
         }
 
+        var links = new List<JointLink>();
         if (graph["e"] is JArray edges)
         {
             foreach (var edgeToken in edges)
@@ -157,13 +159,285 @@ public partial class RhinoMCPModFunctions
                     continue;
                 }
 
-                bodies[a].JointPoints.Add(contact);
-                bodies[b].JointPoints.Add(contact);
+                links.Add(new JointLink { A = a, B = b, Point = contact });
             }
         }
 
+        ClusterJointsIntoNodes(bodies, links, clusterReport);
+
         return bodies;
     }
+
+    /// <summary>One graph edge read as a joint: the two bodies and where they bear.</summary>
+    private sealed class JointLink
+    {
+        public int A { get; set; }
+        public int B { get; set; }
+        public Point3d Point { get; set; }
+        public int Cluster { get; set; } = -1;
+    }
+
+    /// <summary>
+    /// Gathers the pairwise bearing points around each element into the structural nodes
+    /// they actually belong to, and gives every body one point per node.
+    /// </summary>
+    /// <remarks>
+    /// The graph reports one bearing point per pair of elements, not one per node. Six
+    /// members meeting at a truss node therefore arrive as fifteen scattered points, none
+    /// coincident, and the solver merges none of them - so instead of one pin the node
+    /// becomes fifteen independent ball joints and the truss is a mechanism before gravity
+    /// is applied. Measured on a 40-member bridge: 167 joint points for 17 nodes, and every
+    /// one of them its own particle.
+    ///
+    /// The clustering radius is not a constant. Under single linkage the number of clusters
+    /// changes only at the merge distances of the minimum spanning tree over the points, so
+    /// sweeping a radius and looking for a plateau is the same thing as reading the largest
+    /// gap in those distances - which is exact, and free. Points within one node sit tens of
+    /// millimetres apart while neighbouring nodes are metres away, so the gap is decisive.
+    ///
+    /// Two safeguards. The knee is found per body rather than globally, so a small bracket
+    /// and a large beam each set their own scale, which matters in a model whose parts vary
+    /// by orders of magnitude. And whatever the knee says, a cluster may not span more than
+    /// the element's own section: geometry vetoes, so a degenerate spread of points cannot
+    /// fuse two real nodes and silently weld the structure.
+    /// </remarks>
+    private static void ClusterJointsIntoNodes(
+        List<PinnedBody> bodies, List<JointLink> links, JArray report)
+    {
+        if (links.Count == 0)
+        {
+            return;
+        }
+
+        var parent = new int[links.Count];
+        for (var i = 0; i < parent.Length; i++)
+        {
+            parent[i] = i;
+        }
+
+        int Find(int i)
+        {
+            while (parent[i] != i)
+            {
+                parent[i] = parent[parent[i]];
+                i = parent[i];
+            }
+
+            return i;
+        }
+
+        void Union(int i, int j)
+        {
+            var ri = Find(i);
+            var rj = Find(j);
+            if (ri != rj)
+            {
+                parent[rj] = ri;
+            }
+        }
+
+        var byBody = new List<int>[bodies.Count];
+        for (var i = 0; i < links.Count; i++)
+        {
+            (byBody[links[i].A] ??= new List<int>()).Add(i);
+            (byBody[links[i].B] ??= new List<int>()).Add(i);
+        }
+
+        for (var b = 0; b < bodies.Count; b++)
+        {
+            var indices = byBody[b];
+            if (indices == null || indices.Count < 2)
+            {
+                continue;
+            }
+
+            var box = bodies[b].SolverMesh.GetBoundingBox(true);
+            var section = Math.Min(box.Diagonal.X, Math.Min(box.Diagonal.Y, box.Diagonal.Z));
+            var ceiling = Math.Max(section, DefaultAssignToleranceMeters);
+            var radius = Math.Min(KneeRadius(links, indices, ceiling), ceiling);
+            if (!(radius > 0.0))
+            {
+                continue;
+            }
+
+            for (var i = 0; i < indices.Count; i++)
+            {
+                for (var j = i + 1; j < indices.Count; j++)
+                {
+                    if (links[indices[i]].Point.DistanceTo(links[indices[j]].Point) <= radius)
+                    {
+                        Union(indices[i], indices[j]);
+                    }
+                }
+            }
+        }
+
+        var centres = new Dictionary<int, (Point3d Sum, int Count)>();
+        foreach (var index in Enumerable.Range(0, links.Count))
+        {
+            var root = Find(index);
+            var entry = centres.TryGetValue(root, out var found) ? found : (Point3d.Origin, 0);
+            centres[root] = (entry.Item1 + links[index].Point, entry.Item2 + 1);
+        }
+
+        var nodePoints = new Dictionary<int, Point3d>();
+        foreach (var pair in centres)
+        {
+            nodePoints[pair.Key] = pair.Value.Sum / pair.Value.Count;
+        }
+
+        // One point per body per node, so the bodies meeting there share a single particle.
+        var placed = new HashSet<(int Body, int Node)>();
+        foreach (var index in Enumerable.Range(0, links.Count))
+        {
+            var root = Find(index);
+            var point = nodePoints[root];
+            foreach (var body in new[] { links[index].A, links[index].B })
+            {
+                if (placed.Add((body, root)))
+                {
+                    bodies[body].JointPoints.Add(point);
+                }
+            }
+        }
+
+        if (report == null)
+        {
+            return;
+        }
+
+        foreach (var pair in centres)
+        {
+            var members = new SortedSet<int>();
+            var diameter = 0.0;
+            var points = new List<Point3d>();
+            foreach (var index in Enumerable.Range(0, links.Count))
+            {
+                if (Find(index) != pair.Key)
+                {
+                    continue;
+                }
+
+                members.Add(links[index].A);
+                members.Add(links[index].B);
+                points.Add(links[index].Point);
+            }
+
+            for (var i = 0; i < points.Count; i++)
+            {
+                for (var j = i + 1; j < points.Count; j++)
+                {
+                    diameter = Math.Max(diameter, points[i].DistanceTo(points[j]));
+                }
+            }
+
+            var centre = nodePoints[pair.Key];
+            report.Add(new JObject
+            {
+                ["bodies"] = members.Count,
+                ["edges"] = pair.Value.Count,
+                ["diameter_m"] = diameter,
+                ["centre_m"] = new JArray(centre.X, centre.Y, centre.Z)
+            });
+        }
+    }
+
+    /// <summary>
+    /// The clustering radius for one element's bearing points, read off the largest gap in
+    /// its single-linkage merge distances.
+    /// </summary>
+    /// <remarks>
+    /// Returns the ceiling when the points offer no real gap - a spread with no structure in
+    /// it should not be forced into one, and the geometric clamp is the safer answer.
+    /// </remarks>
+    private static double KneeRadius(List<JointLink> links, List<int> indices, double ceiling)
+    {
+        // Prim's algorithm over the points, keeping the merge distances rather than the tree.
+        var n = indices.Count;
+        var inTree = new bool[n];
+        var best = new double[n];
+        for (var i = 0; i < n; i++)
+        {
+            best[i] = double.MaxValue;
+        }
+
+        best[0] = 0.0;
+        var merges = new List<double>(n - 1);
+        for (var step = 0; step < n; step++)
+        {
+            var pick = -1;
+            for (var i = 0; i < n; i++)
+            {
+                if (!inTree[i] && (pick < 0 || best[i] < best[pick]))
+                {
+                    pick = i;
+                }
+            }
+
+            if (pick < 0)
+            {
+                break;
+            }
+
+            inTree[pick] = true;
+            if (step > 0)
+            {
+                merges.Add(best[pick]);
+            }
+
+            for (var i = 0; i < n; i++)
+            {
+                if (inTree[i])
+                {
+                    continue;
+                }
+
+                var d = links[indices[pick]].Point.DistanceTo(links[indices[i]].Point);
+                if (d < best[i])
+                {
+                    best[i] = d;
+                }
+            }
+        }
+
+        if (merges.Count == 0)
+        {
+            return ceiling;
+        }
+
+        merges.Sort();
+
+        // The largest ratio jump is the knee. Anything below the floor is noise rather than
+        // a scale change, and a jump from a near-zero distance would divide by nothing.
+        var kneeIndex = -1;
+        var bestRatio = NodeKneeMinimumRatio;
+        for (var i = 0; i + 1 < merges.Count; i++)
+        {
+            var lower = Math.Max(merges[i], DefaultAssignToleranceMeters);
+            var ratio = merges[i + 1] / lower;
+            if (ratio > bestRatio)
+            {
+                bestRatio = ratio;
+                kneeIndex = i;
+            }
+        }
+
+        if (kneeIndex < 0)
+        {
+            return ceiling;
+        }
+
+        // Cut between the two scales: above everything that belongs together, below the
+        // first distance that does not.
+        return 0.5 * (merges[kneeIndex] + merges[kneeIndex + 1]);
+    }
+
+    /// <summary>
+    /// How much larger a merge distance must be than the one below it to count as a change
+    /// of scale rather than scatter. A node's own points sit tens of millimetres apart while
+    /// its neighbours are metres away, so a real gap clears this by an order of magnitude.
+    /// </summary>
+    private const double NodeKneeMinimumRatio = 2.0;
 
     /// <summary>
     /// Three marker points per body, spread on the body's own scale so the plane through
@@ -201,8 +475,10 @@ public partial class RhinoMCPModFunctions
         double lengthToMeters,
         RhinoDoc displayDoc)
     {
+        var clusterReport = new JArray();
         var bodies = BuildPinnedBodies(
-            graph, nodes, lengthToMeters, floorZMeters, GroundContactToleranceMeters);
+            graph, nodes, lengthToMeters, floorZMeters, GroundContactToleranceMeters,
+            sharePins: true, clusterReport: clusterReport);
         if (bodies.Count == 0)
         {
             throw new InvalidOperationException("No bodies were built for the pinned solver.");
@@ -433,10 +709,19 @@ public partial class RhinoMCPModFunctions
             worstRotation > DefaultRotationThresholdDegrees ||
             worstDisplacement > PinnedMechanismDisplacementMeters;
 
+        var widest = 0.0;
+        foreach (var entry in clusterReport)
+        {
+            widest = Math.Max(widest, entry["diameter_m"]?.Value<double>() ?? 0.0);
+        }
+
         graph["evaluation_mode"] = PinnedEvaluationMode;
         graph["body_count"] = bodies.Count;
         graph["particle_count"] = particleCount;
         graph["joint_count"] = bodies.Sum(b => b.JointCount) / 2;
+        graph["node_count_clustered"] = clusterReport.Count;
+        graph["node_widest_m"] = widest;
+        graph["nodes"] = clusterReport;
         graph["anchored_ground_points"] = anchoredGround;
         graph["motion_trend"] = diverging ? "diverging" : "settling";
         graph["rotation_trend"] = turning ? "turning" : "steady";
