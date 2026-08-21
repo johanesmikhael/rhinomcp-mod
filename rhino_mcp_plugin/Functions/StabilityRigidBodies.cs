@@ -227,6 +227,19 @@ internal static class StabilityRigidBodies
             }
         }
 
+        // How stiffly each body is held in rotation, for sizing pin friction: a joint
+        // stiffness acting on the lever it has to the centre of mass.
+        var spinHeld = new double[bodies.Count];
+        foreach (var site in sites)
+        {
+            for (var i = 0; i < site.Bodies.Count; i++)
+            {
+                var index = site.Bodies[i];
+                var lever = bodies[index].Local[site.Slots[i]].Length;
+                spinHeld[index] += site.Stiffness * lever * lever;
+            }
+        }
+
         var sampleEvery = Math.Max(1, steps / Math.Max(1, sampleCount));
         var previousKinetic = 0.0;
         var lastSampled = -1.0;
@@ -321,13 +334,31 @@ internal static class StabilityRigidBodies
 
                 // Euler's equations, with the gyroscopic term. Bodies here turn slowly
                 // enough that it is small, but leaving it out is a different equation.
+                var spinStiffness = spinHeld[bodies.IndexOf(body)];
                 var inertiaWorld = body.Inertia;
                 var spin = body.AngularVelocity;
                 var gyroscopic = new Vector3d(
                     (inertiaWorld.Z - inertiaWorld.Y) * spin.Y * spin.Z,
                     (inertiaWorld.X - inertiaWorld.Z) * spin.Z * spin.X,
                     (inertiaWorld.Y - inertiaWorld.X) * spin.X * spin.Y);
-                var torque = body.Torque - gyroscopic;
+                // Friction at the pin.
+                //
+                // A member pinned at two points can spin about the axis through them, and
+                // that freedom has no stiffness at all - the pinned idealisation grants it
+                // deliberately. Joint damping cannot reach it either: a body spinning about
+                // that axis has zero velocity at the very points where the damping acts. So
+                // the spin, once started, never stops, the assembly's kinetic energy never
+                // turns over cleanly, and the runs that settle it by kinetic damping never
+                // settle.
+                //
+                // A real pin has friction. This is that, sized against the body's own
+                // rotational scale so it is a fraction of critical for the spin rather than
+                // an arbitrary number, and it acts only on rotation - it cannot resist a
+                // body falling or translating.
+                var spinDamping = 2.0 * dampingRatio * Math.Sqrt(
+                    Math.Max(spinStiffness, 0.0) * Math.Min(inertiaWorld.X,
+                        Math.Min(inertiaWorld.Y, inertiaWorld.Z)));
+                var torque = body.Torque - gyroscopic - spinDamping * body.AngularVelocity;
 
                 body.AngularVelocity += new Vector3d(
                     torque.X / inertiaWorld.X,
@@ -344,7 +375,15 @@ internal static class StabilityRigidBodies
                 }
 
                 peakSpeed = Math.Max(peakSpeed, body.Velocity.Length);
-                kinetic += body.Mass * body.Velocity.SquareLength;
+                // Rotation counts. These members are pinned at both ends and much of their
+                // energy is angular, so a kinetic energy built from linear velocity alone
+                // turns over at the wrong moments - and kinetic damping, which acts on
+                // exactly those turnovers, then never settles the assembly.
+                var w = body.AngularVelocity;
+                kinetic += body.Mass * body.Velocity.SquareLength +
+                    body.Inertia.X * w.X * w.X +
+                    body.Inertia.Y * w.Y * w.Y +
+                    body.Inertia.Z * w.Z * w.Z;
             }
 
             result.PeakSpeed = Math.Max(result.PeakSpeed, peakSpeed);

@@ -301,6 +301,30 @@ defect being fixed:
   alternating in sign while shrinking on average - projected 41.7 mm of sag where the truth
   was nearer 1.
 
+**Diagnosis: it was never a stiffness problem.** Left to run, the rigid-body response
+*oscillates* between 0.02 and 0.39 mm and does not decay - the same amplitude after 3 s and
+896k steps as after 0.5 s. The peak is the same order as the particle model's 0.62 mm, so
+the joint stiffness was roughly right all along; the "1000x soft" sway was the static run
+being measured mid-oscillation. One problem, not two.
+
+Two fixes since, both real:
+
+- **Kinetic energy must include rotation.** These members are pinned at both ends and much
+  of their energy is angular, so an energy built from linear velocity alone turns over at
+  the wrong moments - and kinetic damping acts on exactly those turnovers.
+- **A pin needs friction.** A member pinned at two points can spin about the axis through
+  them, a freedom with no stiffness that the pinned idealisation grants deliberately, and
+  joint damping cannot reach it: a body spinning about that axis has *zero velocity at the
+  very points where the damping acts*. Once started it never stops. Pin friction, sized
+  against the body's own rotational scale and acting only on rotation, brought the unbraced
+  sag from 22.1 mm to 4.24 mm and the braced from 0.739 to 0.656 against a particle
+  reference of 0.623 - within 5%.
+
+**Still not settling**, so sway is not yet reported on this path, and that is the open work.
+Damping saturates: zeta = 0.9, near critical, decays the response only to 0.60 over half a
+second where it should be gone in a couple of periods. Something in the dominant mode is
+still not being damped, or the explicit step is marginally stable there.
+
 **It is not the default, because its joints are not calibrated.** Where the particle model
 shares a particle outright - an exact pin - this one uses springs, and the assembly comes out
 far softer than deflections already checked against hand statics: sway stiffness around
