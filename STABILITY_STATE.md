@@ -312,6 +312,33 @@ it there, and only the first is about speed:
 
 The client timeout is back to 120 s. Raising it to 900 s was treating the symptom.
 
+### Cost is set by the stiffest body, not by the element count
+
+Measured 2026-08-22, after the stiffness corrections:
+
+| model | integrator | wall time | steps | dt |
+| --- | --- | --- | --- | --- |
+| wall + column + pad + block, 4 bodies | particles | 51.4 s | 1,002,496 | 1.25e-7 |
+| the same 4 bodies | rigid bodies | 92.4 s | 3,588,504 | 1.04e-7 |
+| braced bridge, 47 bodies | particles | 14.0 s | 61,172 | 6.55e-7 |
+| the same 47 bodies | rigid bodies | over 120 s, client timeout | - | - |
+
+**The four-body model is 3.7 times slower than the forty-seven-body one.** A 4147 kg pad and a
+5000 kg block are stiff, stubby bodies - `k = (E/rho) m / L^2` grows with mass and falls with
+length squared - and the explicit step is `2/omega` against the stiffest of them, whatever the
+rest of the model looks like. It also takes three times as long to settle. Element count barely
+enters.
+
+So the "about 10 s per evaluation" below holds for assemblies shaped like the bridge: many
+light, slender members. It does not hold for a few heavy, squat ones, and pads exist only to be
+stiff - they pin the timestep while contributing nothing to the answer.
+
+**The rigid-body path does not yet reach a real assembly.** Two to four times the particle path
+on a small model, and over the client timeout on the bridge. The integrator that can see a wall
+is the one that cannot yet do a truss. Two untried levers: its `timestep_safety` is 0.025 where
+measurement only ever justified 0.0125, and the bodies pinning the step are the ones nobody is
+asking about.
+
 ### It does not scale, and the ceiling is ~66 elements
 
 Measured on N-panel versions of the test bridge, all 2 m members:
