@@ -1,7 +1,13 @@
 #!/usr/bin/env python3
 """Run the stability regression suite against a live Rhino.
 
-Two tiers, for two different questions.
+Three tiers, for three different questions.
+
+The micro tier asks whether a *number* is right rather than whether a verdict is. Its cases
+have closed-form answers - a load over three columns of known EA/L shortens them by W/3k,
+a body with nothing under it falls at g - so it can say an integrator is wrong instead of
+merely disagreeing with the other one. Every one of its cases is run against both
+integrators, because that is the comparison it exists to settle.
 
 The fast tier runs every case at the shipped default budget and asks only whether the
 verdict is right. It is cheap enough to run on every edit.
@@ -31,7 +37,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2] / "rhino_mcp_server" / "src"))
 
 import cases as case_module
-from cases import FAST, SLOW, Case
+from cases import FAST, MICRO, SLOW, Case
 from rhinomcp.server import RhinoConnection
 
 
@@ -169,7 +175,7 @@ def load_baseline() -> dict[str, Any]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--tier", default=FAST, choices=[FAST, SLOW, "all"])
+    parser.add_argument("--tier", default=FAST, choices=[FAST, MICRO, SLOW, "all"])
     parser.add_argument("--case", action="append", default=None)
     parser.add_argument("--update-baseline", action="store_true")
     parser.add_argument("--json", type=pathlib.Path, default=None)

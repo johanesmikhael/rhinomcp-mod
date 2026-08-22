@@ -13,9 +13,12 @@ answers are known independently of the solver.
 | `pinned_dynamic` | one per element | pins at clustered nodes, integrated in real seconds | is it a mechanism, how far does it move, and how stiff is it? |
 | `pinned` | alias for `pinned_dynamic` | - | the relaxed solver is deleted; see `SIMPLIFICATION_PLAN.md` |
 
-`pinned_dynamic` carries two integrators. Particles is the default and is calibrated but
-cannot represent free motion; `integrator: "rigid_bodies"` falls correctly and is opt-in
-until it agrees on stiffness. Deleting one of them is item 2 of the simplification plan.
+`pinned_dynamic` carries two integrators. Particles is the default; it now reproduces a
+closed-form axial deflection to better than 5%, one storey and two, but still cannot represent
+free motion. `integrator: "rigid_bodies"` falls correctly and remains opt-in: it needs a
+timestep four times finer than its own rule gives to avoid diverging on a two-storey stack,
+and does not settle inside a run even then. Deleting one of them is item 2 of the
+simplification plan, and neither has earned it.
 
 Welded is an upper bound: it supplies every moment connection the real assembly lacks.
 
@@ -28,6 +31,14 @@ Welded is an upper bound: it supplies every moment connection the real assembly 
 - **Pinned stiffness** is the member's own axial stiffness `k = EA/L`, with the section
   recovered from mass (`A = m/(rho L)`, so `k = (E/rho) m / L^2`). Defaults: steel,
   E = 210 GPa, rho = 7850, overridable via `youngs_modulus` / `material_density`.
+- **Each end spring is `2k`, because two sit in series along a member** (`EndSpringsInSeries`).
+  Measured, not assumed: three 2 m columns of 3.611e7 N/m under a 196 kN block must shorten
+  `W/3k` = 1.810 mm, and the solver reported 3.627 - a ratio of 2.003. The path from pin to
+  pin runs through the body's frame via two springs, and two springs of strength `S` deliver
+  `S/2`. **Every stiffness this evaluator reported before 2026-08-22 was half of what it
+  claimed.** The rigid-body path needed the same factor for a different reason: pulling each
+  body toward the *average* of what meets at a joint is a spring of half the stated stiffness
+  when two bodies meet there, now undone by a gain of `n/(n-1)`.
 - **Kangaroo's factor of four**: `RigidMesh.Calculate` proposes `Move = 0.25 * error`, so
   equilibrium sits at `error = 4F/Strength`. Pass `4k` to realise `k`. Verified on a single
   anchored body: predicted 0.40 mm, measured 0.547 mm with ground springs in series.
@@ -154,8 +165,14 @@ exactly one particle, with every exception a member bearing flat on a pad.
 So `pinned_dynamic` reports **sway stiffness** as well as a verdict, since "does it fall"
 rates that bridge identically to a braced one. Settle, settle again under the notional
 horizontal load the codes prescribe, divide the load by the distance between settled shapes.
-Both horizontal directions, disturbance off. Result: **4.67e8 N/m unbraced against 6.94e8
-braced in y**, the direction the modes move, and about 2.4e9 in x for both.
+Both horizontal directions, disturbance off. Result: **1.13e9 N/m unbraced against 1.66e9
+braced in y**, the direction the modes move, and near 5e9 in x for both.
+
+Those figures doubled on 2026-08-22 when `EndSpringsInSeries` landed. The y direction moved by
+2.4 rather than 2.0, which is the expected signature rather than a discrepancy: this is a
+secant stiffness measured on a mechanism that stiffens quadratically as it moves, so halving
+the sway makes it relatively stiffer still, while the linear x direction moved by 2.1. The
+ratio the comparison rests on did not move - braced over unbraced, 1.46 against the old 1.48.
 
 Those braced figures are post-clustering-fix. Removing seven joints that should never have
 existed made the braced bridge *softer* - 7.27e8 to 6.76e8 in y, and its sag 0.40 mm to

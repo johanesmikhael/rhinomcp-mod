@@ -102,6 +102,27 @@ internal static class StabilityRigidBodies
         public double Stiffness;
         public bool Grounded;
         public Point3d Anchor;
+
+        /// <summary>
+        /// Undoes the dilution in pulling each body toward the average of everything meeting
+        /// here.
+        /// </summary>
+        /// <remarks>
+        /// The offset to that average is (sum p - n p_i)/n, which is the mean separation to
+        /// the other n-1 bodies scaled by (n-1)/n. Left uncorrected, two bodies at a site
+        /// feel a spring of half the site's stated stiffness, and a member's two ends then
+        /// deliver a quarter of it rather than a half - so a stiffness set to twice EA/L to
+        /// survive the series came out at EA/2L. Multiplying by n/(n-1) makes the pull the
+        /// mean pairwise separation, and Stiffness then means what its comment says.
+        ///
+        /// A grounded site pulls toward a fixed anchor rather than an average, so nothing is
+        /// diluted and the gain is one.
+        /// </remarks>
+        public double Gain => Grounded || Bodies.Count < 2
+            ? 1.0
+            : Bodies.Count / (double)(Bodies.Count - 1);
+
+        public double EffectiveStiffness => Stiffness * Gain;
     }
 
     /// <summary>
@@ -169,6 +190,51 @@ internal static class StabilityRigidBodies
     }
 
     /// <summary>
+    /// The dashpot at each joint, one coefficient per joint rather than one per body.
+    /// </summary>
+    /// <remarks>
+    /// Sized on the body's own mass it differed between the bodies meeting at a pin, and the
+    /// forces it applied to the two ends of that pin were then not equal and opposite. A 5 t
+    /// block on a 5.4 kg column got twenty-five times the coefficient the column got, so
+    /// every relative motion left a net force on the pair and the assembly wound itself up
+    /// instead of settling: 17 mm of steady drift where the static answer was 0.45, at a rate
+    /// that barely changed when the load was quartered. With damping off entirely the same
+    /// model oscillated cleanly about 0.49 mm, which is what said the spring was right and the
+    /// dashpot was not. A site-wide coefficient sums to zero over the bodies at the joint, so
+    /// momentum is conserved and the joint can only remove energy.
+    ///
+    /// Sized on the heaviest body there, not the lightest. A damping ratio is a fraction of
+    /// critical for some mode, and the mode a joint has to still is the one carrying the most
+    /// inertia through it. Against the lightest, a nominal zeta of 0.02 came out at 0.0008 for
+    /// the assembly's own mode - a settling time of nine seconds for a run lasting half of
+    /// one, which is why the response still looked undamped after the momentum error was
+    /// fixed.
+    /// </remarks>
+    internal static double[] SiteDamping(List<Body> bodies, List<Site> sites, double dampingRatio)
+    {
+        var damping = new double[sites.Count];
+        if (!(dampingRatio > 0.0))
+        {
+            return damping;
+        }
+
+        for (var s = 0; s < sites.Count; s++)
+        {
+            var heaviest = 0.0;
+            foreach (var index in sites[s].Bodies)
+            {
+                heaviest = Math.Max(heaviest, bodies[index].Mass);
+            }
+
+            damping[s] = heaviest > 0.0
+                ? 2.0 * dampingRatio * Math.Sqrt(sites[s].EffectiveStiffness * heaviest)
+                : 0.0;
+        }
+
+        return damping;
+    }
+
+    /// <summary>
     /// The step size, from the fastest rotation any body can be driven into.
     /// </summary>
     /// <remarks>
@@ -177,11 +243,14 @@ internal static class StabilityRigidBodies
     /// translation - the same force acts on a smaller lever against a small moment of
     /// inertia - so the rotational limit governs and both are taken.
     /// </remarks>
-    internal static double Timestep(List<Body> bodies, List<Site> sites, double safety)
+    internal static double Timestep(
+        List<Body> bodies, List<Site> sites, double safety, double dampingRatio)
     {
+        var damping = SiteDamping(bodies, sites, dampingRatio);
         var fastest = 0.0;
-        foreach (var site in sites)
+        for (var s = 0; s < sites.Count; s++)
         {
+            var site = sites[s];
             for (var i = 0; i < site.Bodies.Count; i++)
             {
                 var body = bodies[site.Bodies[i]];
@@ -190,13 +259,24 @@ internal static class StabilityRigidBodies
                     continue;
                 }
 
-                fastest = Math.Max(fastest, Math.Sqrt(site.Stiffness / body.Mass));
+                var siteStiffness = site.EffectiveStiffness;
+                fastest = Math.Max(fastest, Math.Sqrt(siteStiffness / body.Mass));
+
+                // An explicit dashpot diverges above dt = 2m/c just as a spring does above
+                // 2/omega. Sizing the joint on its heaviest body means the lightest one there
+                // is damped far beyond critical, so this bound governs whenever the masses at
+                // a pin are wildly different, and leaving it out would trade one divergence
+                // for another.
+                if (damping[s] > 0.0)
+                {
+                    fastest = Math.Max(fastest, damping[s] / body.Mass);
+                }
 
                 var lever = body.Local[site.Slots[i]].Length;
                 var smallest = Math.Min(body.Inertia.X, Math.Min(body.Inertia.Y, body.Inertia.Z));
                 if (smallest > 0.0 && lever > 0.0)
                 {
-                    fastest = Math.Max(fastest, Math.Sqrt(site.Stiffness * lever * lever / smallest));
+                    fastest = Math.Max(fastest, Math.Sqrt(siteStiffness * lever * lever / smallest));
                 }
             }
         }
@@ -249,9 +329,26 @@ internal static class StabilityRigidBodies
             {
                 var index = site.Bodies[i];
                 var lever = bodies[index].Local[site.Slots[i]].Length;
-                spinHeld[index] += site.Stiffness * lever * lever;
+                spinHeld[index] += site.EffectiveStiffness * lever * lever;
             }
         }
+
+        // One damping coefficient per joint, not one per body.
+        //
+        // Sized on the body's own mass it was different for each body meeting there, and the
+        // forces it applied to the two ends of a joint were then not equal and opposite. A
+        // 5 t block on a 5.4 kg column got twenty-five times the coefficient the column got,
+        // so every relative motion at that pin left a net force on the pair, and the assembly
+        // wound itself up instead of settling: 17 mm of steady drift where the static answer
+        // was 0.45, growing at a rate that barely changed when the load was quartered. With
+        // damping switched off entirely the same model oscillated cleanly about 0.49 mm,
+        // which is what said the spring was right and the dashpot was not.
+        //
+        // A site-wide coefficient sums to zero over the bodies at the joint - c times the
+        // sum of (joint velocity minus each point velocity) - so momentum is conserved and
+        // the joint can only remove energy. It is sized on the lightest body there, which is
+        // the one whose motion sets the fastest mode the damping has to stay stable against.
+        var siteDamping = SiteDamping(bodies, sites, dampingRatio);
 
         var sampleEvery = Math.Max(1, steps / Math.Max(1, sampleCount));
         var previousKinetic = 0.0;
@@ -267,8 +364,9 @@ internal static class StabilityRigidBodies
                 body.Torque = Vector3d.Zero;
             }
 
-            foreach (var site in sites)
+            for (var s = 0; s < sites.Count; s++)
             {
+                var site = sites[s];
                 // Where the bodies meeting here agree the joint is. A pin carries force in
                 // three directions and no moment of its own; the moment on each body comes
                 // from that force acting at the attachment rather than at the centre.
@@ -320,13 +418,13 @@ internal static class StabilityRigidBodies
                     var body = bodies[site.Bodies[i]];
                     var here = body.WorldPoint(site.Slots[i]);
                     var arm = here - body.Centre;
-                    var pull = site.Stiffness * (target - here);
+                    var pull = site.EffectiveStiffness * (target - here);
 
-                    if (dampingRatio > 0.0 && body.Mass > 0.0)
+                    if (siteDamping[s] > 0.0 && body.Mass > 0.0)
                     {
                         var pointVelocity = body.Velocity + Vector3d.CrossProduct(body.AngularVelocity, arm);
                         var slip = jointVelocity - pointVelocity;
-                        pull += 2.0 * dampingRatio * Math.Sqrt(site.Stiffness * body.Mass) * slip;
+                        pull += siteDamping[s] * slip;
                     }
 
                     body.Force += pull;
@@ -634,7 +732,7 @@ public partial class RhinoMCPModFunctions
         var imperfection = span * imperfectionFraction;
         var jolt = Math.Sqrt(2.0 * gravity * imperfection);
         var settledSpeed = threshold / Math.Max(durationSeconds, 1e-9) / 1000.0;
-        var timestep = StabilityRigidBodies.Timestep(bodies, sites, timestepSafety);
+        var timestep = StabilityRigidBodies.Timestep(bodies, sites, timestepSafety, dampingRatio);
 
         double Measure()
         {

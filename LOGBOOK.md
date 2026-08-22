@@ -86,7 +86,55 @@ through them, and joint damping cannot touch it: a body spinning about that axis
 velocity at the very points where the damping acts. It needed pin friction, sized against the
 body's own rotational scale.
 
+## On calibration
+
+**A stiffness nobody checked against arithmetic was wrong by a factor of two, in both
+integrators, for different reasons.** Three 2 m columns of 3.611e7 N/m under a 196 kN block
+must shorten by W/3k = 1.810 mm. The particle path reported 3.627 - a ratio of 2.003 - because
+a member's two ends are held to its frame by two springs in series, and two springs of
+strength S deliver S/2. The rigid-body path was diluted the same amount by a different
+mechanism: pulling each body toward the *average* of what meets at a joint is a spring of half
+the stated stiffness when two bodies meet there. Every sway stiffness the evaluator ever
+reported was half of what it claimed.
+
+**Neither disagreement between the two paths would have found it**, because both were wrong by
+the same factor. Cross-checking two implementations detects only the errors they do not share.
+
+**A closed form beats a hand calculation of the real model.** The blocking question had been
+posed as "hand-calculate the braced bridge's midspan sag" - a 45-member Warren girder by
+virtual work, laborious, approximate, and worth one number. Three columns and a block took
+minutes to write, run in seconds, and located the defect *and* its cause. Build the smallest
+model that has an exact answer, not a small version of the real one.
+
+**A dashpot sized per body breaks Newton's third law.** The rigid-body joints damped each body
+against its own mass, so a 5 t block and a 5.4 kg column meeting at one pin got coefficients
+twenty-five times apart and the forces at the two ends of that pin were not equal and
+opposite. The assembly wound itself up: 17 mm of steady drift where the static answer was
+0.45, at a rate that barely changed when the load was quartered. **Switching damping off is the
+diagnostic** - the same model then oscillated cleanly about 0.49 mm, which said the spring was
+right and the dashpot was not. A coefficient that is a property of the *joint* sums to zero
+over the bodies meeting there and can only remove energy.
+
+**A damping ratio is a fraction of critical for some particular mode, and the mode has to be
+named.** Sized against the lightest body at a joint, a nominal 2% came out at 0.08% for the
+assembly's own mode - nine seconds of settling for a run lasting half of one. Sized against
+the heaviest it lands where it was meant to. The same mistake in the other direction
+over-damped the particle path, where 30% left the structure at a quarter of its static
+deflection after half a second.
+
+**`max_pin_displacement` is a peak, not a settled value.** A suddenly applied load overshoots
+to twice its static deflection, and that is correct physics, not error - so a well-damped
+integrator and an over-damped one report different things about the same structure. Assert a
+calibration on a settled figure; the peak belongs to the verdict.
+
 ## On numerics
+
+**A test model's cost is set by its heaviest, stubbiest body, not by the physics under test.**
+Joint stiffness is `(E/rho) m / L^2`, the ground anchor is ten times the stiffest of them, and
+the explicit step is `2/omega` against that - so a 20 t loading block pinned the timestep at a
+value the 5.4 kg columns being measured never needed. Quartering the load quartered the cost
+and left the closed-form answer just as resolvable. Size the load down until the residual, not
+the patience, is the limit.
 
 **Marginal stability looks exactly like missing damping.** The rigid-body response held its
 amplitude after 896k steps and damping saturated - zeta of 0.9, essentially critical, decayed

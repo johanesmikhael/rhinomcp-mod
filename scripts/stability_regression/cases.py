@@ -325,6 +325,126 @@ def bridge_build(braced: bool) -> Callable[[], str]:
 
 
 # --------------------------------------------------------------------------------------
+# Micro: a stack of columns whose axial shortening is a closed form
+# --------------------------------------------------------------------------------------
+#
+# Everything else in this suite is a verdict case. These are not: they assert a
+# displacement against arithmetic that can be done on paper, which is the only way to find
+# out whether the joint model delivers the stiffness it claims to.
+#
+# A member of mass m, length L and density rho has section area A = m/(rho L), so
+#
+#     k = EA/L = (E/rho) m / L^2
+#
+# and a load W carried by n such columns in parallel shortens them by W/(nk). Two storeys
+# of them add in series. Both numbers are exact, and neither depends on anything the solver
+# does.
+#
+# Three columns, not one. A member pinned at a single point at each end is free to rotate
+# about them - a chain of two such pins is an inverted pendulum, and it wanders instead of
+# squashing. Three columns on a triangle fix the block against rotation and sway while
+# leaving the axial direction free, which is the only freedom under test. The blocks and the
+# pad are made heavy and stubby so their own EA/L is three orders above the columns' and
+# contributes nothing measurable.
+
+MICRO_COLUMN_KG = 5.4
+MICRO_COLUMN_MM = 2000.0
+MICRO_SECTION_MM = 150.0
+# The load, and the spacer between storeys.
+#
+# Both are as light as the measurement allows, because cost here is set by the heaviest body
+# rather than by anything under test. A body's joint stiffness is (E/rho) m / L^2, the ground
+# anchor is sized at ten times the stiffest of them, and the explicit timestep is 2/omega
+# against that - so a heavy stubby block pins the step at a value the columns never needed.
+# Halving the load halves the deflection but also halves the stiffest stiffness, and the run
+# gets cheaper in proportion. At 5 t the single storey settles in about a third of a second
+# and the residual is a percent of what is being measured.
+MICRO_BLOCK_KG = 5000.0
+MICRO_SPACER_KG = 250.0
+MICRO_PAD_KG = 4147.2
+GRAVITY = 9.80665
+
+# Plan positions of the three columns: a triangle wide enough that the block above it is
+# held in rotation, inside the 1400 mm blocks that cap each storey.
+MICRO_COLUMN_XY = ((-500.0, -300.0), (500.0, -300.0), (0.0, 500.0))
+
+
+def micro_column_stiffness() -> float:
+    """EA/L of one micro column, from its mass: (E/rho) m / L^2."""
+    length = MICRO_COLUMN_MM / 1000.0
+    return 210e9 * MICRO_COLUMN_KG / (7850.0 * length * length)
+
+
+def micro_storey_stiffness() -> float:
+    return len(MICRO_COLUMN_XY) * micro_column_stiffness()
+
+
+def micro_shortening_m(storey_loads_n: list[float]) -> float:
+    """Total shortening of a stack of storeys, each carrying its own load."""
+    return sum(load / micro_storey_stiffness() for load in storey_loads_n)
+
+
+# One storey: the block's weight, over three columns.
+MICRO_ONE_STOREY_M = micro_shortening_m([MICRO_BLOCK_KG * GRAVITY])
+
+# Two storeys: the lower one also carries the spacer block between them. The columns' own
+# weight is left out of both - 53 N against 196 kN is four parts in ten thousand, well
+# inside the tolerance these are asserted at.
+MICRO_TWO_STOREY_M = micro_shortening_m([
+    (MICRO_BLOCK_KG + MICRO_SPACER_KG) * GRAVITY,
+    MICRO_BLOCK_KG * GRAVITY,
+])
+
+
+def _micro_pad() -> str:
+    return (
+        f'world_box("PAD", -1200.0, -1200.0, -300.0, 1200.0, 1200.0, 0.0, {MICRO_PAD_KG!r})')
+
+
+def _micro_storey(index: int, z0: float) -> list[str]:
+    lines = []
+    z1 = z0 + MICRO_COLUMN_MM
+    for slot, (x, y) in enumerate(MICRO_COLUMN_XY):
+        lines.append(
+            f'axis_box("COL_{index}_{slot}", ({x!r},{y!r},{z0!r}), ({x!r},{y!r},{z1!r}), '
+            f'{MICRO_SECTION_MM!r}, {MICRO_COLUMN_KG!r})')
+    return lines
+
+
+def _micro_block(name: str, z0: float, mass: float) -> str:
+    return (
+        f'world_box("{name}", -700.0, -700.0, {z0!r}, 700.0, 700.0, {z0 + 200.0!r}, {mass!r})')
+
+
+def micro_stack_build(storeys: int) -> Callable[[], str]:
+    def build() -> str:
+        lines = [_micro_pad()]
+        z = 0.0
+        for index in range(storeys):
+            lines.extend(_micro_storey(index, z))
+            z += MICRO_COLUMN_MM
+            top = index == storeys - 1
+            lines.append(_micro_block(
+                f"BLOCK_{index}", z, MICRO_BLOCK_KG if top else MICRO_SPACER_KG))
+            z += 200.0
+        return "\n".join(lines)
+
+    return build
+
+
+# Isolate the axial question: no notional load, no built-in imperfection, nothing to settle
+# but the weight itself.
+MICRO_PARAMS = {"lateral_load_fraction": 0.0, "imperfection_fraction": 0.0}
+
+
+def micro_expect(exact_m: float) -> dict[str, tuple[float, float]]:
+    # Five percent. The arithmetic is exact; the tolerance covers the columns' own weight,
+    # the pad's shortening and the ground anchor's give, which together are under one part
+    # in a hundred.
+    return {"max_pin_displacement_m": (exact_m * 0.95, exact_m * 1.05)}
+
+
+# --------------------------------------------------------------------------------------
 # The suite
 # --------------------------------------------------------------------------------------
 #
@@ -341,6 +461,12 @@ def bridge_build(braced: bool) -> Callable[[], str]:
 
 FAST = "fast"
 SLOW = "slow"
+
+# A third tier, asking a different question from either. Fast and slow both ask whether the
+# verdict is right; micro asks whether a number is right, against a closed form. It is the
+# tier that can say an integrator is wrong rather than merely disagreeing with the other
+# one, so it is what decides which of the two survives.
+MICRO = "micro"
 
 
 CASES: list[Case] = [
@@ -442,11 +568,20 @@ CASES: list[Case] = [
             "order; stands under self-weight but soft in y, the direction the modes move"),
         build=bridge_build(braced=False),
         # The softness is the finding, so it is what gets asserted. Sway stiffness in the
-        # mode's own direction is about 4.7e8 N/m against the braced 6.9e8, while the x
-        # direction the modes do not touch is about 2.4e9 for both.
+        # mode's own direction is about 1.13e9 N/m against the braced 1.66e9, while the x
+        # direction the modes do not touch is near 5e9 for both.
+        #
+        # These bounds doubled when EndSpringsInSeries landed, because every stiffness this
+        # evaluator had ever reported was half of what it claimed - see the micro tier, where
+        # three columns of known EA/L settled it. The y figures moved by 2.4 rather than 2.0,
+        # which is itself the expected signature: this is a secant stiffness measured on a
+        # mechanism that stiffens quadratically as it moves, so halving the sway makes it
+        # relatively stiffer still, while the linear x direction moved by 2.1. What did not
+        # move is the ratio the case exists to show - braced over unbraced, 1.46 against the
+        # old 1.48.
         expect={
-            "sway.sway_stiffness_y_n_per_m": (4.0e8, 5.4e8),
-            "sway.sway_stiffness_x_n_per_m": (2.0e9, 2.9e9),
+            "sway.sway_stiffness_y_n_per_m": (1.00e9, 1.30e9),
+            "sway.sway_stiffness_x_n_per_m": (4.5e9, 5.8e9),
         },
     ),
     Case(
@@ -454,11 +589,11 @@ CASES: list[Case] = [
         mode="pinned_dynamic",
         tier=FAST,
         stable=True,
-        reason="0 mechanisms; stiffer in y than the unbraced bridge, 6.9e8 against 4.7e8",
+        reason="0 mechanisms; stiffer in y than the unbraced bridge, 1.66e9 against 1.13e9",
         build=bridge_build(braced=True),
         expect={
-            "sway.sway_stiffness_y_n_per_m": (6.0e8, 8.0e8),
-            "sway.sway_stiffness_x_n_per_m": (2.0e9, 2.9e9),
+            "sway.sway_stiffness_y_n_per_m": (1.45e9, 1.85e9),
+            "sway.sway_stiffness_x_n_per_m": (4.3e9, 5.5e9),
         },
     ),
     # Committed failing. Two members hanging in mid-air with nothing holding them up must
@@ -480,7 +615,7 @@ CASES: list[Case] = [
     Case(
         name="free_fall_two_members",
         mode="pinned_dynamic",
-        tier=FAST,
+        tier=MICRO,
         stable=False,
         reason="nothing supports them; they must fall at g, reaching the 10 mm limit in 0.045 s",
         # The verdict alone proves nothing here - with nothing holding them up, even the
@@ -513,7 +648,7 @@ CASES: list[Case] = [
     Case(
         name="free_fall_two_members_particles",
         mode="pinned_dynamic",
-        tier=FAST,
+        tier=MICRO,
         stable=False,
         reason="the particle integrator cannot represent free motion; it reaches 0.2% of g",
         build=lambda: (
@@ -546,6 +681,38 @@ CASES: list[Case] = [
         build=bridge_build(braced=False),
     ),
 ]
+
+
+# The axial pair, run against both integrators. Four cases rather than two because the
+# question they settle is which integrator to keep, and that cannot be asked of one at a
+# time.
+for _integrator in ("particles", "rigid_bodies"):
+    CASES.append(Case(
+        name=f"axial_one_storey_{_integrator}",
+        mode="pinned_dynamic",
+        tier=MICRO,
+        stable=True,
+        reason=(
+            f"{MICRO_BLOCK_KG * GRAVITY / 1000.0:.1f} kN over three columns of "
+            f"{micro_column_stiffness():.3e} N/m shortens them "
+            f"{MICRO_ONE_STOREY_M * 1000.0:.3f} mm"),
+        build=micro_stack_build(1),
+        expect=micro_expect(MICRO_ONE_STOREY_M),
+        params=dict(MICRO_PARAMS, integrator=_integrator),
+    ))
+    CASES.append(Case(
+        name=f"axial_two_storeys_{_integrator}",
+        mode="pinned_dynamic",
+        tier=MICRO,
+        stable=True,
+        reason=(
+            f"two storeys in series, the lower also carrying the spacer: "
+            f"{MICRO_TWO_STOREY_M * 1000.0:.3f} mm against the single storey's "
+            f"{MICRO_ONE_STOREY_M * 1000.0:.3f}"),
+        build=micro_stack_build(2),
+        expect=micro_expect(MICRO_TWO_STOREY_M),
+        params=dict(MICRO_PARAMS, integrator=_integrator),
+    ))
 
 
 def by_name(name: str) -> Case:

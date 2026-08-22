@@ -781,7 +781,7 @@ public partial class RhinoMCPModFunctions
         for (var i = 0; i < bodies.Count; i++)
         {
             bodyStrengths[i] = jointStrengthIsAuto
-                ? RelaxationCompensation * MemberAxialStiffness(
+                ? RelaxationCompensation * EndSpringsInSeries * MemberAxialStiffness(
                     bodies[i], youngsModulus, materialDensity, carried[i], jointSlipMeters)
                 : jointStrength;
         }

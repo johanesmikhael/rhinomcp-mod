@@ -279,6 +279,23 @@ public partial class RhinoMCPModFunctions
     /// </summary>
     public const double RelaxationCompensation = 4.0;
 
+    /// <summary>
+    /// A member's two ends are held by two springs in series, so each has to be twice the
+    /// member's axial stiffness for the pair to deliver EA/L end to end.
+    /// </summary>
+    /// <remarks>
+    /// Not a guess. Three 2 m columns of known EA/L, 3.611e7 N/m each, under a 196 kN block:
+    /// the arithmetic says they shorten W/3k = 1.810 mm and the solver reported 3.627 - a
+    /// ratio of 2.003. The path from one pin to the other runs pin, body-to-frame spring,
+    /// frame, body-to-frame spring, pin, and two springs of strength S in series deliver
+    /// S/2. Every stiffness this evaluator has ever reported was therefore half of what it
+    /// claimed, which is why the bridge's sway figures move when this lands.
+    ///
+    /// It is the same factor the rigid-body path needs for a different reason, and both are
+    /// checked by the same micro case: see scripts/stability_regression/cases.py.
+    /// </remarks>
+    public const double EndSpringsInSeries = 2.0;
+
     /// <summary>Young's modulus and density of structural steel, the default material.</summary>
     public const double DefaultYoungsModulusPa = 210e9;
 

@@ -36,3 +36,5 @@ dev_plan.md
 
 # Local MCP server config (machine-specific absolute paths)
 .mcp.json
+__pycache__/
+*.pyc
