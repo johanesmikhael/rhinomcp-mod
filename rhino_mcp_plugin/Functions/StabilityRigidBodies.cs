@@ -38,14 +38,25 @@ internal static class StabilityRigidBodies
     /// Fraction of the explicit stability limit this integrator uses.
     /// </summary>
     /// <remarks>
-    /// Finer than the particle integrator's tenth, because measurement said so rather than
-    /// caution. At a tenth the assembly never settled at all: the response held the same
-    /// amplitude after 896k steps, damping saturated - zeta of 0.9, essentially critical,
-    /// decaying it only to 0.60 over half a second - and the step was evidently returning as
-    /// much energy as the damping removed. Quartering it settles the same model in 168k
-    /// steps. The oscillation was marginal stability, not a missing damping term.
+    /// This was 0.025, set when an assembly at a tenth of the limit never settled: the
+    /// response held its amplitude after 896k steps and damping saturated, which read as the
+    /// step returning as much energy as the damping removed. That reading was wrong. The
+    /// energy was coming from a dashpot sized per body rather than per joint, so the forces
+    /// at the two ends of a pin were not equal and opposite - see SiteDamping. With that
+    /// fixed, and with the joint stiffnesses corrected, the fine step buys nothing.
+    ///
+    /// Measured across the four closed-form cases on this path: 0.05, 0.1 and 0.2 give
+    /// identical results, and the one case that fails does so at every setting for an
+    /// unrelated reason. 0.4 does not - the splayed case there terminates after 5004 steps
+    /// reporting zero displacement, which is the settling test accepting a run that never
+    /// happened rather than a gradual loss of accuracy. So the limit is real and sits
+    /// between, and 0.2 is the coarsest verified value: eight times fewer steps than 0.025,
+    /// with every verdict in the fast tier unchanged.
+    ///
+    /// A constant that exists to work around a defect outlives the defect unless something
+    /// re-measures it.
     /// </remarks>
-    public const double TimestepSafety = 0.025;
+    public const double TimestepSafety = 0.2;
 
     /// <summary>One rigid body, integrated.</summary>
     internal sealed class Body

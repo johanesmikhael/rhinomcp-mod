@@ -106,6 +106,8 @@ def evaluate(
     if OVERRIDES.get("fast") and case.mode in ("pinned", "pinned_dynamic"):
         params.setdefault("lateral_load_fraction", 0.0)
         params.setdefault("timestep_safety", 0.4)
+    if OVERRIDES.get("timestep_safety") and case.mode in ("pinned", "pinned_dynamic"):
+        params["timestep_safety"] = OVERRIDES["timestep_safety"]
 
     result = connection.send_command("evaluate_stability", params)
     if result.get("success") is not True:
@@ -221,6 +223,8 @@ def main() -> int:
     parser.add_argument("--integrator", default=None)
     parser.add_argument("--fast-settings", action="store_true",
                         help="skip the sway probe and take the coarser step, for screening")
+    parser.add_argument("--timestep-safety", type=float, default=None,
+                        help="rigid-body path only; the particle path has no such knob")
     parser.add_argument("--json", type=pathlib.Path, default=None)
     args = parser.parse_args()
 
@@ -233,6 +237,7 @@ def main() -> int:
 
     OVERRIDES["integrator"] = args.integrator
     OVERRIDES["fast"] = args.fast_settings
+    OVERRIDES["timestep_safety"] = args.timestep_safety
 
     baseline = load_baseline()
     ceilings = dict(baseline.get("ceilings", {}))
