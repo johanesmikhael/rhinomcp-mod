@@ -640,9 +640,7 @@ public partial class RhinoMCPModFunctions
         double jointStrength,
         bool jointStrengthIsAuto,
         double jointSlipMeters,
-        double youngsModulus,
-        double materialDensity,
-        double anchorStrength,
+        double specificStiffness,
         double floorZMeters,
         double gravity,
         double durationSeconds,
@@ -669,7 +667,7 @@ public partial class RhinoMCPModFunctions
             // No relaxation compensation: this integrator applies the spring force directly.
             stiffness[i] = jointStrengthIsAuto
                 ? MemberAxialStiffness(
-                    pinned[i], youngsModulus, materialDensity, carried[i], jointSlipMeters)
+                    pinned[i], specificStiffness, carried[i], jointSlipMeters)
                 : jointStrength;
         }
 
@@ -738,9 +736,10 @@ public partial class RhinoMCPModFunctions
         {
             if (site.Grounded)
             {
-                site.Stiffness = jointStrengthIsAuto
-                    ? site.Stiffness * AutoBodyStiffnessRatio
-                    : anchorStrength;
+                // Always relative to the joints it holds, never to a stated figure: a
+                // ground sized from a stated joint stiffness is soft enough for the assembly
+                // to sink into it.
+                site.Stiffness = site.Stiffness * AutoBodyStiffnessRatio;
                 anchoredGround++;
             }
         }

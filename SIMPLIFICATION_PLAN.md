@@ -63,6 +63,32 @@ Replace with **one stated stiffness per joint**, in kN/mm. Material leaves the m
 the connection is what is flexible - for a screwed CLT panel the timber's `E` is nearly
 irrelevant. Simpler *and* more correct, and it is where a capacity in kN would live.
 
+## 1.3 / 1.4 - DONE, and smaller than advertised
+
+The stiffness chain is collapsed. `youngs_modulus` and `material_density` became one
+`specific_stiffness`, because only their ratio was ever used; `joint_stiffness_n_per_m`
+states a joint outright; `rigid_strength` no longer doubles as the pinned joint override;
+`floor_strength` is renamed `ground_support_stiffness_n_per_m`, old name still accepted.
+`contact_strength`, `assign_tol` and `threshold` came off the MCP surface, and
+`lateral_load_fraction` went on, because the sway probe's magnitude was previously reachable
+only by bypassing the tool.
+
+**23 parameters to 22, not the 12 this plan advertised.** The honest reason is that the big
+cuts were all predicated on deletions that have not happened: `torque_gain` and
+`contact_strength` go with the contact port (2.1), `integrator` and `timestep_safety` with the
+integrator deletion (1.2), `solver_substeps` and `current_step` with the relaxation modes.
+Every one of those is still live, so its knob stays. The parameter count was a symptom of the
+mode count, and phase 2 is what actually removes it.
+
+Two real defects fell out of testing the new knobs rather than trusting the refactor:
+
+- A stated joint stiffness bypassed the relaxation and series corrections the derived path
+  applies, so `joint_stiffness_n_per_m = k` produced a structure eight times softer than the
+  same `k` derived, and reported `k/4`.
+- The ground anchor was sized from the joint figure, so stating one made the ground soft
+  enough for the assembly to sink into it. It is now always sized from the stiffest body,
+  which removed a dead argument from both solvers.
+
 ## 1.4 Prune the parameter list
 
 24 parameters today. Once 1.2 and 1.3 are done, these go with them: `integrator`,

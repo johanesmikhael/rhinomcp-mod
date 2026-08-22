@@ -256,7 +256,7 @@ public partial class RhinoMCPModFunctions
     /// a blob with no long axis is not a member and has no EA/L to speak of.
     /// </remarks>
     private static double MemberAxialStiffness(
-        PinnedBody body, double youngsModulus, double density, double carriedNewtons, double slipMeters)
+        PinnedBody body, double specificStiffness, double carriedNewtons, double slipMeters)
     {
         var box = body.SolverMesh.GetBoundingBox(true);
         var length = box.IsValid
@@ -264,12 +264,12 @@ public partial class RhinoMCPModFunctions
             : 0.0;
         var mass = body.Node.MassKilograms;
 
-        if (!(length > 0.0) || !(mass > 0.0) || !(youngsModulus > 0.0) || !(density > 0.0))
+        if (!(length > 0.0) || !(mass > 0.0) || !(specificStiffness > 0.0))
         {
             return Math.Max(carriedNewtons, MinimumJointLoadNewtons) / slipMeters;
         }
 
-        return youngsModulus * mass / (density * length * length);
+        return specificStiffness * mass / (length * length);
     }
 
     /// <summary>
@@ -296,10 +296,26 @@ public partial class RhinoMCPModFunctions
     /// </remarks>
     public const double EndSpringsInSeries = 2.0;
 
-    /// <summary>Young's modulus and density of structural steel, the default material.</summary>
-    public const double DefaultYoungsModulusPa = 210e9;
-
-    public const double DefaultMaterialDensityKgM3 = 7850.0;
+    /// <summary>
+    /// Specific stiffness, E over rho, in m^2/s^2. Structural steel by default.
+    /// </summary>
+    /// <remarks>
+    /// Only the ratio ever mattered. A member's axial stiffness here is E A / L with the area
+    /// recovered from mass, A = m / (rho L), so k = (E/rho) m / L^2 - and E and rho never
+    /// appear apart. Two parameters were one all along, and asking for them separately invited
+    /// a model that was right about neither.
+    ///
+    /// It is also a quantity worth seeing, because it barely moves across the materials this
+    /// evaluator is pointed at. Steel is 210e9/7850 = 2.68e7. C24 spruce is 11e9/420 = 2.62e7,
+    /// within two percent, and that is not a coincidence - it is why a timber member sized for
+    /// the same load as a steel one deflects about the same amount. A model that never states
+    /// its material is already close for both.
+    ///
+    /// What this does *not* capture is the connection, which for mass timber is the flexible
+    /// part and has nothing to do with either number. State `joint_stiffness_n_per_m` when the
+    /// joint governs, which for a screwed or doweled connection it usually does.
+    /// </remarks>
+    public const double DefaultSpecificStiffnessM2S2 = 210e9 / 7850.0;
 
     /// <summary>
     /// The load each body carries down to its supports, for a pinned assembly.

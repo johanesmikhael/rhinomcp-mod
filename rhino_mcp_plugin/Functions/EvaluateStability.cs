@@ -291,11 +291,21 @@ public partial class RhinoMCPModFunctions
             // 908 mm outside its support still reported as settled. The floor therefore
             // stays at the strength the penetration coefficient was calibrated against.
             // Settling is deep here, but it is pure translation and the verdict ignores it.
-            var floorStrengthIsAuto = parameters?["floor_strength"] == null;
+            // Renamed for what it is. It is not a subgrade modulus: it is multiplied by each
+            // standing vertex's tributary area, and those areas include the corners' share of
+            // the side faces meeting there, so a 0.3 x 0.4 m pedestal base sums to about
+            // 0.47 m2 rather than 0.12. The product is the quantity with meaning, so that is
+            // what the parameter is now called. The old name still works.
+            var floorStrengthIsAuto = parameters?["ground_support_stiffness_n_per_m"] == null &&
+                parameters?["floor_strength"] == null;
             var floorStrength = floorStrengthIsAuto
                 ? DefaultFloorStrength
                 : ReadFiniteParameter(
-                    parameters, "floor_strength", DefaultFloorStrength, 0.0, inclusiveMinimum: false);
+                    parameters,
+                    parameters?["ground_support_stiffness_n_per_m"] != null
+                        ? "ground_support_stiffness_n_per_m"
+                        : "floor_strength",
+                    DefaultFloorStrength, 0.0, inclusiveMinimum: false);
 
             // Sized after the floor, and from the floor, for the reason given on
             // AutoRigidFloorRatio. An explicit rigid_strength still wins outright, so a
@@ -438,10 +448,24 @@ public partial class RhinoMCPModFunctions
                     0.0,
                     inclusiveMinimum: false);
 
-                var youngsModulus = ReadFiniteParameter(
-                    parameters, "youngs_modulus", DefaultYoungsModulusPa, 0.0, inclusiveMinimum: false);
-                var materialDensity = ReadFiniteParameter(
-                    parameters, "material_density", DefaultMaterialDensityKgM3, 0.0,
+                // One number where there were four.
+                //
+                // A joint's stiffness used to be derived through mass, density, area and E,
+                // with E and density global for the whole model, and `rigid_strength` doubling
+                // as an override on top - four knobs and three chances to be wrong for one
+                // quantity. `joint_stiffness_n_per_m` states it outright and is what a joint
+                // test gives you; the derivation stays as the default so existing models are
+                // unaffected.
+                //
+                // `rigid_strength` no longer reaches the pinned joints. It meant "how rigid is
+                // a body" in welded mode and "how stiff is a joint" here, which are different
+                // questions that happened to share a name.
+                var jointStiffness = ReadFiniteParameter(
+                    parameters, "joint_stiffness_n_per_m", 0.0, 0.0);
+                var jointStiffnessIsAuto = !(jointStiffness > 0.0);
+
+                var specificStiffness = ReadFiniteParameter(
+                    parameters, "specific_stiffness", DefaultSpecificStiffnessM2S2, 0.0,
                     inclusiveMinimum: false);
 
                 // Every pinned request is answered by the dynamic solver now. The relaxed
@@ -485,12 +509,10 @@ public partial class RhinoMCPModFunctions
                         var rigidStable = SolvePinnedRigidFromGraph(
                             graph,
                             stabilityNodes,
-                            rigidStrength,
-                            rigidStrengthIsAuto,
+                            jointStiffness,
+                            jointStiffnessIsAuto,
                             unitContext.ToMeters(pinnedSlip),
-                            youngsModulus,
-                            materialDensity,
-                            rigidStrength * AutoRigidFloorRatio,
+                            specificStiffness,
                             unitContext.ToMeters(floorZ),
                             gravity,
                             duration,
@@ -530,12 +552,10 @@ public partial class RhinoMCPModFunctions
                     var dynamicStable = SolvePinnedDynamicFromGraph(
                         graph,
                         stabilityNodes,
-                        rigidStrength,
-                        rigidStrengthIsAuto,
+                        jointStiffness,
+                        jointStiffnessIsAuto,
                         unitContext.ToMeters(pinnedSlip),
-                        youngsModulus,
-                        materialDensity,
-                        rigidStrength * AutoRigidFloorRatio,
+                        specificStiffness,
                         unitContext.ToMeters(floorZ),
                         gravity,
                         unitContext.ToMeters(assignTol),

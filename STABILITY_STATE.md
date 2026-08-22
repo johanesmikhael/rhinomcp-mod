@@ -29,8 +29,19 @@ Welded is an upper bound: it supplies every moment connection the real assembly 
   so joint count does not set the clock. Knobs are stated as lengths
   (`joint_penetration`, `ground_settlement`), never as a modulus.
 - **Pinned stiffness** is the member's own axial stiffness `k = EA/L`, with the section
-  recovered from mass (`A = m/(rho L)`, so `k = (E/rho) m / L^2`). Defaults: steel,
-  E = 210 GPa, rho = 7850, overridable via `youngs_modulus` / `material_density`.
+  recovered from mass (`A = m/(rho L)`, so `k = (E/rho) m / L^2`).
+  - Only the ratio `E/rho` was ever used, so it is now one parameter, `specific_stiffness`,
+    defaulting to steel's 2.68e7 m2/s2. Worth seeing rather than hiding: C24 spruce is
+    2.62e7, within two percent, which is why a timber member sized for the same load
+    deflects about as much as a steel one. A model that never states its material is
+    already close for both.
+  - `joint_stiffness_n_per_m` states the figure outright instead. It applies to **every**
+    member in the scope, which is the thing to know before using it: derived, a pad or slab
+    comes out hundreds of times stiffer than the columns on it, and stating one value makes
+    them all equally soft. On the three-column micro case that is a 6.4x larger deflection,
+    and it is the topology rather than an error.
+  - `rigid_strength` no longer reaches the pinned joints. It meant "how rigid is a body" in
+    welded mode and "how stiff is a joint" here, two questions sharing one name.
 - **Each end spring is `2k`, because two sit in series along a member** (`EndSpringsInSeries`).
   Measured, not assumed: three 2 m columns of 3.611e7 N/m under a 196 kN block must shorten
   `W/3k` = 1.810 mm, and the solver reported 3.627 - a ratio of 2.003. The path from pin to

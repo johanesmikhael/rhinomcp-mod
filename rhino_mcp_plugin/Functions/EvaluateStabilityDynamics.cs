@@ -750,9 +750,7 @@ public partial class RhinoMCPModFunctions
         double jointStrength,
         bool jointStrengthIsAuto,
         double jointSlipMeters,
-        double youngsModulus,
-        double materialDensity,
-        double anchorStrength,
+        double specificStiffness,
         double floorZMeters,
         double gravity,
         double assignToleranceMeters,
@@ -777,13 +775,25 @@ public partial class RhinoMCPModFunctions
         var anchoredGround = 0;
 
         var carried = PinnedCarriedLoads(bodies, gravity);
+
+        // The member's own axial stiffness, k = EA/L, either derived from the member or
+        // stated outright. Kept separate from the goal strength below so that a stated
+        // stiffness means the same physical quantity as a derived one - it did not, and a
+        // caller who passed the exact figure the derivation would have produced got a
+        // structure eight times softer and a reported stiffness of k/4.
+        var memberStiffness = new double[bodies.Count];
         var bodyStrengths = new double[bodies.Count];
         for (var i = 0; i < bodies.Count; i++)
         {
-            bodyStrengths[i] = jointStrengthIsAuto
-                ? RelaxationCompensation * EndSpringsInSeries * MemberAxialStiffness(
-                    bodies[i], youngsModulus, materialDensity, carried[i], jointSlipMeters)
+            memberStiffness[i] = jointStrengthIsAuto
+                ? MemberAxialStiffness(bodies[i], specificStiffness, carried[i], jointSlipMeters)
                 : jointStrength;
+
+            // Two corrections separate a member's stiffness from the goal strength that
+            // realises it, and both apply however the stiffness was arrived at: Kangaroo
+            // proposes a quarter of its correction each iteration, and a member's two ends
+            // are two springs in series.
+            bodyStrengths[i] = RelaxationCompensation * EndSpringsInSeries * memberStiffness[i];
         }
 
         var stiffest = bodyStrengths.Length > 0 ? bodyStrengths.Max() : jointStrength;
@@ -807,7 +817,14 @@ public partial class RhinoMCPModFunctions
             rigidGoals.Add(rigid);
             goals.Add(rigid);
 
-            var anchor = jointStrengthIsAuto ? stiffest * AutoBodyStiffnessRatio : anchorStrength;
+            // Always sized from the stiffest body, never from the joint figure.
+            //
+            // A stated joint stiffness used to size the ground too, so passing the exact
+            // number the derivation would have produced left the ground soft enough for the
+            // whole assembly to sink into it - 2.41 mm where the answer was 0.45. The ground
+            // has to be stiff relative to whatever stands on it, which is a fact about the
+            // model rather than about the joints.
+            var anchor = stiffest * AutoBodyStiffnessRatio;
             foreach (var groundPoint in body.GroundPoints)
             {
                 goals.Add(new Anchor(groundPoint, anchor));
@@ -1217,11 +1234,12 @@ public partial class RhinoMCPModFunctions
         graph["time_samples_s"] = new JArray(run.TimeSamples.Select(v => (object)v).ToArray());
         graph["motion_samples_m"] = new JArray(run.DisplacementSamples.Select(v => (object)v).ToArray());
         graph["speed_samples_m_s"] = new JArray(run.SpeedSamples.Select(v => (object)v).ToArray());
-        graph["member_stiffness_min_n_per_m"] = bodyStrengths.Length > 0
-            ? bodyStrengths.Min() / RelaxationCompensation
+        // The member's stiffness, not the goal strength that realises it.
+        graph["member_stiffness_min_n_per_m"] = memberStiffness.Length > 0
+            ? memberStiffness.Min()
             : 0.0;
-        graph["member_stiffness_max_n_per_m"] = bodyStrengths.Length > 0
-            ? bodyStrengths.Max() / RelaxationCompensation
+        graph["member_stiffness_max_n_per_m"] = memberStiffness.Length > 0
+            ? memberStiffness.Max()
             : 0.0;
 
         if (displayDoc != null)

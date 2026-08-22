@@ -11,19 +11,18 @@ from rhinomcp.server import mcp
 async def evaluate_stability(
     mode: str | None = None,
     current_step: int | None = None,
-    contact_strength: float | None = None,
     joint_penetration: float | None = None,
     ground_settlement: float | None = None,
     torque_gain: float | None = None,
     duration_seconds: float | None = None,
     damping_ratio: float | None = None,
+    lateral_load_fraction: float | None = None,
+    joint_stiffness_n_per_m: float | None = None,
     stability_threshold: float | None = None,
     rigid_strength: float | None = None,
-    floor_strength: float | None = None,
+    ground_support_stiffness_n_per_m: float | None = None,
     floor_z: float | None = None,
     gravity: float = 9.80665,
-    assign_tol: float | None = None,
-    threshold: float | None = None,
     solver_substeps: int = 1,
     display: bool = False,
     graph: str | dict[str, Any] | None = None,
@@ -56,19 +55,30 @@ async def evaluate_stability(
             Pinned and contact modes report per-element displacement and rotation and
             names the element that moved furthest, and its result carries no
             floor strength, assembly transform or support margin.
-        contact_strength: Contact mode only. Absolute joint stiffness in Pa/m. Leave
-            unset: by default each bearing surface is sized from the load it
-            actually carries, which is what makes the verdict independent of the
-            model's mass, size and units. An absolute value is a pseudo-time step
-            here, not a material property, so pinning it makes a collapse develop
-            faster or slower rather than making the contact stiffer or softer.
         joint_penetration: Contact mode only. How far a bearing surface may close
             under its own load, in document units. This is the automatic mode's
             real knob; it sets the per-step motion directly.
         ground_settlement: Contact mode only. How far a body may settle into the
             ground under its own load, in document units. Separate from the
-            joints because the ground is a soil and the joints are not; use
-            floor_strength to pin the ground to an absolute subgrade modulus.
+            joints because the ground is a soil and the joints are not.
+        joint_stiffness_n_per_m: Pinned modes only. Axial joint stiffness in N/m,
+            stated rather than derived, and applied to EVERY member in the scope.
+            That last part matters: left unset, each member gets its own
+            (E/rho) m / L^2 with the section recovered from mass, so a slender
+            column comes out soft and the slab or pad it bears on comes out
+            hundreds of times stiffer. State one value and they all become
+            equally soft, which adds the pads' and slabs' compliance to the load
+            path and can deflect several times more than the columns alone would.
+            Use it when the connection governs and is much softer than anything
+            it joins - a screwed or doweled timber joint, where the timber's own
+            stiffness is nearly irrelevant and a joint test gives this number
+            directly. Per-joint values are not supported yet.
+        lateral_load_fraction: Pinned modes only. The sideways probe used to
+            measure sway stiffness, as a fraction of the weight carried.
+            Defaults to 0.05. This is an instrument, not a design load - the
+            codes' few-parts-per-thousand notional force moves this model less
+            than its own settling residual, so the reading would track the
+            residual rather than the structure. Set 0 to skip the probe.
         current_step: Number of solver steps to run. When omitted, Rhino uses a
             budget large enough for a collapse to develop; a short run makes a
             toppling assembly look stationary and so reads as stable. The run
@@ -80,25 +90,26 @@ async def evaluate_stability(
         stability_threshold: Maximum displacement considered stable, in the
             active Rhino document's length unit. When omitted, Rhino converts
             the canonical 0.01 m default to document units.
-        rigid_strength: Kangaroo rigid-body goal strength. When omitted, Rhino
-            sizes it above the floor strength. The two goals are blended by
+        rigid_strength: Welded mode only: how rigid the single assembly body is.
+            It no longer reaches the pinned joints - use joint_stiffness_n_per_m
+            for those. When omitted, Rhino sizes it above the ground stiffness. The two goals are blended by
             weight, so a rigid strength below the floor lets the floor deform
             the assembly it is supporting and a sound structure reads as
             unstable. Pass a value only to study a deliberately compliant body.
-        floor_strength: Kangaroo floor-collision goal strength. When omitted,
-            Rhino sizes it from the assembly's total mass so that settling into
-            the floor stays within a tenth of the stability threshold; a sound
-            structure would otherwise read as unstable purely from sinking.
+        ground_support_stiffness_n_per_m: How stiffly the ground holds a standing
+            vertex, in N/m of its tributary area. When omitted, Rhino sizes it
+            from the assembly's total mass so that settling stays within a tenth
+            of the stability threshold; a sound structure would otherwise read as
+            unstable purely from sinking. Not a subgrade modulus - it is
+            multiplied by tributary areas that include each corner's share of the
+            side faces meeting there, so the product is the quantity with
+            meaning. Accepted as floor_strength under its old name.
         floor_z: World Z elevation of the collision floor, in document units.
             When omitted, Rhino places the floor at the underside of the scoped
             assembly. Pass a value only to hold the floor at a fixed level: a
             scope that leaves out the pads its columns stand on would otherwise
             start in mid-air and spend the run falling to world zero.
         gravity: Downward gravitational acceleration in m/s².
-        assign_tol: Kangaroo particle assignment tolerance in document units.
-            When omitted, Rhino converts the canonical 0.000001 m default.
-        threshold: Solver displacement threshold in document units. When
-            omitted, Rhino converts the canonical 0.001 m default.
         duration_seconds: pinned_dynamic mode only. How long to simulate, in seconds.
             Unlike a step count this means the same thing on every model: a mechanism
             with a tenth of gravity available to it covers 50 mm in 0.32 s, so the
@@ -139,14 +150,12 @@ async def evaluate_stability(
         params["stability_threshold"] = stability_threshold
     if floor_z is not None:
         params["floor_z"] = floor_z
-    if floor_strength is not None:
-        params["floor_strength"] = floor_strength
+    if ground_support_stiffness_n_per_m is not None:
+        params["ground_support_stiffness_n_per_m"] = ground_support_stiffness_n_per_m
     if rigid_strength is not None:
         params["rigid_strength"] = rigid_strength
     if mode is not None:
         params["mode"] = mode
-    if contact_strength is not None:
-        params["contact_strength"] = contact_strength
     if joint_penetration is not None:
         params["joint_penetration"] = joint_penetration
     if ground_settlement is not None:
@@ -155,14 +164,14 @@ async def evaluate_stability(
         params["duration_seconds"] = duration_seconds
     if damping_ratio is not None:
         params["damping_ratio"] = damping_ratio
+    if lateral_load_fraction is not None:
+        params["lateral_load_fraction"] = lateral_load_fraction
+    if joint_stiffness_n_per_m is not None:
+        params["joint_stiffness_n_per_m"] = joint_stiffness_n_per_m
     if torque_gain is not None:
         params["torque_gain"] = torque_gain
     if current_step is not None:
         params["current_step"] = current_step
-    if assign_tol is not None:
-        params["assign_tol"] = assign_tol
-    if threshold is not None:
-        params["threshold"] = threshold
     if graph is not None:
         params["graph"] = json.dumps(graph, separators=(",", ":")) if isinstance(graph, dict) else graph
     if layer is not None:
