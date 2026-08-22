@@ -358,11 +358,31 @@ So the "about 10 s per evaluation" below holds for assemblies shaped like the br
 light, slender members. It does not hold for a few heavy, squat ones, and pads exist only to be
 stiff - they pin the timestep while contributing nothing to the answer.
 
-**The rigid-body path does not yet reach a real assembly.** Two to four times the particle path
-on a small model, and over the client timeout on the bridge. The integrator that can see a wall
-is the one that cannot yet do a truss. Two untried levers: its `timestep_safety` is 0.025 where
-measurement only ever justified 0.0125, and the bodies pinning the step are the ones nobody is
-asking about.
+**That claim about the rigid path was wrong and is corrected below.** It read "the integrator
+that can see a wall cannot yet do a truss", from a run at default settings with the sway probe
+on. Both were the settings rather than the integrator:
+
+| braced bridge, 47 bodies | time | verdict | sag |
+| --- | --- | --- | --- |
+| particles, verdict only | 12.4 s | stable | 0.345 mm |
+| rigid bodies, verdict only, timestep_safety 0.4 | **4.2 s** | stable | 0.142 mm |
+| rigid bodies, verdict only, timestep_safety 0.2 | 8.6 s | stable | 0.144 mm |
+| rigid bodies, sway on, timestep_safety 0.4 | 44.8 s | stable | Ky 9.49e8 |
+
+**The rigid path is three times faster than the default on this model**, not slower, and its sag
+is converged in the timestep - 0.142 against 0.144 when the step is halved - so the fast setting
+is not buying speed with accuracy. Its sway also came much closer to the particle path once
+joints gained extent: Ky 9.49e8 against about 1.14e9, 17% apart, where the two used to differ by
+6.5x on unbraced sag.
+
+What remains open is sag: 0.345 mm against 0.142, a factor of 2.4, with no independent answer
+for either. The micro cases pin axial stiffness and say nothing about a Warren girder's midspan
+deflection.
+
+Two untried speed levers, both aimed at the measured cause: capping each body's stiffness
+relative to the softest member in the model, since a pad 500 times stiffer than what it carries
+pins the step and changes no answer; and sweeping `timestep_safety` across the whole suite
+rather than trusting one model.
 
 ### It does not scale, and the ceiling is ~66 elements
 
