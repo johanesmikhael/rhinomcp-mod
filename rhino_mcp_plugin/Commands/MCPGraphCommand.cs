@@ -34,6 +34,7 @@ namespace RhinoMCPModPlugin.Commands
                 "Select objects to graph (Enter = whole document)");
             var allOption = getObject.AddOption("All");
             var offOption = getObject.AddOption("Off");
+            var extentOption = getObject.AddOption("Extent");
             getObject.EnablePreSelect(true, true);
             getObject.EnablePostSelect(true);
             getObject.SubObjectSelect = false;
@@ -54,6 +55,26 @@ namespace RhinoMCPModPlugin.Commands
                 if (index == allOption)
                 {
                     PinAndShow(doc, null, "whole document");
+                    return Result.Success;
+                }
+
+                // Draws the bearing region each contact was reduced from, rather than only
+                // its centre point. For checking that reduction by eye - a wall should show a
+                // rectangle the length of its bearing, a column a small square, a diagonal
+                // member one lying along the member - before anything is built on it.
+                if (index == extentOption)
+                {
+                    MCPConnectivityGraphController.ShowContactExtent =
+                        !MCPConnectivityGraphController.ShowContactExtent;
+                    if (!MCPConnectivityGraphController.IsEnabled)
+                    {
+                        MCPConnectivityGraphController.SetEnabled(true);
+                    }
+
+                    doc.Views.Redraw();
+                    RhinoApp.WriteLine(
+                        "Contact extent " +
+                        (MCPConnectivityGraphController.ShowContactExtent ? "shown." : "hidden."));
                     return Result.Success;
                 }
 

@@ -19,6 +19,8 @@ internal sealed class MCPConnectivityGraphConduit : DisplayConduit
     private readonly Color _nodeColor = Color.FromArgb(240, 80, 180, 255);
     private readonly Color _contactColor = Color.FromArgb(255, 255, 240, 90);
     private readonly Color _isolatedColor = Color.FromArgb(255, 255, 60, 60);
+    private readonly Color _extentColor = Color.FromArgb(255, 120, 255, 160);
+    private readonly Color _extentFillColor = Color.FromArgb(60, 120, 255, 160);
 
     protected override void DrawForeground(DrawEventArgs e)
     {
@@ -69,6 +71,28 @@ internal sealed class MCPConnectivityGraphConduit : DisplayConduit
                 e.Display.DrawLine(a, contact, _edgeColor, 2);
                 e.Display.DrawLine(contact, b, _edgeColor, 2);
                 e.Display.DrawPoint(contact, PointStyle.X, 5, _contactColor);
+
+                // The bearing region the contact was reduced from. Off by default because it
+                // is for checking the reduction rather than for reading the graph: a wall
+                // should draw a rectangle the length of its bearing, a column a small square,
+                // and a diagonal member one that lies along the member rather than square to
+                // the world. Anything else is the reduction being wrong, which is easier to
+                // see than to infer from a number.
+                if (MCPConnectivityGraphController.ShowContactExtent && edge.Extent.IsValid)
+                {
+                    var corners = edge.Extent.Corners();
+                    e.Display.DrawPolygon(corners, _extentFillColor, true);
+                    e.Display.DrawPolygon(corners, _extentColor, false);
+
+                    // The normal, at a tenth of the rectangle's own size, so a patch fitted to
+                    // the wrong plane shows up as a spike pointing the wrong way.
+                    var size = Math.Max(edge.Extent.HalfU, edge.Extent.HalfV);
+                    e.Display.DrawLine(
+                        edge.Extent.Frame.Origin,
+                        edge.Extent.Frame.Origin + edge.Extent.Frame.ZAxis * size * 0.4,
+                        _extentColor,
+                        1);
+                }
             }
             else
             {
@@ -92,13 +116,31 @@ internal sealed class MCPConnectivityGraphConduit : DisplayConduit
                 connected ? _nodeColor : _isolatedColor);
         }
 
+        var measured = graph.Edges.Count(edge => edge.Extent.IsValid);
+        var extentLabel = MCPConnectivityGraphController.ShowContactExtent
+            ? $" | extent {measured}/{graph.Edges.Count} measured"
+            : string.Empty;
+
         e.Display.Draw2dText(
             $"MCP Graph | scope: {scopeLabel} | nodes {graph.Nodes.Count} " +
-            $"edges {graph.Edges.Count} isolated {isolated}",
+            $"edges {graph.Edges.Count} isolated {isolated}{extentLabel}",
             Color.White,
             new Point2d(20, 40),
             false,
             14);
+
+        // Contacts found by intersection or proximity carry no region, and a count that is
+        // not the edge count says so plainly rather than leaving a silently empty screen.
+        if (MCPConnectivityGraphController.ShowContactExtent && measured < graph.Edges.Count)
+        {
+            e.Display.Draw2dText(
+                $"{graph.Edges.Count - measured} contacts have no measured extent " +
+                "(found by intersection or proximity, not by sampling)",
+                _contactColor,
+                new Point2d(20, graph.Truncated ? 80 : 60),
+                false,
+                14);
+        }
 
         if (graph.Truncated)
         {
@@ -317,12 +359,15 @@ internal static class MCPConnectivityGraphBuilder
 
             foreach (var j in candidates)
             {
-                if (!TryGetContactPoint(nodes[i], nodes[j], tolerance, out var contactPoint))
+                if (!TryGetContactPoint(nodes[i], nodes[j], tolerance, out var contactPoint, out var contactExtent))
                 {
                     continue;
                 }
 
-                edges.Add(new Edge { A = i, B = j, ContactPoint = contactPoint });
+                edges.Add(new Edge
+                {
+                    A = i, B = j, ContactPoint = contactPoint, Extent = contactExtent
+                });
             }
         }
 
@@ -547,27 +592,31 @@ internal static class MCPConnectivityGraphBuilder
                 continue;
             }
 
-            filteredEdges.Add(new Edge
-            {
-                A = remap[edge.A],
-                B = remap[edge.B],
-                ContactPoint = edge.ContactPoint
-            });
+            // Renumbering only. Everything the edge measured has to come across, or the
+            // reduction is computed and then silently discarded here - which is exactly what
+            // happened the first time, and showed up on screen as every contact reporting no
+            // extent.
+            var renumbered = edge;
+            renumbered.A = remap[edge.A];
+            renumbered.B = remap[edge.B];
+            filteredEdges.Add(renumbered);
         }
 
         return new MCPConnectivityGraph(filteredNodes, filteredEdges, tolerance);
     }
 
-    private static bool TryGetContactPoint(in Node a, in Node b, double tolerance, out Point3d contactPoint)
+    private static bool TryGetContactPoint(
+        in Node a, in Node b, double tolerance, out Point3d contactPoint, out ContactExtent extent)
     {
         // Broad-phase reject only. Final decision is based on actual geometry.
         if (BoundingBoxDistance(a.BoundingBox, b.BoundingBox) > ContactGap(tolerance))
         {
             contactPoint = Point3d.Unset;
+            extent = default;
             return false;
         }
 
-        return TryGetGeometryContactPoint(a, b, tolerance, out contactPoint);
+        return TryGetGeometryContactPoint(a, b, tolerance, out contactPoint, out extent);
     }
 
     /// <summary>
@@ -631,8 +680,13 @@ internal static class MCPConnectivityGraphBuilder
         return 0.0;
     }
 
-    private static bool TryGetGeometryContactPoint(in Node a, in Node b, double tolerance, out Point3d contactPoint)
+    private static bool TryGetGeometryContactPoint(
+        in Node a, in Node b, double tolerance, out Point3d contactPoint, out ContactExtent extent)
     {
+        // Only the sampling path measures a region. Intersection and proximity contacts
+        // get a location and no extent, which is a fact about them worth surfacing rather
+        // than papering over with a nominal rectangle.
+        extent = default;
         // Where two elements bear on one another is the region in which their surfaces come
         // within contact distance - not the curve along which those surfaces cross. Asking
         // the intersection routines instead makes the answer depend on a degenerate case:
@@ -646,7 +700,7 @@ internal static class MCPConnectivityGraphBuilder
         // two elements because it samples both, and it degrades sensibly for skew contacts
         // where no shared plane exists.
         if (a.ProxyMesh != null && b.ProxyMesh != null &&
-            TryGetBearingCentroid(a.ProxyMesh, b.ProxyMesh, ContactGap(tolerance), out contactPoint))
+            TryGetBearingRegion(a.ProxyMesh, b.ProxyMesh, ContactGap(tolerance), out contactPoint, out extent))
         {
             return true;
         }
@@ -701,7 +755,17 @@ internal static class MCPConnectivityGraphBuilder
     /// </remarks>
     private static bool TryGetBearingCentroid(Mesh a, Mesh b, double maxGap, out Point3d contactPoint)
     {
+        return TryGetBearingRegion(a, b, maxGap, out contactPoint, out _);
+    }
+
+    /// <summary>
+    /// The same sampling, keeping the region rather than only its centre.
+    /// </summary>
+    private static bool TryGetBearingRegion(
+        Mesh a, Mesh b, double maxGap, out Point3d contactPoint, out ContactExtent extent)
+    {
         contactPoint = Point3d.Unset;
+        extent = default;
         if (a.Faces.Count == 0 || b.Faces.Count == 0)
         {
             return false;
@@ -725,6 +789,7 @@ internal static class MCPConnectivityGraphBuilder
         var spacing = Math.Max(span / BearingSamplesAcross, maxGap);
         var sum = Point3d.Origin;
         var count = 0;
+        var samples = new List<Point3d>();
 
         Accumulate(a, b);
         Accumulate(b, a);
@@ -741,6 +806,7 @@ internal static class MCPConnectivityGraphBuilder
         }
 
         contactPoint = centroid;
+        extent = ReduceToExtent(samples);
         return true;
 
         void Accumulate(Mesh source, Mesh target)
@@ -795,12 +861,109 @@ internal static class MCPConnectivityGraphBuilder
 
                         // The midpoint of the pair lies in the shared surface, which is
                         // where the bearing actually is.
-                        sum += (point + onTarget) * 0.5;
+                        var bearing = (point + onTarget) * 0.5;
+                        sum += bearing;
+                        samples.Add(bearing);
                         count++;
                     }
                 }
             }
         }
+    }
+
+    /// <summary>
+    /// Reduces sampled bearing points to a plane and a rectangle on it.
+    /// </summary>
+    /// <remarks>
+    /// The plane is fitted to the samples, so it follows the real bearing surface however the
+    /// elements are turned. Its own axes are arbitrary within that plane, so they are replaced
+    /// by the samples' principal directions - a 2x2 covariance, whose principal angle is
+    /// 0.5 atan2(2 Suv, Suu - Svv) in closed form. The result lies along a wall rather than
+    /// across it, which is what makes the rectangle mean anything.
+    ///
+    /// It is a fitted rectangle, not the true contact polygon: an L-shaped or annular bearing
+    /// reads as the rectangle containing it. That is visible on screen, which is the point of
+    /// drawing it before anything consumes it.
+    /// </remarks>
+    private static ContactExtent ReduceToExtent(List<Point3d> samples)
+    {
+        // Three points is the minimum that determines a plane at all.
+        if (samples == null || samples.Count < 3)
+        {
+            return default;
+        }
+
+        if (Plane.FitPlaneToPoints(samples, out var plane) != PlaneFitResult.Success ||
+            !plane.IsValid)
+        {
+            return default;
+        }
+
+        // In-plane coordinates about the samples' own centre.
+        var us = new double[samples.Count];
+        var vs = new double[samples.Count];
+        double meanU = 0.0, meanV = 0.0;
+        for (var i = 0; i < samples.Count; i++)
+        {
+            plane.ClosestParameter(samples[i], out us[i], out vs[i]);
+            meanU += us[i];
+            meanV += vs[i];
+        }
+
+        meanU /= samples.Count;
+        meanV /= samples.Count;
+
+        double suu = 0.0, svv = 0.0, suv = 0.0;
+        for (var i = 0; i < samples.Count; i++)
+        {
+            var du = us[i] - meanU;
+            var dv = vs[i] - meanV;
+            suu += du * du;
+            svv += dv * dv;
+            suv += du * dv;
+        }
+
+        var angle = 0.5 * Math.Atan2(2.0 * suv, suu - svv);
+        var cos = Math.Cos(angle);
+        var sin = Math.Sin(angle);
+
+        double minA = double.MaxValue, maxA = double.MinValue;
+        double minB = double.MaxValue, maxB = double.MinValue;
+        for (var i = 0; i < samples.Count; i++)
+        {
+            var du = us[i] - meanU;
+            var dv = vs[i] - meanV;
+            var pa = du * cos + dv * sin;
+            var pb = -du * sin + dv * cos;
+            minA = Math.Min(minA, pa);
+            maxA = Math.Max(maxA, pa);
+            minB = Math.Min(minB, pb);
+            maxB = Math.Max(maxB, pb);
+        }
+
+        // The rectangle's own centre, which is not the centroid unless the samples are
+        // symmetric - a bearing that runs off one end of a member is not centred on it.
+        var centreA = (minA + maxA) * 0.5;
+        var centreB = (minB + maxB) * 0.5;
+
+        var axisU = plane.XAxis * cos + plane.YAxis * sin;
+        var axisV = -plane.XAxis * sin + plane.YAxis * cos;
+        var origin = plane.PointAt(meanU, meanV) + axisU * centreA + axisV * centreB;
+
+        var frame = new Plane(origin, axisU, axisV);
+        if (!frame.IsValid)
+        {
+            return default;
+        }
+
+        return new ContactExtent
+        {
+            IsValid = true,
+            Frame = frame,
+            HalfU = (maxA - minA) * 0.5,
+            HalfV = (maxB - minB) * 0.5,
+            Samples = samples.Count
+        };
     }
 
     /// <summary>Samples across the smaller element, per axis. Ten gives a bearing centroid
@@ -1140,6 +1303,50 @@ internal struct Edge
     public int A;
     public int B;
     public Point3d ContactPoint;
+
+    /// <summary>
+    /// The bearing region this contact was reduced from, when it was found by sampling.
+    /// Invalid for contacts found by mesh intersection or by proximity, which is worth
+    /// seeing rather than hiding: those joints have a location and no measured extent.
+    /// </summary>
+    public ContactExtent Extent;
+}
+
+/// <summary>
+/// A contact reduced to a plane and a rectangle on it, rather than to a single point.
+/// </summary>
+/// <remarks>
+/// A joint at a point transmits force in three directions and no moment, because a point has
+/// no lever arm. Two springs of stiffness k separated by d resist rotation with k d^2, so the
+/// extent is what decides whether a wall bearing over a metre behaves like a wall or like a
+/// pin-ended strut. The sampling that finds the contact already covers the region; this keeps
+/// what it found instead of averaging it to the centroid.
+///
+/// The frame comes from a plane fitted to the samples and the in-plane axes from their own
+/// covariance, so the rectangle lies along the bearing rather than along the world. That is
+/// the whole point: an axis-aligned box is wrong for a member the moment it is rotated.
+/// </remarks>
+internal struct ContactExtent
+{
+    public bool IsValid;
+    public Plane Frame;
+    public double HalfU;
+    public double HalfV;
+    public int Samples;
+
+    /// <summary>Area of the fitted rectangle, in document units squared.</summary>
+    public double Area => 4.0 * HalfU * HalfV;
+
+    public Point3d[] Corners()
+    {
+        return new[]
+        {
+            Frame.PointAt(-HalfU, -HalfV),
+            Frame.PointAt(HalfU, -HalfV),
+            Frame.PointAt(HalfU, HalfV),
+            Frame.PointAt(-HalfU, HalfV)
+        };
+    }
 }
 
 internal enum GraphCacheSource
@@ -1174,6 +1381,16 @@ internal static class MCPConnectivityGraphController
     /// select, run the command, then deselect and keep looking at the same graph.
     /// </summary>
     public static GraphScope PinnedScope { get; set; }
+
+    /// <summary>
+    /// Draw the bearing region behind each contact, not just its centre point.
+    /// </summary>
+    /// <remarks>
+    /// Opt-in, and off by default: it is an instrument for checking that the reduction from
+    /// sampled points to a plane and a rectangle is right, before anything is built on top of
+    /// it. Toggled by the Extent option on mcpmodgraph.
+    /// </remarks>
+    public static bool ShowContactExtent { get; set; }
 
     /// <summary>Where the graph currently held in memory came from.</summary>
     public static GraphCacheSource LastSource => _cachedSource;
