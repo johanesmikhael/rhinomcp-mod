@@ -312,6 +312,31 @@ it there, and only the first is about speed:
 
 The client timeout is back to 120 s. Raising it to 900 s was treating the symptom.
 
+### Screening cheaply: skip the sway probe
+
+Measuring sway means settling the assembly, then settling it again under load along each
+horizontal axis - three further integrations on top of the verdict run. `lateral_load_fraction`
+0 skips them:
+
+| model | probe on | verdict only |
+| --- | --- | --- |
+| braced bridge, 47 bodies, particles | 14.3 s | **2.3 s** |
+| wall model, rigid bodies, timestep_safety 0.4 | 6.0 s | **1.1 s** |
+| wall model, rigid bodies, default safety | 92 s | **1.1 s** |
+
+Verdict unchanged throughout. For a first pass over many configurations this is the cheapest
+speed-up there is and it trades no correctness at all - it removes a number, not an answer.
+Run the survivors again with the probe on.
+
+The ordering costs nothing, because a model that collapses skips the probe already: it only
+runs when the verdict run settled or converged without crossing the threshold. Failures are
+therefore fast, and only structures that stand pay for the extra passes.
+
+What the probe buys, when it is wanted, is the difference between braced and merely
+not-yet-fallen. Four of the test bridge's modes are infinitesimal mechanisms that stand under
+self-weight, and the sway figure is the only thing separating that bridge from a properly
+braced one.
+
 ### Cost is set by the stiffest body, not by the element count
 
 Measured 2026-08-22, after the stiffness corrections:
