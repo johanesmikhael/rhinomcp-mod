@@ -507,11 +507,19 @@ MICRO_PARAMS = {"lateral_load_fraction": 0.0, "imperfection_fraction": 0.0}
 # global mode - at 2% it creeps up to the answer monotonically and never overshoots, and at 30%
 # it reaches only a quarter of the answer in half a second. The rigid path damps each joint
 # against relative motion at that joint, which barely touches a mode where both ends move
-# together, so at 2% it still rings after 0.5 s and settles only at 20%. Neither ratio means
-# what a code means by 2% of critical, and this is where that is on record.
+# together, so it needs far more of it. Neither ratio means what a code means by 2% of
+# critical, and this is where that is on record.
+#
+# The rigid path's figure was 20% while a per-body dashpot on absolute angular velocity was
+# also running. That term had to go - it damps the very motion an element makes as it falls
+# off its support, so nothing could ever topple - and taking it out removed most of what was
+# settling these cases: the one-storey stack drifted to 0.552 mm against an exact 0.453, and
+# the splayed one to 11 mm against 0.603. At 100% both land inside their bands, 0.467 and
+# 0.661, and the splayed case is closer to the closed form than it ever was. The damping did
+# not change; what was measuring it did.
 MICRO_DAMPING = {
     "particles": {},
-    "rigid_bodies": {"damping_ratio": 0.2},
+    "rigid_bodies": {"damping_ratio": 1.0},
 }
 
 
@@ -729,6 +737,91 @@ CASES: list[Case] = [
             "welded mode cannot see one element leave another; the combined centre of mass "
             "is still over the pedestal, so stable here is correct for what this mode asks"),
         build=pedestal_build,
+    ),
+    # The same three questions, asked of the multi-body solver with the joints named
+    # "contact" instead of asked of the relaxed contact solver. They are the gate on folding
+    # the two together: the answers were established by hand statics, the contact mode has
+    # been answering them for weeks, and a second implementation that agrees is what lets the
+    # first one go.
+    Case(
+        name="stair3_step100_contact_joint",
+        mode="pinned_dynamic",
+        tier=FAST,
+        stable=True,
+        reason=f"joint margin {stair_margin_mm(100.0):+.0f} mm (600/2 - 1.5*100)",
+        build=stair_build(100.0),
+        params={
+            "integrator": "rigid_bodies",
+            "joint_type": "contact",
+            "damping_ratio": 0.2,
+            "lateral_load_fraction": 0.0,
+        },
+    ),
+    Case(
+        name="stair3_step300_contact_joint",
+        mode="pinned_dynamic",
+        tier=FAST,
+        stable=False,
+        reason=(
+            f"joint margin {stair_margin_mm(300.0):+.0f} mm; the bearing opens under the "
+            "overhanging tread and it rotates off"),
+        build=stair_build(300.0),
+        params={
+            "integrator": "rigid_bodies",
+            "joint_type": "contact",
+            "damping_ratio": 0.2,
+            "lateral_load_fraction": 0.0,
+        },
+    ),
+    Case(
+        name="pedestal_eccentric_contact_joint",
+        mode="pinned_dynamic",
+        tier=FAST,
+        stable=False,
+        reason=f"cap centre of mass {abs(PEDESTAL_MARGIN_MM):.0f} mm beyond the pedestal face",
+        build=pedestal_build,
+        params={
+            "integrator": "rigid_bodies",
+            "joint_type": "contact",
+            "damping_ratio": 0.2,
+            "lateral_load_fraction": 0.0,
+        },
+    ),
+    # The direct test that naming the joint reaches the solver at all, on one geometry that
+    # cannot answer both ways by accident. A welded bearing resists rotation with k d^2 over
+    # its measured width and holds the stack; a pin collapses the same bearing to its centre,
+    # where a point has no lever arm, and three blocks stacked on three points is a mechanism.
+    # If these two agree, the type is being dropped somewhere between the parameter and the
+    # site - which is the failure mode a stiffness comparison would not catch.
+    Case(
+        name="stair3_step100_welded_joint",
+        mode="pinned_dynamic",
+        tier=FAST,
+        stable=True,
+        reason="a welded bearing carries moment over its measured width, so the stack stands",
+        build=stair_build(100.0),
+        params={
+            "integrator": "rigid_bodies",
+            "joint_type": "welded",
+            "damping_ratio": 0.2,
+            "lateral_load_fraction": 0.0,
+        },
+    ),
+    Case(
+        name="stair3_step100_pin_joint",
+        mode="pinned_dynamic",
+        tier=FAST,
+        stable=False,
+        reason=(
+            "a pin collapses the bearing to its centre, and a point carries no moment - three "
+            "blocks stacked on three points is a mechanism whatever the margin"),
+        build=stair_build(100.0),
+        params={
+            "integrator": "rigid_bodies",
+            "joint_type": "pin",
+            "damping_ratio": 0.2,
+            "lateral_load_fraction": 0.0,
+        },
     ),
     Case(
         name="cantilever_margin_plus120",

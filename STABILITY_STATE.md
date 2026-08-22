@@ -136,6 +136,52 @@ same question, which was not obvious until the design was worked out.
 
 Particles remain the default, so nothing about the ordinary answer has changed.
 
+## Joints are named, not guessed
+
+`joint_type` on `pinned_dynamic` + `integrator: "rigid_bodies"` says what every joint in the
+assembly is. Geometry cannot tell you: a screwed panel and a dry-stacked one look identical to
+an intersection test. Three types, and the type decides how the *measured bearing* is used
+rather than adding behaviour of its own:
+
+| type | joint points | carries |
+| --- | --- | --- |
+| `contact` | the full extent, one-sided + friction | compression and moment until it opens |
+| `pin` | one, at the centre | force, no moment |
+| `welded` (default) | the full extent | force and moment, always |
+
+Ordered weakest to strongest, so where two elements disagree the weaker governs - a hinge
+assumed where a moment connection exists reads softer and more mechanism-prone than the truth,
+which fails safe, and unlike "last rule wins" it does not depend on the order rules were given
+in. There is deliberately no `free`: it would be a correction to the graph rather than a
+construction type, and under weakest-wins one such rule on an element would silently delete
+every joint it has.
+
+`contact` is the honest floor and `welded` the optimistic ceiling, so running both brackets a
+verdict. One geometry, three answers, all correct for what was asked:
+
+| stair, +150 mm margin | verdict |
+| --- | --- |
+| `welded` | stable, settles in 0.031 s |
+| `contact` | stable, rocks and stays inside two thirds of the limit |
+| `pin` | **unstable** - three blocks on three points is a mechanism at any margin |
+
+**The physics is the relaxed contact solver's, moved.** Each bearing point pushes and never
+pulls: the joint spring is split along the measured bearing normal, the tensile half dropped
+when the faces separate, and the tangential half capped at `mu = 0.6` times what is actually
+being pressed. The moment then follows for free - points drop out one at a time as the load
+leaves them, so an element sheds its far edge and overturns on the near one at the rate
+`r x F` dictates. `torque_gain` is deliberately not ported: it existed because Kangaroo's
+projective step has no moments, so the fraction of eccentric compression that became rotation
+had to be dialled in by hand.
+
+Verified against the cases the relaxed solver has been answering for weeks, which is the gate
+on folding the two together: `stair3_step100` stable, `stair3_step300` unstable,
+`pedestal_eccentric` unstable, all now reproduced by joint type on the rigid path.
+
+Where a joint has no measured bearing region - found by proximity rather than by two faces
+meeting - `contact` has no direction to open along and falls back to welded. The result says
+so: `contact_joints_sided` against `joint_count`.
+
 ## Contacts still reduce to a point on the particle path
 
 The connectivity graph emits **one bearing point per element pair**, so every joint in the
@@ -505,6 +551,25 @@ Two fixes since, both real:
   against the body's own rotational scale and acting only on rotation, brought the unbraced
   sag from 22.1 mm to 4.24 mm and the braced from 0.739 to 0.656 against a particle
   reference of 0.623 - within 5%.
+
+  **It now acts only about that axis, and only where there is one.** Applied to the whole
+  angular velocity it is a rotational air drag, and sized as a fraction of critical for the
+  *joint* mode - omega in the tens of thousands - it over-damps the overturning mode, where
+  omega is about three, by four orders of magnitude: a 192 kg cap overhanging its pedestal by
+  250 mm carries 570 N m of overturning moment against 3.5e4 N m s of drag, so it drifts
+  0.016 rad/s and reads as standing. Nothing could ever topple. The freedom it exists for is
+  specific - a body whose attachments all lie on one line - and a body held at three points
+  off a line has no such freedom, because the joint dashpots already damp every rotation it
+  has. Acting on *relative* rotation instead, the usual cure, does not work here: a body
+  turning about a single pin has zero velocity at the pin, which is why the absolute version
+  was reached for in the first place.
+
+  Removing it re-measured the real damping. The rigid path's `damping_ratio` was 20% while
+  this term was quietly doing most of the settling; without it the one-storey stack drifted to
+  0.552 mm against an exact 0.453 and the splayed one to 11 mm against 0.603 - not divergence,
+  since halving the timestep barely moved it. At 100% both land inside their bands, 0.467 and
+  0.661, the splayed case closer to the closed form than it ever was. That is what the micro
+  tier now runs the rigid path at.
 
 **It settles now, and the cause was the step, not the damping.** Halving told the two
 apart: at a tenth of the stability limit the assembly never settled however long it ran; at

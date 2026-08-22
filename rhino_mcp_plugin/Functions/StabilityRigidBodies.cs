@@ -145,6 +145,44 @@ internal static class StabilityRigidBodies
         Welded = 2
     }
 
+    /// <summary>
+    /// A joint type by name, as an engineer would say it.
+    /// </summary>
+    /// <remarks>
+    /// Synonyms are accepted because the construction word differs by trade and the type does
+    /// not: a hinge is a pin, a weld and a moment connection are the same joint here.
+    /// </remarks>
+    internal static bool TryParseJointType(string text, out JointType type)
+    {
+        type = JointType.Welded;
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return false;
+        }
+
+        switch (text.Trim().ToLowerInvariant())
+        {
+            case "contact":
+            case "bearing":
+            case "dry":
+                type = JointType.Contact;
+                return true;
+            case "pin":
+            case "pinned":
+            case "hinge":
+                type = JointType.Pin;
+                return true;
+            case "welded":
+            case "weld":
+            case "fixed":
+            case "moment":
+                type = JointType.Welded;
+                return true;
+            default:
+                return false;
+        }
+    }
+
     /// <summary>A place where bodies meet, or where one is held to the ground.</summary>
     internal sealed class Site
     {
@@ -156,6 +194,44 @@ internal static class StabilityRigidBodies
 
         /// <summary>What this joint is. Set from the model; defaults to a bearing.</summary>
         public JointType Type = JointType.Contact;
+
+        /// <summary>
+        /// The bearing normal, taken from the measured contact region's own plane.
+        /// </summary>
+        /// <remarks>
+        /// Only a <see cref="JointType.Contact"/> joint reads it, and it is what decides which
+        /// way "apart" is. Left unset - which happens when the joint was found by proximity
+        /// rather than by two faces meeting, so there is no region and no plane - a contact
+        /// joint has no direction to open along and behaves as welded. That is deliberate:
+        /// inventing a normal from the line of centres would let a joint open along an axis
+        /// nothing was measured about.
+        /// </remarks>
+        public Vector3d Normal = Vector3d.Unset;
+
+        /// <summary>Coefficient of friction across the bearing, for a contact joint.</summary>
+        public double Friction = RhinoMCPModFunctions.DefaultContactFriction;
+
+        /// <summary>
+        /// Which way is "out of the bearing" for each body listed here: +1 or -1 against
+        /// <see cref="Normal"/>.
+        /// </summary>
+        /// <remarks>
+        /// Decided once from the undeformed geometry rather than every step, because it is a
+        /// fact about which side of the joint a body sits on and that cannot change without
+        /// the body passing through the joint. Deciding it per step from the current centre
+        /// would also make it a function of the motion, and a body drifting across the bearing
+        /// plane would flip the sign and turn a compression into a tension.
+        ///
+        /// Empty means the site could not be sided - the joint lies in a body's own centre
+        /// plane, so there is no outward direction - and a contact there is treated as welded.
+        /// Sidedness has to hold for every body at the joint or for none: siding one and not
+        /// the other would leave the two ends of the joint applying forces that are not equal
+        /// and opposite, which is the defect the per-body dashpot already cost a day to.
+        /// </remarks>
+        public readonly List<double> Outward = new();
+
+        /// <summary>How many bodies here found the bearing open, on the most recent step.</summary>
+        public int Opened;
 
         /// <summary>
         /// Undoes the dilution in pulling each body toward the average of everything meeting
@@ -269,6 +345,62 @@ internal static class StabilityRigidBodies
         }
 
         return points;
+    }
+
+    /// <summary>
+    /// The axis a body can spin about with nothing resisting it, or unset if it has none.
+    /// </summary>
+    /// <remarks>
+    /// That is the case exactly when every attachment lies on one line: the joint dashpots act
+    /// at those points, a rotation about the line through them moves none of them, so the
+    /// motion is invisible to every joint the body has. Two points always define such a line.
+    /// Three off it do not, and a body with fewer than two attachments is not held at all -
+    /// nothing should slow its rotation, which is what lets something in mid-air tumble.
+    ///
+    /// The axis is taken through the two furthest-apart attachments, so a near-collinear set
+    /// is judged against its own longest chord rather than against whichever pair came first.
+    /// </remarks>
+    internal static Vector3d CollinearSpinAxis(Body body)
+    {
+        if (body.Local.Count < 2)
+        {
+            return Vector3d.Unset;
+        }
+
+        var first = 0;
+        var second = 1;
+        var longest = 0.0;
+        for (var i = 0; i < body.Local.Count; i++)
+        {
+            for (var j = i + 1; j < body.Local.Count; j++)
+            {
+                var span = (body.Local[i] - body.Local[j]).SquareLength;
+                if (span > longest)
+                {
+                    longest = span;
+                    first = i;
+                    second = j;
+                }
+            }
+        }
+
+        var axis = body.Local[second] - body.Local[first];
+        if (!axis.Unitize())
+        {
+            return Vector3d.Unset;
+        }
+
+        var tolerance = RhinoMCPModFunctions.DefaultAssignToleranceMeters;
+        foreach (var point in body.Local)
+        {
+            var offset = point - body.Local[first];
+            if (Vector3d.CrossProduct(offset, axis).Length > tolerance)
+            {
+                return Vector3d.Unset;
+            }
+        }
+
+        return axis;
     }
 
     internal static Body Create(Mesh mesh, double mass, IEnumerable<Point3d> attachments)
@@ -452,6 +584,28 @@ internal static class StabilityRigidBodies
             }
         }
 
+        // Pin friction acts about one axis, and only where there is one to act about.
+        //
+        // It was applied to the whole angular velocity, which makes it a rotational air drag:
+        // it resists any turn, including the one an element makes as it falls off its support.
+        // Sized as it is - a fraction of critical for the *joint* mode, where omega is tens of
+        // thousands - it over-damps the slow overturning mode by four orders of magnitude. A
+        // 192 kg cap overhanging its pedestal by 250 mm carries 570 N m of overturning moment
+        // against 3.5e4 N m s of drag: a terminal 0.016 rad/s, about 2 mm in half a second,
+        // where the truth is that it falls off. It is the logbook's own linear-damping defect
+        // in rotation, and it was invisible until a joint could open.
+        //
+        // The freedom it exists for is specific: a body held at points that are all on one
+        // line spins about that line with nothing resisting it, because the joint dashpots sit
+        // exactly on the axis and see no velocity. A body held at three points off a line has
+        // no such freedom - the joint dashpots already damp every rotation, with the right
+        // lever arms - so it needs no friction and must be free to topple.
+        var spinAxis = new Vector3d[bodies.Count];
+        for (var b = 0; b < bodies.Count; b++)
+        {
+            spinAxis[b] = CollinearSpinAxis(bodies[b]);
+        }
+
         // One damping coefficient per joint, not one per body.
         //
         // Sized on the body's own mass it was different for each body meeting there, and the
@@ -532,6 +686,25 @@ internal static class StabilityRigidBodies
                     jointVelocity /= site.Bodies.Count;
                 }
 
+                // A bearing pushes and does not pull.
+                //
+                // This is the only place the three joint types differ, and it is where the
+                // relaxed contact solver's physics moves to. A pin and a weld hold in every
+                // direction, so the spring below is the whole of them. A contact holds only in
+                // compression, and only up to friction across the face - so the same spring is
+                // split along the measured bearing normal, the tensile half is dropped, and
+                // the tangential half is capped at mu times what is actually being pressed.
+                //
+                // The moment follows for free. Each bearing point drops out of the joint
+                // independently as the load leaves it, so an element rotating off its support
+                // sheds its far edge first and overturns on the near one, at the rate r x F
+                // dictates. That is why torque_gain is not ported: it existed because
+                // Kangaroo's projective step has no moments, and the fraction of eccentric
+                // compression that became rotation had to be dialled in by hand.
+                var contact = site.Type == JointType.Contact && site.Normal.IsValid &&
+                    site.Outward.Count == site.Bodies.Count;
+                site.Opened = 0;
+
                 for (var i = 0; i < site.Bodies.Count; i++)
                 {
                     var body = bodies[site.Bodies[i]];
@@ -539,11 +712,47 @@ internal static class StabilityRigidBodies
                     var arm = here - body.Centre;
                     var pull = site.EffectiveStiffness * (target - here);
 
+                    var damping = Vector3d.Zero;
                     if (siteDamping[s] > 0.0 && body.Mass > 0.0)
                     {
                         var pointVelocity = body.Velocity + Vector3d.CrossProduct(body.AngularVelocity, arm);
                         var slip = jointVelocity - pointVelocity;
-                        pull += siteDamping[s] * slip;
+                        damping = siteDamping[s] * slip;
+                    }
+
+                    if (contact)
+                    {
+                        // Outward from this body, so "apart" means the same thing to every body
+                        // meeting here whatever order they were listed in. The bearing plane's
+                        // own normal has no preferred side; the body does.
+                        var normal = site.Normal * site.Outward[i];
+
+                        // The gap, as a force rather than a distance: positive means the spring
+                        // is trying to hold the faces together, which a dry bearing cannot do.
+                        var bearing = pull * normal;
+                        if (bearing > 0.0)
+                        {
+                            // Open. Nothing touches, so there is nothing to damp either - the
+                            // dashpot is friction in the joint, not drag on the body.
+                            site.Opened++;
+                            continue;
+                        }
+
+                        var total = pull + damping;
+                        var along = total * normal;
+                        var across = total - along * normal;
+                        var limit = site.Friction * (-bearing);
+                        var magnitude = across.Length;
+                        if (magnitude > limit && magnitude > 0.0)
+                        {
+                            across *= limit / magnitude;
+                        }
+
+                        pull = along * normal + across;
+                    }
+                    else
+                    {
+                        pull += damping;
                     }
 
                     body.Force += pull;
@@ -585,10 +794,17 @@ internal static class StabilityRigidBodies
                 // rotational scale so it is a fraction of critical for the spin rather than
                 // an arbitrary number, and it acts only on rotation - it cannot resist a
                 // body falling or translating.
-                var spinDamping = 2.0 * dampingRatio * Math.Sqrt(
-                    Math.Max(spinStiffness, 0.0) * Math.Min(inertiaWorld.X,
-                        Math.Min(inertiaWorld.Y, inertiaWorld.Z)));
-                var torque = body.Torque - gyroscopic - spinDamping * body.AngularVelocity;
+                var axis = spinAxis[bodies.IndexOf(body)];
+                var friction = Vector3d.Zero;
+                if (axis.IsValid)
+                {
+                    var spinDamping = 2.0 * dampingRatio * Math.Sqrt(
+                        Math.Max(spinStiffness, 0.0) * Math.Min(inertiaWorld.X,
+                            Math.Min(inertiaWorld.Y, inertiaWorld.Z)));
+                    friction = spinDamping * (body.AngularVelocity * axis) * axis;
+                }
+
+                var torque = body.Torque - gyroscopic - friction;
 
                 body.AngularVelocity += new Vector3d(
                     torque.X / inertiaWorld.X,
@@ -749,13 +965,14 @@ public partial class RhinoMCPModFunctions
         double imperfectionFraction,
         double lateralLoadFraction,
         double timestepSafety,
+        StabilityRigidBodies.JointType defaultJointType,
         double lengthToMeters,
         RhinoDoc displayDoc)
     {
         var clusterReport = new JArray();
         var pinned = BuildPinnedBodies(
             graph, nodes, lengthToMeters, floorZMeters, GroundContactToleranceMeters,
-            sharePins: true, clusterReport: clusterReport);
+            sharePins: true, clusterReport: clusterReport, defaultJointType: defaultJointType);
         if (pinned.Count == 0)
         {
             throw new InvalidOperationException("No bodies were built for the rigid-body solver.");
@@ -794,11 +1011,13 @@ public partial class RhinoMCPModFunctions
         // correct rather than a degenerate case to guard against.
         var jointShare = new List<double[]>(pinned.Count);
         var slotTypes = new List<StabilityRigidBodies.JointType[]>(pinned.Count);
+        var slotNormals = new List<Vector3d[]>(pinned.Count);
         for (var i = 0; i < pinned.Count; i++)
         {
             var attachments = new List<Point3d>();
             var share = new List<double>();
             var types = new List<StabilityRigidBodies.JointType>();
+            var normals = new List<Vector3d>();
             for (var j = 0; j < pinned[i].JointPoints.Count; j++)
             {
                 var extent = j < pinned[i].JointExtents.Count
@@ -810,11 +1029,17 @@ public partial class RhinoMCPModFunctions
 
                 var spread = StabilityRigidBodies.BearingPoints(
                     pinned[i].JointPoints[j], extent, type);
+                // The bearing's own plane, which is what a contact joint opens across. Taken
+                // from the region that was measured rather than from the line of centres: a
+                // joint found by proximity has no region, no plane and therefore no direction
+                // to open along, and says so by leaving this unset.
+                var normal = extent.IsValid ? extent.Frame.ZAxis : Vector3d.Unset;
                 foreach (var point in spread)
                 {
                     attachments.Add(point);
                     share.Add(1.0 / spread.Count);
                     types.Add(type);
+                    normals.Add(normal);
                 }
             }
 
@@ -832,9 +1057,11 @@ public partial class RhinoMCPModFunctions
             {
                 // Ground attachments: the earth holds what stands on it, both ways.
                 types.Add(StabilityRigidBodies.JointType.Welded);
+                normals.Add(Vector3d.ZAxis);
             }
 
             slotTypes.Add(types.ToArray());
+            slotNormals.Add(normals.ToArray());
             bodies.Add(StabilityRigidBodies.Create(
                 pinned[i].SolverMesh, pinned[i].Node.MassKilograms, attachments));
         }
@@ -888,6 +1115,11 @@ public partial class RhinoMCPModFunctions
                 {
                     site.Type = slotTypes[b][slot];
                 }
+
+                if (!site.Normal.IsValid && slotNormals[b][slot].IsValid)
+                {
+                    site.Normal = slotNormals[b][slot];
+                }
                 if (groundSlots[b].Contains(slot))
                 {
                     site.Grounded = true;
@@ -907,6 +1139,38 @@ public partial class RhinoMCPModFunctions
                 // to sink into it.
                 site.Stiffness = site.Stiffness * AutoBodyStiffnessRatio;
                 anchoredGround++;
+            }
+        }
+
+        // Which side of each bearing its bodies sit on, decided once from the geometry as
+        // built rather than every step from where the bodies currently are. It is a fact about
+        // which side of the joint a body is on, and that cannot change without the body
+        // passing through the joint; read from the live centre it would instead be a function
+        // of the motion, and a body drifting across the bearing plane would flip the sign and
+        // read its own compression as a tension.
+        //
+        // A joint that cannot be sided - a bearing lying in a body's own centre plane, where
+        // "outward" is not defined - is left unsided and behaves as welded. All or nothing:
+        // siding one body at a joint and not the other would leave its two ends applying
+        // forces that are not equal and opposite.
+        foreach (var site in sites)
+        {
+            if (site.Type != StabilityRigidBodies.JointType.Contact || !site.Normal.IsValid)
+            {
+                continue;
+            }
+
+            for (var i = 0; i < site.Bodies.Count; i++)
+            {
+                var offset = site.Anchor - bodies[site.Bodies[i]].StartCentre;
+                var along = offset * site.Normal;
+                if (Math.Abs(along) <= DefaultAssignToleranceMeters)
+                {
+                    site.Outward.Clear();
+                    break;
+                }
+
+                site.Outward.Add(Math.Sign(along));
             }
         }
 
@@ -948,7 +1212,51 @@ public partial class RhinoMCPModFunctions
 
         var worstPin = run.DisplacementSamples.Count > 0 ? run.DisplacementSamples.Max() : 0.0;
         var isMechanism = worstPin > threshold;
-        var conclusive = run.Settled || run.Converged || isMechanism;
+
+        // A structure that rings without growing is standing.
+        //
+        // The three existing conclusions - it settled, it converged, it passed the threshold -
+        // all assume the motion dies away or runs away. A dry bearing does neither: it
+        // dissipates only while it is closed, so a block rocking on one rings for far longer
+        // than half a second and the run ends undecided. Undecided is then read as not stable,
+        // which is the wrong answer for a stack whose margin is +150 mm and whose motion never
+        // reaches two thirds of the mechanism limit.
+        //
+        // What separates it from a mechanism is not how far it moved but which way: a
+        // mechanism creeps, one direction, while a rocking block reverses. So the test is
+        // reversals plus a peak that is not growing, and it adds no new tuned number - the
+        // distance limit is the same threshold the mechanism test already uses.
+        var bounded = false;
+        var reversals = 0;
+        if (!run.Settled && !run.Converged && !isMechanism &&
+            run.DisplacementSamples.Count >= MotionSampleCount / 2)
+        {
+            var samples = run.DisplacementSamples;
+            var half = samples.Count / 2;
+            var early = 0.0;
+            var late = 0.0;
+            for (var i = 0; i < half; i++)
+            {
+                early = Math.Max(early, samples[i]);
+            }
+
+            for (var i = half; i < samples.Count; i++)
+            {
+                late = Math.Max(late, samples[i]);
+            }
+
+            for (var i = 2; i < samples.Count; i++)
+            {
+                if ((samples[i] - samples[i - 1]) * (samples[i - 1] - samples[i - 2]) < 0.0)
+                {
+                    reversals++;
+                }
+            }
+
+            bounded = late <= early && reversals >= 2;
+        }
+
+        var conclusive = run.Settled || run.Converged || isMechanism || bounded;
         var stable = conclusive && !isMechanism;
 
         var sway = new JObject();
@@ -1010,11 +1318,29 @@ public partial class RhinoMCPModFunctions
         graph["node_count_clustered"] = clusterReport.Count;
         graph["nodes"] = clusterReport;
         graph["anchored_ground_points"] = anchoredGround;
+
+        // What each joint turned out to be, and how many of the contacts could actually be
+        // sided. A verdict that changed because a rule matched more joints than intended has
+        // to be diagnosable without re-deriving the rules by hand - and a contact that fell
+        // back to welded for want of a measured bearing plane is a silent stiffening
+        // otherwise.
+        graph["joint_type_default"] = defaultJointType.ToString().ToLowerInvariant();
+        graph["joint_type_counts"] = new JObject
+        {
+            ["contact"] = sites.Count(s => !s.Grounded && s.Type == StabilityRigidBodies.JointType.Contact),
+            ["pin"] = sites.Count(s => !s.Grounded && s.Type == StabilityRigidBodies.JointType.Pin),
+            ["welded"] = sites.Count(s => !s.Grounded && s.Type == StabilityRigidBodies.JointType.Welded)
+        };
+        graph["contact_joints_open"] = sites.Count(s => s.Opened > 0);
+        graph["contact_joints_sided"] = sites.Count(
+            s => s.Type == StabilityRigidBodies.JointType.Contact && s.Outward.Count == s.Bodies.Count);
         graph["stable"] = stable;
         graph["verdict"] = isMechanism ? "unstable" : (conclusive ? "stable" : "inconclusive");
         graph["conclusive"] = conclusive;
         graph["settled"] = run.Settled;
         graph["converged"] = run.Converged;
+        graph["bounded_response"] = bounded;
+        graph["motion_reversals"] = reversals;
         graph["decay_ratio_per_swing"] = run.DecayRatio;
         graph["projected_displacement_m"] = run.ProjectedDisplacement;
         graph["verdict_metric"] = "pin_displacement";

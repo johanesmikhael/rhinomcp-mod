@@ -157,6 +157,41 @@ two-storey stack 36% soft, while the rigid path was unaffected. Reverted, cause 
 **The arithmetic for why it should be safe was sound and the answer still moved**, which is the
 whole argument for having a case with an exact answer rather than a plausible one.
 
+**A damper on absolute rotation cannot coexist with a verdict about toppling.** Pin friction
+was applied to a body's whole angular velocity and sized as a fraction of critical for the
+*joint* mode, where omega is tens of thousands. Against the overturning mode, where it is
+about three, that is four orders of magnitude too much: a 192 kg cap overhanging its pedestal
+by 250 mm carries 570 N m of overturning moment against 3.5e4 N m s of drag, a terminal
+0.016 rad/s, about 2 mm in half a second - so it read as standing. It is the logbook's own
+linear-damping defect in rotation, and it was invisible for as long as no joint could open,
+because nothing in the suite ever asked this solver to let something fall over. **The defect
+and the feature that exposes it arrived in the same session, which is the argument for adding
+the case before trusting the answer.**
+
+**And it cannot be rescued by acting on relative motion instead.** That is the cure for a
+linear dashpot, and it fails here: a body rotating about a single pin has zero velocity at the
+pin, which is exactly why the absolute version was reached for. The freedom is real - a member
+held at points on one line spins about that line and no joint can see it - so the friction is
+kept, but only about that line, and only where the attachments actually are collinear. A body
+held at three points off a line has no such freedom and must be free to topple.
+
+**Removing a fictitious damper is a re-measurement of the real one.** The rigid path's damping
+ratio was 20% while the spin term was quietly doing most of the settling. With it gone the
+one-storey stack drifted to 0.552 mm against an exact 0.453 and the splayed one to 11 against
+0.603 - not divergence, because halving the timestep barely moved it, but a mode nothing was
+damping. At 100% both land inside their bands and the splayed case sits closer to the closed
+form than it ever had. A constant calibrated against a model containing a defect measures the
+defect too.
+
+**A dry bearing rings, and a verdict has to have somewhere to put that.** The solver could
+conclude three ways - it settled, it converged, it crossed the threshold - and all three
+assume the motion dies or runs away. A contact joint dissipates only while it is closed, so a
+block rocking on one still rings after half a second and the run ended undecided, which was
+read as not stable for a stack with a +150 mm margin whose motion never reached two thirds of
+the limit. What separates it from a mechanism is direction, not distance: a mechanism creeps
+one way, a rocking block reverses. Reversals plus a peak that is not growing, and no new tuned
+number.
+
 ## On numerics
 
 **A test model's cost is set by its heaviest, stubbiest body, not by the physics under test.**

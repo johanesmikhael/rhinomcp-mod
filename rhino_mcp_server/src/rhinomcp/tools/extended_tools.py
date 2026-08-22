@@ -17,6 +17,7 @@ async def evaluate_stability(
     duration_seconds: float | None = None,
     damping_ratio: float | None = None,
     integrator: str | None = None,
+    joint_type: str | None = None,
     lateral_load_fraction: float | None = None,
     joint_stiffness_n_per_m: float | None = None,
     stability_threshold: float | None = None,
@@ -138,6 +139,24 @@ async def evaluate_stability(
             damps each joint against relative motion there, which barely touches a mode
             where both ends of a joint move together. The rigid path typically needs
             0.2 to settle inside a half-second run.
+        joint_type: pinned_dynamic + integrator="rigid_bodies" only. What every joint
+            in the assembly is, since geometry cannot tell you: a screwed panel and a
+            dry-stacked one look identical to an intersection test.
+
+            "welded" (default) - the bearing carries force and moment, always. A moment
+            connection: beam to column, a plate welded or bolted rigid.
+            "pin" - the bearing collapses to its centre, so it carries force in three
+            directions and no moment. A hinge: truss to truss, a bolted single fastener.
+            "contact" - the bearing pushes and does not pull, with friction across it,
+            so it opens as load leaves it. Dry masonry, a beam sitting on a corbel, a
+            precast panel bearing on a pad.
+
+            "contact" is the honest floor and "welded" the optimistic ceiling, so
+            running both brackets a verdict. Where a joint has no measured bearing
+            region - it was found by proximity rather than by two faces meeting -
+            "contact" has no direction to open along and falls back to welded; the
+            result reports how many were actually sided.
+
         integrator: pinned_dynamic mode only. "particles" (default) or "rigid_bodies".
             They answer differently and the difference is not small.
 
@@ -207,6 +226,8 @@ async def evaluate_stability(
         params["damping_ratio"] = damping_ratio
     if integrator is not None:
         params["integrator"] = integrator
+    if joint_type is not None:
+        params["joint_type"] = joint_type
     if lateral_load_fraction is not None:
         params["lateral_load_fraction"] = lateral_load_fraction
     if joint_stiffness_n_per_m is not None:

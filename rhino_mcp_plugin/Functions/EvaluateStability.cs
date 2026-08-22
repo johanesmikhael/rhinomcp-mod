@@ -503,6 +503,21 @@ public partial class RhinoMCPModFunctions
                     // checked against hand statics. Making it default would trade a defect
                     // that is understood and documented for numbers that are not, so it
                     // stays opt-in until it reproduces the validated cases.
+                    // What the joints are, named rather than guessed from the geometry.
+                    //
+                    // A screwed panel and a dry-stacked one look identical to an intersection
+                    // test, so this is domain knowledge and cannot come from the model. One
+                    // value for the whole assembly for now; per-element and pairwise rules
+                    // follow, and this stays as the default they fall back to.
+                    var jointTypeText = parameters?["joint_type"]?.ToString();
+                    var defaultJointType = StabilityRigidBodies.JointType.Welded;
+                    if (!string.IsNullOrWhiteSpace(jointTypeText) &&
+                        !StabilityRigidBodies.TryParseJointType(jointTypeText, out defaultJointType))
+                    {
+                        throw new InvalidOperationException(
+                            $"Unknown joint_type '{jointTypeText}'. Expected contact, pin or welded.");
+                    }
+
                     var integrator = parameters?["integrator"]?.ToString();
                     if (string.Equals(integrator, "rigid_bodies", StringComparison.OrdinalIgnoreCase))
                     {
@@ -522,6 +537,7 @@ public partial class RhinoMCPModFunctions
                             ReadFiniteParameter(
                                 parameters, "timestep_safety",
                                 StabilityRigidBodies.TimestepSafety, 0.0, inclusiveMinimum: false),
+                            defaultJointType,
                             unitContext.LengthToMeters,
                             WantsDisplay(parameters) ? doc : null);
 
@@ -540,7 +556,11 @@ public partial class RhinoMCPModFunctions
                             "span_m", "imperfection_m", "imperfection_speed_m_s", "settled",
                             "verdict", "conclusive", "converged", "decay_ratio_per_swing",
                             "projected_displacement_m", "lateral_load_fraction", "sway",
-                            "joint_count"
+                            "joint_count", "joint_type_default", "joint_type_counts",
+                            "contact_joints_sided", "contact_joints_open",
+                            "bounded_response", "motion_reversals",
+                            "mechanism_threshold_m", "verdict_metric",
+                            "motion_samples_m"
                         })
                         {
                             rigidResult[key] = graph[key];

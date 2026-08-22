@@ -160,7 +160,8 @@ public partial class RhinoMCPModFunctions
         double floorZMeters,
         double groundToleranceMeters,
         bool sharePins = true,
-        JArray clusterReport = null)
+        JArray clusterReport = null,
+        StabilityRigidBodies.JointType defaultJointType = StabilityRigidBodies.JointType.Welded)
     {
         var bodies = new List<PinnedBody>(nodes.Count);
         foreach (var node in nodes)
@@ -280,7 +281,7 @@ public partial class RhinoMCPModFunctions
             }
         }
 
-        ClusterJointsIntoNodes(bodies, links, clusterReport);
+        ClusterJointsIntoNodes(bodies, links, clusterReport, defaultJointType);
 
         return bodies;
     }
@@ -523,7 +524,8 @@ public partial class RhinoMCPModFunctions
     /// fuse two real nodes and silently weld the structure.
     /// </remarks>
     private static void ClusterJointsIntoNodes(
-        List<PinnedBody> bodies, List<JointLink> links, JArray report)
+        List<PinnedBody> bodies, List<JointLink> links, JArray report,
+        StabilityRigidBodies.JointType defaultJointType = StabilityRigidBodies.JointType.Welded)
     {
         if (links.Count == 0)
         {
@@ -655,7 +657,7 @@ public partial class RhinoMCPModFunctions
                 {
                     bodies[body].JointPoints.Add(point);
                     bodies[body].JointExtents.Add(nodeExtent);
-                    bodies[body].JointTypes.Add(StabilityRigidBodies.JointType.Welded);
+                    bodies[body].JointTypes.Add(defaultJointType);
                 }
             }
         }
