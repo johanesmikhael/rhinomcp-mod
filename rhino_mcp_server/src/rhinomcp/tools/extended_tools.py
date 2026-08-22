@@ -16,6 +16,7 @@ async def evaluate_stability(
     torque_gain: float | None = None,
     duration_seconds: float | None = None,
     damping_ratio: float | None = None,
+    integrator: str | None = None,
     lateral_load_fraction: float | None = None,
     joint_stiffness_n_per_m: float | None = None,
     stability_threshold: float | None = None,
@@ -115,9 +116,35 @@ async def evaluate_stability(
             with a tenth of gravity available to it covers 50 mm in 0.32 s, so the
             default 0.5 s separates falling from standing with room to spare.
         damping_ratio: pinned_dynamic mode only. Viscous damping as a fraction of
-            critical, per particle. Defaults to 0.02, the low end of what codes assume
-            for steel framing. With none at all a sound structure oscillates forever
-            about its static deflection and peaks at twice it.
+            critical. Defaults to 0.02, the low end of what codes assume for steel
+            framing. With none at all a sound structure oscillates forever about its
+            static deflection and peaks at twice it. The two integrators do not mean
+            the same thing by it: "particles" damps each particle against its own local
+            stiffness, which over-damps the slow global mode, while "rigid_bodies"
+            damps each joint against relative motion there, which barely touches a mode
+            where both ends of a joint move together. The rigid path typically needs
+            0.2 to settle inside a half-second run.
+        integrator: pinned_dynamic mode only. "particles" (default) or "rigid_bodies".
+            They answer differently and the difference is not small.
+
+            "particles" holds each body's points to a fitted frame. It reproduces a
+            closed-form axial deflection to about 1%, is the calibrated default, and
+            cannot represent free motion at all - a body with nothing under it falls at
+            0.2% of g, so an unstable verdict can only be reached by deformation
+            crossing a limit, never by something toppling or dropping. Every joint is a
+            point, so a wall and a column of the same axial stiffness give the same
+            answer.
+
+            "rigid_bodies" integrates the body itself under F = ma and Euler's
+            equations. It falls correctly, to one part in ten thousand, and builds each
+            joint over the bearing region the graph measured - so a 1150 mm wall comes
+            out 14 times stiffer in its own plane than across it, where the particle
+            path reports no difference. It is opt-in because it is less settled: a
+            two-storey stack needs a timestep four times finer than its own rule gives,
+            and it wants damping_ratio near 0.2 rather than 0.02.
+
+            Use "rigid_bodies" when walls, slabs or wide bearings carry load, or when
+            something has to be able to fall. Use the default otherwise.
         solver_substeps: Kangaroo substeps per solver step. Ignored by pinned_dynamic,
             which derives its own timestep from the stiffest spring holding the
             lightest mass.
@@ -164,6 +191,8 @@ async def evaluate_stability(
         params["duration_seconds"] = duration_seconds
     if damping_ratio is not None:
         params["damping_ratio"] = damping_ratio
+    if integrator is not None:
+        params["integrator"] = integrator
     if lateral_load_fraction is not None:
         params["lateral_load_fraction"] = lateral_load_fraction
     if joint_stiffness_n_per_m is not None:
