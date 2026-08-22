@@ -122,6 +122,15 @@ public partial class RhinoMCPModFunctions
         public Plane BodyPlane { get; set; }
         public Point3d Centroid { get; set; }
         public List<Point3d> JointPoints { get; } = new();
+
+        /// <summary>
+        /// The bearing region behind each joint point, in the same order. Invalid where the
+        /// contact was found by intersection or proximity rather than by sampling. Only the
+        /// rigid-body solver reads it - the particle solver holds all of a body's points to
+        /// one frame at a single strength, so it cannot give one joint four points and
+        /// another two without changing what every joint means.
+        /// </summary>
+        public List<ContactExtent> JointExtents { get; } = new();
         public List<Point3d> GroundPoints { get; } = new();
         public Point3d[] Markers { get; set; }
         public int[] MarkerParticles { get; set; }
@@ -232,7 +241,35 @@ public partial class RhinoMCPModFunctions
                     continue;
                 }
 
-                links.Add(new JointLink { A = a, B = b, Point = contact });
+                // The bearing region, when the graph measured one. Eleven numbers follow the
+                // contact point: the rectangle's centre, its two in-plane axes and its
+                // half-lengths, in document units. Only the rigid-body solver uses them.
+                var extent = default(ContactExtent);
+                if (edge.Count >= 16)
+                {
+                    var origin = new Point3d(
+                        edge[5].Value<double>() * lengthToMeters,
+                        edge[6].Value<double>() * lengthToMeters,
+                        edge[7].Value<double>() * lengthToMeters);
+                    var axisU = new Vector3d(
+                        edge[8].Value<double>(), edge[9].Value<double>(), edge[10].Value<double>());
+                    var axisV = new Vector3d(
+                        edge[11].Value<double>(), edge[12].Value<double>(), edge[13].Value<double>());
+                    var frame = new Plane(origin, axisU, axisV);
+                    if (frame.IsValid)
+                    {
+                        extent = new ContactExtent
+                        {
+                            IsValid = true,
+                            Frame = frame,
+                            HalfU = edge[14].Value<double>() * lengthToMeters,
+                            HalfV = edge[15].Value<double>() * lengthToMeters,
+                            Samples = edge.Count > 16 ? edge[16].Value<int>() : 0
+                        };
+                    }
+                }
+
+                links.Add(new JointLink { A = a, B = b, Point = contact, Extent = extent });
             }
         }
 
@@ -450,6 +487,7 @@ public partial class RhinoMCPModFunctions
         public int A { get; set; }
         public int B { get; set; }
         public Point3d Point { get; set; }
+        public ContactExtent Extent { get; set; }
         public int Cluster { get; set; } = -1;
     }
 
@@ -578,17 +616,38 @@ public partial class RhinoMCPModFunctions
             nodePoints[pair.Key] = pair.Value.Sum / pair.Value.Count;
         }
 
+        // The largest measured region in each cluster, since a cluster is one node and one
+        // node gets one region. Largest rather than merged: two contacts that clustered are
+        // the same joint seen twice, and the bigger bearing is the one carrying the load.
+        var nodeExtents = new Dictionary<int, ContactExtent>();
+        foreach (var index in Enumerable.Range(0, links.Count))
+        {
+            var extent = links[index].Extent;
+            if (!extent.IsValid)
+            {
+                continue;
+            }
+
+            var root = Find(index);
+            if (!nodeExtents.TryGetValue(root, out var best) || extent.Area > best.Area)
+            {
+                nodeExtents[root] = extent;
+            }
+        }
+
         // One point per body per node, so the bodies meeting there share a single particle.
         var placed = new HashSet<(int Body, int Node)>();
         foreach (var index in Enumerable.Range(0, links.Count))
         {
             var root = Find(index);
             var point = nodePoints[root];
+            nodeExtents.TryGetValue(root, out var nodeExtent);
             foreach (var body in new[] { links[index].A, links[index].B })
             {
                 if (placed.Add((body, root)))
                 {
                     bodies[body].JointPoints.Add(point);
+                    bodies[body].JointExtents.Add(nodeExtent);
                 }
             }
         }

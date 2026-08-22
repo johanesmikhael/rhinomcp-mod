@@ -98,7 +98,45 @@ Welded is an upper bound: it supplies every moment connection the real assembly 
    not need discovering. Braced went 32 clusters to 25 with 0 splits, and its spurious
    hinge pairs from 13 to 6, exactly the 7 the splits were creating.
 
-## A wall and a column are the same object to `pinned_dynamic`
+## A wall is a wall on the rigid-body path
+
+`integrator: "rigid_bodies"` now builds each joint over the bearing region the graph measured,
+rather than at its centre point. Measured on a block carried by three 2 m columns, then with
+two of those legs replaced by a 1150 mm wall of the same combined `EA/L`:
+
+| | `Kx` | `Ky` | ratio |
+| --- | --- | --- | --- |
+| three columns | - | - | reads unstable |
+| wall + one column | 7.60e6 | 5.38e5 | **14.1** |
+
+Stiff in the wall's own plane, soft across it, which is why buildings need shear walls in two
+directions. The same two models on the default particle path give 2.49e7 / 2.50e7 and
+2.27e7 / 2.29e7 - no difference at all, because a joint there is a point and a point has no
+lever arm.
+
+The joint points are two-point Gauss positions, `half/sqrt(3)` either side of centre on each
+in-plane axis, each carrying its share of the joint's stiffness. That is exact rather than
+convenient: four points of `k/4` sum to `k` in translation and to `k L^2 / 12` in moment, which
+is the analytic rotational stiffness of a uniformly loaded elastic bearing. Corners would have
+given `k L^2 / 4`, three times too stiff. A bearing with no width in one direction - a member
+cut square standing at an angle on a flat pad - collapses to two points and restrains rotation
+about the line it touches along and not about the other axis.
+
+**The axial answer did not move**, which is the check that the stiffness share is right:
+`axial_one_storey_rigid_bodies` still reproduces `W/3k` after the joint was spread over four
+points.
+
+### Why only this path
+
+Kangaroo's `RigidMesh` takes one strength for all of a body's points, so the particle solver
+cannot give one joint four points at `k/4` and another two at `k/2` - and a line contact and a
+face contact genuinely need different counts. `StabilityRigidBodies` carries stiffness per
+site and expresses it directly. Bearing extent and the choice of integrator are therefore the
+same question, which was not obvious until the design was worked out.
+
+Particles remain the default, so nothing about the ordinary answer has changed.
+
+## Contacts still reduce to a point on the particle path
 
 The connectivity graph emits **one bearing point per element pair**, so every joint in the
 pinned modes is a point pin however large the real contact is. Clustering cannot recover what

@@ -4,6 +4,7 @@ using System.Linq;
 using Newtonsoft.Json.Linq;
 using Rhino;
 using Rhino.Geometry;
+using RhinoMCPModPlugin.Functions;
 
 namespace RhinoMCPModPlugin.Functions;
 
@@ -168,6 +169,48 @@ internal static class StabilityRigidBodies
             Math.Max(inertia.X, floor),
             Math.Max(inertia.Y, floor),
             Math.Max(inertia.Z, floor));
+    }
+
+    /// <summary>
+    /// Where a joint acts, given the bearing region it was measured over.
+    /// </summary>
+    /// <remarks>
+    /// Two-point Gauss positions per in-plane axis: half/sqrt(3) either side of centre. With
+    /// each point carrying an equal share of the joint's stiffness this reproduces a
+    /// uniformly loaded elastic bearing exactly, in force and in moment - see the caller.
+    ///
+    /// An axis narrower than the assignment tolerance collapses to one position, so a line
+    /// contact yields two points and a point contact one. A joint with no measured region at
+    /// all stays where it was, which keeps every contact found by intersection or proximity
+    /// behaving exactly as before.
+    /// </remarks>
+    internal static List<Point3d> BearingPoints(Point3d centre, ContactExtent extent)
+    {
+        var points = new List<Point3d>();
+        if (!extent.IsValid)
+        {
+            points.Add(centre);
+            return points;
+        }
+
+        const double OverRootThree = 0.5773502691896257;
+        var floor = RhinoMCPModFunctions.DefaultAssignToleranceMeters;
+        var offsetsU = extent.HalfU > floor
+            ? new[] { -extent.HalfU * OverRootThree, extent.HalfU * OverRootThree }
+            : new[] { 0.0 };
+        var offsetsV = extent.HalfV > floor
+            ? new[] { -extent.HalfV * OverRootThree, extent.HalfV * OverRootThree }
+            : new[] { 0.0 };
+
+        foreach (var u in offsetsU)
+        {
+            foreach (var v in offsetsV)
+            {
+                points.Add(extent.Frame.PointAt(u, v));
+            }
+        }
+
+        return points;
     }
 
     internal static Body Create(Mesh mesh, double mass, IEnumerable<Point3d> attachments)
@@ -673,17 +716,52 @@ public partial class RhinoMCPModFunctions
 
         var bodies = new List<StabilityRigidBodies.Body>(pinned.Count);
         var groundSlots = new List<HashSet<int>>(pinned.Count);
+        // A joint becomes the bearing it was measured to be, rather than its centre point.
+        //
+        // A single point transmits force in three directions and no moment, because it has no
+        // lever arm - which is why a 1150 mm wall and a 150 mm column behaved identically
+        // here. Spreading the joint over its own bearing gives it one.
+        //
+        // The points are two-point Gauss positions, at half/sqrt(3) either side of centre
+        // along each in-plane axis, each carrying its share of the joint's stiffness. That is
+        // not a convenient guess: two-point Gauss integrates a uniformly loaded elastic
+        // bearing exactly. Four points of k/4 at half/sqrt(3) sum to k in translation, and
+        // their moment about the centre is 4 (k/4) (half/sqrt(3))^2 = k L^2 / 12, which is
+        // the analytic rotational stiffness of that bearing. Corners would have given
+        // k L^2 / 4, three times too stiff.
+        //
+        // A bearing with no width in one direction - a member cut square standing at an angle
+        // on a flat pad touches along one edge - collapses to two points, and restrains
+        // rotation about the line it touches along and not about the other axis. That is
+        // correct rather than a degenerate case to guard against.
+        var jointShare = new List<double[]>(pinned.Count);
         for (var i = 0; i < pinned.Count; i++)
         {
-            var attachments = new List<Point3d>(pinned[i].JointPoints);
+            var attachments = new List<Point3d>();
+            var share = new List<double>();
+            for (var j = 0; j < pinned[i].JointPoints.Count; j++)
+            {
+                var extent = j < pinned[i].JointExtents.Count
+                    ? pinned[i].JointExtents[j]
+                    : default;
+                var spread = StabilityRigidBodies.BearingPoints(pinned[i].JointPoints[j], extent);
+                foreach (var point in spread)
+                {
+                    attachments.Add(point);
+                    share.Add(1.0 / spread.Count);
+                }
+            }
+
             var grounded = new HashSet<int>();
             foreach (var point in pinned[i].GroundPoints)
             {
                 grounded.Add(attachments.Count);
                 attachments.Add(point);
+                share.Add(1.0);
             }
 
             groundSlots.Add(grounded);
+            jointShare.Add(share.ToArray());
             bodies.Add(StabilityRigidBodies.Create(
                 pinned[i].SolverMesh, pinned[i].Node.MassKilograms, attachments));
         }
@@ -721,7 +799,12 @@ public partial class RhinoMCPModFunctions
                 // deliver EA/L end to end. The particle model did not need this: its pins
                 // were shared particles, exact rather than sprung, with the compliance in
                 // the body-to-frame goal instead.
-                site.Stiffness = Math.Min(site.Stiffness, 2.0 * stiffness[b]);
+                // Divided by the number of points the joint was spread over, so spreading it
+                // changes what the joint can resist and not how stiff it is. Without this a
+                // four-point bearing would be four times stiffer in pure compression than the
+                // member feeding it, and the axial answer would move for a reason that has
+                // nothing to do with axial behaviour.
+                site.Stiffness = Math.Min(site.Stiffness, 2.0 * stiffness[b] * jointShare[b][slot]);
                 if (groundSlots[b].Contains(slot))
                 {
                     site.Grounded = true;
