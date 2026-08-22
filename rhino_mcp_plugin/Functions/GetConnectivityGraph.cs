@@ -29,18 +29,44 @@ public partial class RhinoMCPModFunctions
         }
 
         var edges = new JArray();
+        var extents = new JArray();
         foreach (var edge in graph.Edges)
         {
             edges.Add(new JArray(
                 edge.A,
                 edge.B,
                 RoundPoint(edge.ContactPoint)));
+
+            // The bearing region behind the contact, reported separately so the compact edge
+            // form is unchanged for anything already reading it. A contact found by
+            // intersection or proximity has no region and does not appear here, which is why
+            // this carries its own a/b rather than being positional.
+            if (edge.Extent.IsValid)
+            {
+                extents.Add(new JObject
+                {
+                    ["a"] = edge.A,
+                    ["b"] = edge.B,
+                    ["centre"] = RoundPoint(edge.Extent.Frame.Origin),
+                    ["u"] = RoundVector(edge.Extent.Frame.XAxis),
+                    ["v"] = RoundVector(edge.Extent.Frame.YAxis),
+                    ["normal"] = RoundVector(edge.Extent.Frame.ZAxis),
+                    // Full lengths, because a bearing is quoted as its size rather than as
+                    // half of it.
+                    ["length_u"] = Math.Round(edge.Extent.HalfU * 2.0, 2),
+                    ["length_v"] = Math.Round(edge.Extent.HalfV * 2.0, 2),
+                    ["area"] = Math.Round(edge.Extent.Area, 2),
+                    ["samples"] = edge.Extent.Samples
+                });
+            }
         }
 
         var result = new JObject
         {
             ["n"] = nodes,
             ["e"] = edges,
+            ["contact_extent"] = extents,
+            ["contact_extent_measured"] = extents.Count,
             ["node_count"] = graph.Nodes.Count,
             ["edge_count"] = graph.Edges.Count,
             ["candidate_count"] = graph.CandidateCount,
@@ -190,6 +216,16 @@ public partial class RhinoMCPModFunctions
         }
 
         return description;
+    }
+
+    private static JArray RoundVector(Rhino.Geometry.Vector3d vector)
+    {
+        // Six places: these are unit vectors, and rounding a direction to the two places a
+        // position gets would tilt a metre-long bearing by millimetres.
+        return new JArray(
+            Math.Round(vector.X, 6),
+            Math.Round(vector.Y, 6),
+            Math.Round(vector.Z, 6));
     }
 
     private static JArray RoundPoint(Rhino.Geometry.Point3d point)

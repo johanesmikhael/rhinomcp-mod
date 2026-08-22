@@ -37,7 +37,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2] / "rhino_mcp_server" / "src"))
 
 import cases as case_module
-from cases import FAST, MICRO, SLOW, Case
+from cases import FAST, GEOMETRY, MICRO, SLOW, Case
 from rhinomcp.server import RhinoConnection
 
 
@@ -115,6 +115,26 @@ def check_numbers(case: Case, result: dict[str, Any]) -> list[str]:
 def run_once(connection: RhinoConnection, case: Case, substeps: int) -> dict[str, Any]:
     started = time.monotonic()
     ids = build(connection, case)
+
+    # Cases that check something upstream of the solver never run it. The bearing extent is
+    # decided while the graph is built, and evaluating stability on top would only add a
+    # second thing that could fail.
+    if case.check is not None:
+        def send(command: str, params: dict[str, Any]) -> Any:
+            payload = dict(params)
+            return connection.send_command(command, payload)
+
+        problems = case.check(send, ids)
+        return {
+            "objects": len(ids),
+            "stable": not problems,
+            "correct": not problems,
+            "iterations": None,
+            "seconds": time.monotonic() - started,
+            "problems": problems,
+            "result": {},
+        }
+
     result = evaluate(connection, case, substeps, ids)
     return {
         "objects": len(ids),
@@ -175,7 +195,8 @@ def load_baseline() -> dict[str, Any]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--tier", default=FAST, choices=[FAST, MICRO, SLOW, "all"])
+    parser.add_argument(
+        "--tier", default=FAST, choices=[FAST, GEOMETRY, MICRO, SLOW, "all"])
     parser.add_argument("--case", action="append", default=None)
     parser.add_argument("--update-baseline", action="store_true")
     parser.add_argument("--json", type=pathlib.Path, default=None)

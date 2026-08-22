@@ -34,6 +34,10 @@ class Case:
     # Optional numeric assertions: key in the result -> (low, high) in the result's own unit.
     expect: dict[str, tuple[float, float]] = field(default_factory=dict)
     params: dict[str, Any] = field(default_factory=dict)
+    # Cases that ask something other than "is it stable". Given the built object ids and a
+    # function to send a command, returns the problems it found - empty when it passes. The
+    # solver is not run at all for these, because what is under test is upstream of it.
+    check: Callable[[Callable[[str, dict], Any], list[str]], list[str]] | None = None
 
 
 # --------------------------------------------------------------------------------------
@@ -473,6 +477,119 @@ def micro_expect(exact_m: float) -> dict[str, tuple[float, float]]:
 
 
 # --------------------------------------------------------------------------------------
+# Bearing extent: contacts whose size and orientation are known by construction
+# --------------------------------------------------------------------------------------
+#
+# A joint at a point transmits no moment, because a point has no lever arm. Two springs of
+# stiffness k separated by d resist rotation with k d^2, so whether a wall behaves like a
+# wall or like a pin-ended strut is decided by whether its bearing has a measured size. The
+# graph samples that region and reduces it to a plane and a rectangle; these cases check the
+# reduction against footprints that are known because they were drawn.
+#
+# The rotated wall is the case that matters. An axis-aligned bounding box gets the first two
+# right and cannot get the third right at all - it would report a 1146 x 671 mm world-aligned
+# box for a 1150 x 150 mm wall turned 30 degrees. Anything that reproduces 1150 x 150 in that
+# orientation is not using a world box.
+
+EXTENT_PAD = (-3000.0, -2000.0, -300.0, 3000.0, 2000.0, 0.0)
+EXTENT_WALL_LENGTH = 1150.0
+EXTENT_WALL_THICKNESS = 150.0
+EXTENT_COLUMN_SIDE = 150.0
+EXTENT_WALL_ROTATION_DEG = 30.0
+
+
+def extent_scene() -> str:
+    pad_mass = concrete_mass(6000.0, 4000.0, 300.0)
+    return f"""
+import math
+import Rhino
+world_box("PAD", {EXTENT_PAD[0]!r}, {EXTENT_PAD[1]!r}, {EXTENT_PAD[2]!r},
+          {EXTENT_PAD[3]!r}, {EXTENT_PAD[4]!r}, {EXTENT_PAD[5]!r}, {pad_mass!r})
+world_box("WALL", -2500.0, -1500.0, 0.0,
+          {-2500.0 + EXTENT_WALL_LENGTH!r}, {-1500.0 + EXTENT_WALL_THICKNESS!r}, 2000.0, 400.0)
+axis_box("COLUMN", (-500.0,-1425.0,0.0), (-500.0,-1425.0,2000.0), {EXTENT_COLUMN_SIDE!r}, 54.0)
+ang = math.radians({EXTENT_WALL_ROTATION_DEG!r})
+plane = Rhino.Geometry.Plane(
+    Rhino.Geometry.Point3d(2000.0, 800.0, 1000.0),
+    Rhino.Geometry.Vector3d(math.cos(ang), math.sin(ang), 0.0),
+    Rhino.Geometry.Vector3d(-math.sin(ang), math.cos(ang), 0.0))
+add_box("WALL_ROT30", plane, {EXTENT_WALL_LENGTH!r}, {EXTENT_WALL_THICKNESS!r}, 2000.0, 400.0)
+"""
+
+
+# name -> (long side, short side, bearing of the long axis) from the drawn geometry. The
+# angle is None where the footprint is square and its long axis is therefore arbitrary.
+EXTENT_EXPECTED = {
+    "WALL": (EXTENT_WALL_LENGTH, EXTENT_WALL_THICKNESS, 0.0),
+    "WALL_ROT30": (EXTENT_WALL_LENGTH, EXTENT_WALL_THICKNESS, EXTENT_WALL_ROTATION_DEG),
+    "COLUMN": (EXTENT_COLUMN_SIDE, EXTENT_COLUMN_SIDE, None),
+}
+
+# Five percent. The sampling walks a grid across the smaller element, so an edge sample can
+# sit up to one spacing short of the true boundary; measured, the worst side is 152 against
+# 150, or 1.3%. There is no risk of admitting a wrong answer with room to spare - the rotated
+# wall's world axis-aligned box is 1071 x 705, which is 370% out on the short side.
+EXTENT_TOLERANCE = 0.05
+
+# The long axis is the whole point for a wall: a rectangle of the right size lying in the
+# wrong direction restrains the wrong rotation. Measured within 0.1 degree.
+EXTENT_ANGLE_TOLERANCE_DEG = 2.0
+
+
+def check_extent(send: Callable[[str, dict], Any], ids: list[str]) -> list[str]:
+    """Every bearing's measured rectangle against the footprint it was drawn with."""
+    graph = send("get_connectivity_graph", {"ids": ids})
+    names = {node["i"]: node.get("name", "") for node in graph.get("n", [])}
+    measured = graph.get("contact_extent") or []
+
+    problems = []
+    seen = set()
+    for entry in measured:
+        # Every contact here is an element bearing on the pad, so the element is whichever
+        # end of the edge is not the pad.
+        pair = [names.get(entry["a"], ""), names.get(entry["b"], "")]
+        named = [name for name in pair if name in EXTENT_EXPECTED]
+        if len(named) != 1:
+            continue
+
+        name = named[0]
+        seen.add(name)
+        want_long, want_short, want_angle = EXTENT_EXPECTED[name]
+        sides = [(entry["length_u"], entry["u"]), (entry["length_v"], entry["v"])]
+        sides.sort(key=lambda pair: pair[0], reverse=True)
+        (got_long, long_axis), (got_short, _) = sides
+        for label, want, got_value in (
+            ("long", want_long, got_long), ("short", want_short, got_short)
+        ):
+            if abs(got_value - want) > want * EXTENT_TOLERANCE:
+                problems.append(
+                    f"{name} bearing {label} side {got_value:.0f} mm, expected {want:.0f}")
+
+        # Which way the long side runs. A rectangle of the right size in the wrong direction
+        # restrains the wrong rotation, and it is the one thing a world-aligned box can never
+        # get right for a rotated element.
+        if want_angle is not None:
+            got_angle = math.degrees(math.atan2(long_axis[1], long_axis[0])) % 180.0
+            off = abs(got_angle - (want_angle % 180.0))
+            off = min(off, 180.0 - off)
+            if off > EXTENT_ANGLE_TOLERANCE_DEG:
+                problems.append(
+                    f"{name} bearing long axis at {got_angle:.1f} deg, expected {want_angle:.1f}")
+
+        # A bearing on a level pad is horizontal, so its normal is vertical. A rectangle
+        # fitted to the wrong plane passes the side lengths and fails here.
+        normal = entry.get("normal") or [0.0, 0.0, 0.0]
+        if abs(abs(normal[2]) - 1.0) > 1e-3:
+            problems.append(f"{name} bearing normal {normal}, expected vertical")
+
+    for name in EXTENT_EXPECTED:
+        if name not in seen:
+            problems.append(f"{name} has no measured bearing extent")
+
+    return problems
+
+
+# --------------------------------------------------------------------------------------
 # The suite
 # --------------------------------------------------------------------------------------
 #
@@ -497,7 +614,21 @@ SLOW = "slow"
 MICRO = "micro"
 
 
+GEOMETRY = "geometry"
+
+
 CASES: list[Case] = [
+    Case(
+        name="bearing_extent",
+        mode="none",
+        tier=GEOMETRY,
+        stable=True,
+        reason=(
+            "a 1150 x 150 mm wall, a 150 mm column and the same wall turned 30 degrees; "
+            "an axis-aligned box reports the third as 1146 x 671"),
+        build=extent_scene,
+        check=check_extent,
+    ),
     Case(
         name="stair3_step100",
         mode="contact",

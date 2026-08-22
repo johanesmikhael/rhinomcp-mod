@@ -15,9 +15,11 @@ namespace RhinoMCPModPlugin;
 internal static class MCPConnectivityGraphStore
 {
     public const string DocumentStringKey = "rhinomcp-mod:connectivity-graph";
-    // v2 adds candidate/limit/truncation stats. v1 payloads are rejected rather than
-    // loaded, so a restored graph can never under-report truncation.
-    private const int SchemaVersion = 2;
+    // v2 adds candidate/limit/truncation stats. v3 adds each contact's bearing region.
+    // Older payloads are rejected rather than loaded: a v2 graph restored into v3 would carry
+    // no regions, and every contact would silently report itself as a point - the same
+    // failure as computing them and dropping them, arriving by a different route.
+    private const int SchemaVersion = 3;
 
     public static bool TryLoad(RhinoDoc doc, string fingerprint, out MCPConnectivityGraph graph)
     {
@@ -73,7 +75,7 @@ internal static class MCPConnectivityGraphStore
                     return false;
                 }
 
-                edges.Add(new Edge
+                var restored = new Edge
                 {
                     A = a,
                     B = b,
@@ -81,7 +83,41 @@ internal static class MCPConnectivityGraphStore
                         edgeArray[2].Value<double>(),
                         edgeArray[3].Value<double>(),
                         edgeArray[4].Value<double>())
-                });
+                };
+
+                // The bearing region, when the contact was found by sampling. Eleven numbers
+                // follow the point: the rectangle's centre, its two in-plane axes, and its
+                // half-lengths. Contacts found by intersection or proximity have none and
+                // stop at index 5.
+                if (edgeArray.Count >= 16)
+                {
+                    var origin = new Point3d(
+                        edgeArray[5].Value<double>(),
+                        edgeArray[6].Value<double>(),
+                        edgeArray[7].Value<double>());
+                    var axisU = new Vector3d(
+                        edgeArray[8].Value<double>(),
+                        edgeArray[9].Value<double>(),
+                        edgeArray[10].Value<double>());
+                    var axisV = new Vector3d(
+                        edgeArray[11].Value<double>(),
+                        edgeArray[12].Value<double>(),
+                        edgeArray[13].Value<double>());
+                    var frame = new Plane(origin, axisU, axisV);
+                    if (frame.IsValid)
+                    {
+                        restored.Extent = new ContactExtent
+                        {
+                            IsValid = true,
+                            Frame = frame,
+                            HalfU = edgeArray[14].Value<double>(),
+                            HalfV = edgeArray[15].Value<double>(),
+                            Samples = edgeArray.Count > 16 ? edgeArray[16].Value<int>() : 0
+                        };
+                    }
+                }
+
+                edges.Add(restored);
             }
 
             graph = new MCPConnectivityGraph(nodes, edges, tolerance)
@@ -151,7 +187,25 @@ internal static class MCPConnectivityGraphStore
         foreach (var edge in graph.Edges)
         {
             var contact = edge.ContactPoint.IsValid ? edge.ContactPoint : Point3d.Origin;
-            edges.Add(new JArray(edge.A, edge.B, contact.X, contact.Y, contact.Z));
+            var payload = new JArray(edge.A, edge.B, contact.X, contact.Y, contact.Z);
+            if (edge.Extent.IsValid)
+            {
+                var frame = edge.Extent.Frame;
+                payload.Add(frame.Origin.X);
+                payload.Add(frame.Origin.Y);
+                payload.Add(frame.Origin.Z);
+                payload.Add(frame.XAxis.X);
+                payload.Add(frame.XAxis.Y);
+                payload.Add(frame.XAxis.Z);
+                payload.Add(frame.YAxis.X);
+                payload.Add(frame.YAxis.Y);
+                payload.Add(frame.YAxis.Z);
+                payload.Add(edge.Extent.HalfU);
+                payload.Add(edge.Extent.HalfV);
+                payload.Add(edge.Extent.Samples);
+            }
+
+            edges.Add(payload);
         }
 
         return new JObject
