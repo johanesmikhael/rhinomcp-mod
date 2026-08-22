@@ -607,8 +607,15 @@ CASES: list[Case] = [
         # relatively stiffer still, while the linear x direction moved by 2.1. What did not
         # move is the ratio the case exists to show - braced over unbraced, 1.46 against the
         # old 1.48.
+        #
+        # They then fell by 0.71 when member length stopped being read off the world
+        # axis-aligned bounding box. Twenty of this bridge's forty members are diagonal webs
+        # and every brace is a diagonal, and a tilted member's box is shorter than the member
+        # - 1.41 m for a 2 m web - so k, going as 1/L^2, came out 1.7 times too stiff for
+        # exactly those members. The x direction barely moved, because the chords carrying it
+        # are axis-aligned and were never affected. The ratio survived again, 1.41.
         expect={
-            "sway.sway_stiffness_y_n_per_m": (1.00e9, 1.30e9),
+            "sway.sway_stiffness_y_n_per_m": (7.2e8, 9.2e8),
             "sway.sway_stiffness_x_n_per_m": (4.5e9, 5.8e9),
         },
     ),
@@ -620,7 +627,7 @@ CASES: list[Case] = [
         reason="0 mechanisms; stiffer in y than the unbraced bridge, 1.66e9 against 1.13e9",
         build=bridge_build(braced=True),
         expect={
-            "sway.sway_stiffness_y_n_per_m": (1.45e9, 1.85e9),
+            "sway.sway_stiffness_y_n_per_m": (1.02e9, 1.28e9),
             "sway.sway_stiffness_x_n_per_m": (4.3e9, 5.5e9),
         },
     ),

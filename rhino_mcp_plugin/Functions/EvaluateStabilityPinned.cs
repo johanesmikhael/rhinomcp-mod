@@ -255,13 +255,59 @@ public partial class RhinoMCPModFunctions
     /// Falls back to the load-referenced figure when the geometry gives no usable length -
     /// a blob with no long axis is not a member and has no EA/L to speak of.
     /// </remarks>
+    /// <summary>
+    /// How long a member is, independently of how it is turned in the world.
+    /// </summary>
+    /// <remarks>
+    /// This was the longest edge of the world axis-aligned bounding box, which is exact for a
+    /// member lying along an axis and wrong for every other one: tilt a 2 m member into the
+    /// x-z diagonal and its box shrinks to 1.41 m while the member does not. Since k goes as
+    /// 1/L^2 that reported 6.25e8 N/m where the truth was 3.61e8 - the same member, the same
+    /// mass, 1.7 times stiffer for being rotated. Twenty of the test bridge's forty members
+    /// are diagonal webs and all five braces are diagonals, so every sway figure it has ever
+    /// produced carried this.
+    ///
+    /// The greatest distance between any two vertices is orientation-independent by
+    /// construction. For a prismatic member it is sqrt(L^2 + section^2), which for anything
+    /// slender enough to call a member is L to a fraction of a percent - 2.011 m for a 2 m
+    /// member of 150 mm section. For a stubby body it is the diagonal, and a body with no
+    /// long axis has no EA/L worth speaking of anyway.
+    /// </remarks>
+    private static double MemberLengthMeters(Mesh mesh)
+    {
+        if (mesh == null || mesh.Vertices.Count < 2)
+        {
+            return 0.0;
+        }
+
+        // Every pair is fine for the boxes and sections this sees, and the bound keeps a
+        // dense mesh from turning a stiffness lookup into a quadratic sweep. Past it the
+        // bounding box diagonal is used, which is still orientation-independent enough to
+        // beat the longest edge.
+        const int PairwiseVertexLimit = 512;
+        if (mesh.Vertices.Count > PairwiseVertexLimit)
+        {
+            var box = mesh.GetBoundingBox(true);
+            return box.IsValid ? box.Diagonal.Length : 0.0;
+        }
+
+        var points = mesh.Vertices.ToPoint3dArray();
+        var longest = 0.0;
+        for (var i = 0; i < points.Length; i++)
+        {
+            for (var j = i + 1; j < points.Length; j++)
+            {
+                longest = Math.Max(longest, points[i].DistanceTo(points[j]));
+            }
+        }
+
+        return longest;
+    }
+
     private static double MemberAxialStiffness(
         PinnedBody body, double specificStiffness, double carriedNewtons, double slipMeters)
     {
-        var box = body.SolverMesh.GetBoundingBox(true);
-        var length = box.IsValid
-            ? Math.Max(box.Diagonal.X, Math.Max(box.Diagonal.Y, box.Diagonal.Z))
-            : 0.0;
+        var length = MemberLengthMeters(body.SolverMesh);
         var mass = body.Node.MassKilograms;
 
         if (!(length > 0.0) || !(mass > 0.0) || !(specificStiffness > 0.0))

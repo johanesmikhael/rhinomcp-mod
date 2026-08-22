@@ -127,6 +127,26 @@ to twice its static deflection, and that is correct physics, not error - so a we
 integrator and an over-damped one report different things about the same structure. Assert a
 calibration on a settled figure; the peak belongs to the verdict.
 
+**An axis-aligned box is not a member.** `MemberAxialStiffness` took the longest edge of the
+world AABB as the member's length, which is exact for a member lying along an axis and wrong
+for every other one: a 2 m member tilted into the x-z diagonal has a 1.41 m box, and since
+k goes as 1/L^2 it reported 6.25e8 N/m where the truth was 3.61e8. Same member, same mass,
+1.7 times stiffer for being rotated. The greatest distance between any two vertices is
+orientation-independent by construction and is L to a fraction of a percent for anything
+slender enough to call a member.
+
+**Three bugs in one day shared a shape**: a quantity correct in the one orientation or
+configuration it was first tested in, and silently wrong elsewhere - the end springs, the
+per-body dashpot, the member length. None was caught by an existing case. Every one was caught
+the first time a case varied the thing being assumed. That is an argument about test coverage
+rather than about any of them.
+
+**The graph measures contact properly and then averages it away.** `TryGetBearingCentroid`
+samples the real region where two meshes come within the contact gap, at a spacing taken from
+the smaller element, and returns the centroid. The extent is computed and discarded, and
+`TryBuildContactPatch` downstream tries to rebuild it from bounding boxes. Before reaching for
+a better box, check whether the geometry was already measured somewhere upstream.
+
 ## On numerics
 
 **A test model's cost is set by its heaviest, stubbiest body, not by the physics under test.**
