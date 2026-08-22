@@ -131,6 +131,13 @@ public partial class RhinoMCPModFunctions
         /// another two without changing what every joint means.
         /// </summary>
         public List<ContactExtent> JointExtents { get; } = new();
+
+        /// <summary>
+        /// What each joint is, in the same order. Welded until something says otherwise -
+        /// that is the behaviour these joints already had, since a spring over a measured
+        /// bearing carries moment and tension both.
+        /// </summary>
+        public List<StabilityRigidBodies.JointType> JointTypes { get; } = new();
         public List<Point3d> GroundPoints { get; } = new();
         public Point3d[] Markers { get; set; }
         public int[] MarkerParticles { get; set; }
@@ -648,6 +655,7 @@ public partial class RhinoMCPModFunctions
                 {
                     bodies[body].JointPoints.Add(point);
                     bodies[body].JointExtents.Add(nodeExtent);
+                    bodies[body].JointTypes.Add(StabilityRigidBodies.JointType.Welded);
                 }
             }
         }

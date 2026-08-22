@@ -106,6 +106,45 @@ internal static class StabilityRigidBodies
         }
     }
 
+    /// <summary>
+    /// What a joint is, as three switches over one spring.
+    /// </summary>
+    /// <remarks>
+    /// The three modes this replaces were three solvers answering three questions. They are
+    /// one spring with two flags, and the flags decide how the *measured bearing region* is
+    /// used rather than adding behaviour of their own:
+    ///
+    /// - <see cref="Pin"/> collapses the region to its centre. One point has no lever arm, so
+    ///   it carries force in three directions and no moment. That is the pinned idealisation,
+    ///   and it is now something chosen rather than something the geometry forced.
+    /// - <see cref="Welded"/> uses the region as measured. Points d apart resist rotation with
+    ///   k d^2, so the moment comes from the bearing rather than from a constant.
+    /// - <see cref="Contact"/> is welded with each point able to push and not pull, plus
+    ///   friction across it. A bearing that carries no tension opens when the load leaves it,
+    ///   which is what a dry-stacked assembly does and what a pin cannot express.
+    ///
+    /// There is deliberately no "free". It would not be a construction type but a correction
+    /// to the graph - a statement that a detected contact is not a connection - and anything
+    /// that physically touches at least pushes, so contact is the honest floor. It would also
+    /// be a poor fit for the weakest-governs rule below: one such rule on an element would
+    /// silently delete every joint it has, including those the element opposite declared
+    /// welded, and a structure would come apart with nothing in the report saying why. A
+    /// spurious contact is a real problem and wants a pairwise suppression, where it cannot
+    /// reach past the pair it names.
+    ///
+    /// Ordered weakest to strongest deliberately: where two elements disagree about the joint
+    /// between them, the weaker governs, because a hinge assumed where a moment connection
+    /// exists reports a structure softer and more mechanism-prone than it is. That fails safe
+    /// for a stability verdict, and unlike "last rule wins" it does not depend on the order
+    /// the rules were given in.
+    /// </remarks>
+    internal enum JointType
+    {
+        Contact = 0,
+        Pin = 1,
+        Welded = 2
+    }
+
     /// <summary>A place where bodies meet, or where one is held to the ground.</summary>
     internal sealed class Site
     {
@@ -114,6 +153,9 @@ internal static class StabilityRigidBodies
         public double Stiffness;
         public bool Grounded;
         public Point3d Anchor;
+
+        /// <summary>What this joint is. Set from the model; defaults to a bearing.</summary>
+        public JointType Type = JointType.Contact;
 
         /// <summary>
         /// Undoes the dilution in pulling each body toward the average of everything meeting
@@ -195,10 +237,15 @@ internal static class StabilityRigidBodies
     /// all stays where it was, which keeps every contact found by intersection or proximity
     /// behaving exactly as before.
     /// </remarks>
-    internal static List<Point3d> BearingPoints(Point3d centre, ContactExtent extent)
+    internal static List<Point3d> BearingPoints(
+        Point3d centre, ContactExtent extent, JointType type)
     {
         var points = new List<Point3d>();
-        if (!extent.IsValid)
+
+        // A pin is the bearing deliberately not used. Collapsing it to one point is what
+        // makes it carry no moment - the freedom is granted rather than discovered, which is
+        // the whole point of naming the joint rather than measuring it.
+        if (!extent.IsValid || type == JointType.Pin)
         {
             points.Add(centre);
             return points;
@@ -746,20 +793,28 @@ public partial class RhinoMCPModFunctions
         // rotation about the line it touches along and not about the other axis. That is
         // correct rather than a degenerate case to guard against.
         var jointShare = new List<double[]>(pinned.Count);
+        var slotTypes = new List<StabilityRigidBodies.JointType[]>(pinned.Count);
         for (var i = 0; i < pinned.Count; i++)
         {
             var attachments = new List<Point3d>();
             var share = new List<double>();
+            var types = new List<StabilityRigidBodies.JointType>();
             for (var j = 0; j < pinned[i].JointPoints.Count; j++)
             {
                 var extent = j < pinned[i].JointExtents.Count
                     ? pinned[i].JointExtents[j]
                     : default;
-                var spread = StabilityRigidBodies.BearingPoints(pinned[i].JointPoints[j], extent);
+                var type = j < pinned[i].JointTypes.Count
+                    ? pinned[i].JointTypes[j]
+                    : StabilityRigidBodies.JointType.Welded;
+
+                var spread = StabilityRigidBodies.BearingPoints(
+                    pinned[i].JointPoints[j], extent, type);
                 foreach (var point in spread)
                 {
                     attachments.Add(point);
                     share.Add(1.0 / spread.Count);
+                    types.Add(type);
                 }
             }
 
@@ -773,6 +828,13 @@ public partial class RhinoMCPModFunctions
 
             groundSlots.Add(grounded);
             jointShare.Add(share.ToArray());
+            while (types.Count < attachments.Count)
+            {
+                // Ground attachments: the earth holds what stands on it, both ways.
+                types.Add(StabilityRigidBodies.JointType.Welded);
+            }
+
+            slotTypes.Add(types.ToArray());
             bodies.Add(StabilityRigidBodies.Create(
                 pinned[i].SolverMesh, pinned[i].Node.MassKilograms, attachments));
         }
@@ -798,7 +860,8 @@ public partial class RhinoMCPModFunctions
                     sites.Add(new StabilityRigidBodies.Site
                     {
                         Anchor = point,
-                        Stiffness = double.MaxValue
+                        Stiffness = double.MaxValue,
+                        Type = StabilityRigidBodies.JointType.Welded
                     });
                 }
 
@@ -816,6 +879,15 @@ public partial class RhinoMCPModFunctions
                 // member feeding it, and the axial answer would move for a reason that has
                 // nothing to do with axial behaviour.
                 site.Stiffness = Math.Min(site.Stiffness, 2.0 * stiffness[b] * jointShare[b][slot]);
+
+                // Where the elements meeting here disagree about what the joint is, the
+                // weaker governs: a hinge assumed where a moment connection exists reports
+                // the structure softer and more mechanism-prone than it is, which fails safe
+                // for a stability verdict.
+                if (slotTypes[b][slot] < site.Type)
+                {
+                    site.Type = slotTypes[b][slot];
+                }
                 if (groundSlots[b].Contains(slot))
                 {
                     site.Grounded = true;
