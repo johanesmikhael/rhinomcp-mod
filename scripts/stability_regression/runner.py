@@ -55,6 +55,10 @@ class CaseFailure(Exception):
     pass
 
 
+# Command-line overrides, applied only where a case has not spoken for itself.
+OVERRIDES: dict[str, Any] = {}
+
+
 def execute(connection: RhinoConnection, code: str) -> str:
     result = connection.send_command("execute_rhinoscript_python_code", {"code": code})
     if result.get("success") is not True:
@@ -91,6 +95,18 @@ def evaluate(
         "display": False,
     }
     params.update(case.params)
+
+    # Applied under the case's own parameters, never over them.
+    if OVERRIDES.get("integrator") and case.mode in ("pinned", "pinned_dynamic"):
+        params.setdefault("integrator", OVERRIDES["integrator"])
+        if OVERRIDES["integrator"] == "rigid_bodies":
+            # The rigid path damps joints against relative motion, which barely touches a
+            # mode where both ends move together, so its 2% is not the particle path's 2%.
+            params.setdefault("damping_ratio", 0.2)
+    if OVERRIDES.get("fast") and case.mode in ("pinned", "pinned_dynamic"):
+        params.setdefault("lateral_load_fraction", 0.0)
+        params.setdefault("timestep_safety", 0.4)
+
     result = connection.send_command("evaluate_stability", params)
     if result.get("success") is not True:
         raise CaseFailure(result.get("message") or json.dumps(result)[:400])
@@ -199,6 +215,12 @@ def main() -> int:
         "--tier", default=FAST, choices=[FAST, GEOMETRY, MICRO, SLOW, "all"])
     parser.add_argument("--case", action="append", default=None)
     parser.add_argument("--update-baseline", action="store_true")
+    # Run every pinned case on one integrator, to compare the two across the whole suite
+    # rather than on whichever model is at hand. Cases that name an integrator themselves
+    # keep it - the free-fall pair exists precisely to test one each.
+    parser.add_argument("--integrator", default=None)
+    parser.add_argument("--fast-settings", action="store_true",
+                        help="skip the sway probe and take the coarser step, for screening")
     parser.add_argument("--json", type=pathlib.Path, default=None)
     args = parser.parse_args()
 
@@ -208,6 +230,9 @@ def main() -> int:
         selected = list(case_module.CASES)
     else:
         selected = case_module.in_tier(args.tier)
+
+    OVERRIDES["integrator"] = args.integrator
+    OVERRIDES["fast"] = args.fast_settings
 
     baseline = load_baseline()
     ceilings = dict(baseline.get("ceilings", {}))

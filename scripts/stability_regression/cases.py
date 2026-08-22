@@ -436,6 +436,63 @@ def micro_stack_build(storeys: int) -> Callable[[], str]:
     return build
 
 
+# --------------------------------------------------------------------------------------
+# Splayed legs: the same members, leaning
+# --------------------------------------------------------------------------------------
+#
+# The upright stack tests axial stiffness along the world Z axis, which is the one direction
+# that hides a whole class of error - a member's length read off a world-aligned box is right
+# only when the member lies along an axis, and every stiffness here goes as 1/L^2. Leaning
+# the same legs by 30 degrees changes nothing about the members and everything about the
+# arithmetic.
+#
+# Three legs of length L at an angle theta from vertical, carrying W. Each takes W/(3 cos
+# theta) along its own axis and shortens by that over k, and the block descends by the
+# shortening over cos theta again:
+#
+#     delta = W / (3 k cos^2 theta)
+#
+# At 30 degrees cos^2 is 3/4, so the same legs under the same load must deflect exactly 4/3
+# of what they do upright. That ratio depends on nothing but the angle.
+
+MICRO_SPLAY_DEG = 30.0
+MICRO_SPLAY_TOP_RADIUS = 200.0
+
+
+def micro_splay_geometry() -> tuple[float, float, float]:
+    """Bottom radius, top radius and height for legs of MICRO_COLUMN_MM at MICRO_SPLAY_DEG."""
+    lean = math.radians(MICRO_SPLAY_DEG)
+    bottom = MICRO_SPLAY_TOP_RADIUS + MICRO_COLUMN_MM * math.sin(lean)
+    return bottom, MICRO_SPLAY_TOP_RADIUS, MICRO_COLUMN_MM * math.cos(lean)
+
+
+def micro_splay_shortening_m() -> float:
+    lean = math.radians(MICRO_SPLAY_DEG)
+    return (MICRO_BLOCK_KG * GRAVITY) / (micro_storey_stiffness() * math.cos(lean) ** 2)
+
+
+MICRO_SPLAY_M = micro_splay_shortening_m()
+
+
+def micro_splay_build() -> str:
+    bottom, top, height = micro_splay_geometry()
+    # A wide, light pad: it has to span the splayed feet without becoming the stiffest body
+    # in the model, since the timestep is set by whichever body that is while a pad
+    # contributes about a percent of the answer.
+    lines = ['world_box("PAD", -1800.0, -1800.0, -200.0, 1800.0, 1800.0, 0.0, 2000.0)']
+    for slot in range(3):
+        angle = math.radians(120.0 * slot)
+        lines.append(
+            f'axis_box("LEG_{slot}", '
+            f'({bottom * math.cos(angle)!r},{bottom * math.sin(angle)!r},0.0), '
+            f'({top * math.cos(angle)!r},{top * math.sin(angle)!r},{height!r}), '
+            f'{MICRO_SECTION_MM!r}, {MICRO_COLUMN_KG!r})')
+    lines.append(
+        f'world_box("BLOCK", -500.0, -500.0, {height!r}, 500.0, 500.0, '
+        f'{height + 200.0!r}, {MICRO_BLOCK_KG!r})')
+    return "\n".join(lines)
+
+
 # Isolate the axial question: no notional load, no built-in imperfection, nothing to settle
 # but the weight itself.
 MICRO_PARAMS = {"lateral_load_fraction": 0.0, "imperfection_fraction": 0.0}
@@ -864,6 +921,19 @@ for _integrator in ("particles", "rigid_bodies"):
             f"{MICRO_ONE_STOREY_M * 1000.0:.3f} mm"),
         build=micro_stack_build(1),
         expect=micro_expect(MICRO_ONE_STOREY_M),
+        params=dict(MICRO_PARAMS, **MICRO_DAMPING[_integrator], integrator=_integrator),
+    ))
+    CASES.append(Case(
+        name=f"axial_splayed_{_integrator}",
+        mode="pinned_dynamic",
+        tier=MICRO,
+        stable=True,
+        reason=(
+            f"the same three legs leaning {MICRO_SPLAY_DEG:.0f} degrees deflect "
+            f"W/(3k cos^2) = {MICRO_SPLAY_M * 1000.0:.3f} mm, exactly 4/3 of the "
+            f"{MICRO_ONE_STOREY_M * 1000.0:.3f} mm they give upright"),
+        build=micro_splay_build,
+        expect=micro_expect(MICRO_SPLAY_M),
         params=dict(MICRO_PARAMS, **MICRO_DAMPING[_integrator], integrator=_integrator),
     ))
     CASES.append(Case(
