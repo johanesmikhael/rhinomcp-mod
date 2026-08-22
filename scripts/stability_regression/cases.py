@@ -437,11 +437,39 @@ def micro_stack_build(storeys: int) -> Callable[[], str]:
 MICRO_PARAMS = {"lateral_load_fraction": 0.0, "imperfection_fraction": 0.0}
 
 
+# These cases measure a settled deflection, so they are run with enough damping to reach one
+# inside the run. That is a legitimate knob here and would not be in a verdict case: a static
+# deflection does not depend on damping, only the time taken to arrive at it does.
+#
+# The two integrators need different amounts, and the difference is itself a finding. The
+# particle path damps each particle against its own local stiffness, which over-damps the slow
+# global mode - at 2% it creeps up to the answer monotonically and never overshoots, and at 30%
+# it reaches only a quarter of the answer in half a second. The rigid path damps each joint
+# against relative motion at that joint, which barely touches a mode where both ends move
+# together, so at 2% it still rings after 0.5 s and settles only at 20%. Neither ratio means
+# what a code means by 2% of critical, and this is where that is on record.
+MICRO_DAMPING = {
+    "particles": {},
+    "rigid_bodies": {"damping_ratio": 0.2},
+}
+
+
 def micro_expect(exact_m: float) -> dict[str, tuple[float, float]]:
-    # Five percent. The arithmetic is exact; the tolerance covers the columns' own weight,
-    # the pad's shortening and the ground anchor's give, which together are under one part
-    # in a hundred.
-    return {"max_pin_displacement_m": (exact_m * 0.95, exact_m * 1.05)}
+    # Asserted on where it came to rest, not on the furthest it went. A load applied suddenly
+    # overshoots to twice its static deflection and rings back - correct physics, and the right
+    # thing for a verdict to judge, but the wrong thing to calibrate against: a well-damped
+    # integrator and an over-damped one report different peaks for the same structure. The
+    # settled figure means nothing unless the run reached a conclusion, so that is asserted
+    # too rather than assumed.
+    #
+    # Ten percent. The arithmetic is exact and the model's own contaminants - the columns'
+    # weight, the pad's shortening, the ground anchor's give - are under one percent between
+    # them. The rest is the settling residual, which is what a run that stops after half a
+    # second of real time has left over.
+    return {
+        "conclusive": (1.0, 1.0),
+        "settled_displacement_m": (exact_m * 0.90, exact_m * 1.10),
+    }
 
 
 # --------------------------------------------------------------------------------------
@@ -698,7 +726,7 @@ for _integrator in ("particles", "rigid_bodies"):
             f"{MICRO_ONE_STOREY_M * 1000.0:.3f} mm"),
         build=micro_stack_build(1),
         expect=micro_expect(MICRO_ONE_STOREY_M),
-        params=dict(MICRO_PARAMS, integrator=_integrator),
+        params=dict(MICRO_PARAMS, **MICRO_DAMPING[_integrator], integrator=_integrator),
     ))
     CASES.append(Case(
         name=f"axial_two_storeys_{_integrator}",
@@ -709,9 +737,31 @@ for _integrator in ("particles", "rigid_bodies"):
             f"two storeys in series, the lower also carrying the spacer: "
             f"{MICRO_TWO_STOREY_M * 1000.0:.3f} mm against the single storey's "
             f"{MICRO_ONE_STOREY_M * 1000.0:.3f}"),
+        # Committed failing on the rigid-body integrator, at 0.780 mm against 0.928, and the
+        # cause is worth more than the case.
+        #
+        # The spacer between the storeys is 200 mm thick, and the clustering radius is the
+        # body's own smallest dimension - so its top and bottom faces sit at exactly that
+        # radius and merge. The middle nodes come back as three bodies meeting at one point,
+        # 200 mm from where either face is, instead of two nodes with the spacer between
+        # them. Merging them is defensible: a 200 mm plate of 3.4e9 N/m contributes no
+        # compliance worth modelling.
+        #
+        # What is not defensible is that it changes the answer, and only for one integrator.
+        # The particle path keeps a member's compliance in its body-to-frame springs, which do
+        # not care how many bodies share a node, and passes. The rigid path keeps all of it in
+        # the joint springs at 2k per end, so removing a joint from a load path removes a
+        # spring from the series and stiffens the whole stack by 16%. **A member's stiffness
+        # there depends on how many joints it happens to have**, which is a property of the
+        # mesh rather than of the member.
+        #
+        # Two things to fix, in this order: the joint stiffness should be shared out along a
+        # member's load path rather than fixed at 2k per end, and the clustering radius should
+        # come from the contact patch rather than the body's smallest dimension, where opposite
+        # faces of any plate land exactly on the threshold and merge on a tie.
         build=micro_stack_build(2),
         expect=micro_expect(MICRO_TWO_STOREY_M),
-        params=dict(MICRO_PARAMS, integrator=_integrator),
+        params=dict(MICRO_PARAMS, **MICRO_DAMPING[_integrator], integrator=_integrator),
     ))
 
 

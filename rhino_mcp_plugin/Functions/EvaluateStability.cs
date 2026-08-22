@@ -509,7 +509,8 @@ public partial class RhinoMCPModFunctions
                         rigidResult["evaluation_mode"] = PinnedDynamicEvaluationMode;
                         foreach (var key in new[]
                         {
-                            "integrator", "max_pin_displacement_m", "timestep_s", "timestep_safety", "steps_run",
+                            "integrator", "max_pin_displacement_m", "settled_displacement_m", "timestep_s",
+                            "timestep_safety", "steps_run",
                             "simulated_seconds", "duration_requested_s", "damping_ratio",
                             "peak_speed_m_s", "total_weight_n", "time_samples_s",
                             "speed_samples_m_s", "member_stiffness_min_n_per_m",
@@ -551,7 +552,8 @@ public partial class RhinoMCPModFunctions
                     dynamicResult["evaluation_mode"] = PinnedDynamicEvaluationMode;
                     foreach (var key in new[]
                     {
-                        "max_pin_displacement_m", "timestep_s", "steps_run", "simulated_seconds",
+                        "max_pin_displacement_m", "settled_displacement_m", "timestep_s",
+                        "steps_run", "simulated_seconds",
                         "duration_requested_s", "damping_ratio", "peak_speed_m_s", "total_weight_n",
                         "imperfection_m", "imperfection_fraction", "imperfection_speed_m_s", "settled",
                         "verdict", "conclusive", "converged", "decay_ratio_per_swing",

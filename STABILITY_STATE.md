@@ -87,6 +87,48 @@ Welded is an upper bound: it supplies every moment connection the real assembly 
    not need discovering. Braced went 32 clusters to 25 with 0 splits, and its spurious
    hinge pairs from 13 to 6, exactly the 7 the splits were creating.
 
+## A wall and a column are the same object to `pinned_dynamic`
+
+The connectivity graph emits **one bearing point per element pair**, so every joint in the
+pinned modes is a point pin however large the real contact is. Clustering cannot recover what
+was never emitted.
+
+Measured. A three-legged tower - pad, three 2 m columns on a triangle, block on top - gives
+`Kx` 2.49e7, `Ky` 2.50e7. Replacing two of those legs with a 1150 mm load-bearing wall of the
+same combined `EA/L` gives 2.27e7 and 2.29e7: no stiffer, and the cluster dump shows why - four
+nodes, one at the wall's top and one at its bottom. The wall is modelled as a pin-ended strut.
+
+A real wall stands in its own plane and sways out of it, which is why buildings need shear
+walls in two directions. This mode cannot express that: it reports the same near-isotropic
+softness either way, and no arrangement of walls will change it.
+
+**`contact` mode does see it.** The same wall comes back as a patch of 0.1725 m2 spanning the
+full 1150 mm against the column's 0.0225 m2, because that mode works from bearing patches with
+tributary areas rather than from graph points. So the two modes disagree about what a wall is,
+and the one that gets it right is the one that cannot report stiffness.
+
+Worth knowing before trusting a pinned sway number on anything with a wall, a slab or a wide
+bearing in it. It is also an argument for where the joint model should end up: patches, with a
+point pin as the degenerate case, rather than the reverse.
+
+### The three-legged tower is a mechanism, and the model does not say so
+
+Three pin-ended bars are three constraints; a rigid body needs six. The block keeps sway in x,
+sway in y and twist about z, and with all three legs parallel their length changes only at
+second order under each. The same family as the unbraced bridge.
+
+The model reports lateral stiffness of 2.5e7 - soft, 66x below the braced bridge and 4x below
+the tower's own axial stiffness, but not the near-zero the count implies. Under the notional
+load a true mechanism should have moved about 69 mm before second-order stiffening caught it;
+it moved 0.18. **The count and the measurement disagree by two orders**, and which is wrong is
+not established. It is the same question the unbraced bridge raised and is the strongest
+remaining reason to distrust a pinned sway figure in absolute terms.
+
+The micro cases use this tower deliberately and safely: with `lateral_load_fraction` and
+`imperfection_fraction` both zero, gravity vertical and the geometry symmetric, nothing excites
+the modes and the only motion is the axial squash being measured. Their `stable=True` is the
+expected verdict under those parameters, not a structural judgement.
+
 ## Agreed next steps, in order
 
 1. ~~Regression suite from the cases below.~~ **Done** - `scripts/stability_regression/`.

@@ -226,8 +226,11 @@ internal static class StabilityRigidBodies
                 heaviest = Math.Max(heaviest, bodies[index].Mass);
             }
 
+            // The gain the spring gets, for the same reason: the slip this force sees is the
+            // offset to the average of what meets here, which is the mean pairwise separation
+            // scaled by (n-1)/n. Without it the dashpot is diluted where the spring is not.
             damping[s] = heaviest > 0.0
-                ? 2.0 * dampingRatio * Math.Sqrt(sites[s].EffectiveStiffness * heaviest)
+                ? 2.0 * dampingRatio * sites[s].Gain * Math.Sqrt(sites[s].EffectiveStiffness * heaviest)
                 : 0.0;
         }
 
@@ -235,49 +238,64 @@ internal static class StabilityRigidBodies
     }
 
     /// <summary>
-    /// The step size, from the fastest rotation any body can be driven into.
+    /// The step size, from the fastest motion any body can be driven into.
     /// </summary>
     /// <remarks>
     /// Explicit integration diverges above dt = 2/omega. The linear limit is the familiar
     /// sqrt(k/m), but a pin near a body's centre is stiffer in rotation than in
     /// translation - the same force acts on a smaller lever against a small moment of
     /// inertia - so the rotational limit governs and both are taken.
+    ///
+    /// The stiffnesses are summed over the joints holding each body, not maximised over them.
+    /// A body pinned at n places is held by all n at once and rings at sqrt(sum k / m); taking
+    /// the largest single joint understates that by sqrt(n), and the understatement grows with
+    /// the model. It was enough to matter: a block on three columns held together, the same
+    /// block in a two-storey stack with six joints diverged from 0.9 mm to 17 in a quarter of
+    /// a second, and quartering the step by hand removed it - the logbook's test for marginal
+    /// stability against a real model error. sqrt(6) is 2.4, which is what a fix has to
+    /// recover, and quartering was the next thing tried after halving.
+    ///
+    /// An explicit dashpot has its own limit, dt = 2m/c, and it is summed the same way.
+    /// Sizing a joint on its heaviest body means the lightest one there is damped far beyond
+    /// critical, so this bound governs whenever the masses at a pin are wildly different.
     /// </remarks>
     internal static double Timestep(
         List<Body> bodies, List<Site> sites, double safety, double dampingRatio)
     {
         var damping = SiteDamping(bodies, sites, dampingRatio);
-        var fastest = 0.0;
+
+        var heldLinear = new double[bodies.Count];
+        var heldSpin = new double[bodies.Count];
+        var heldDamping = new double[bodies.Count];
         for (var s = 0; s < sites.Count; s++)
         {
             var site = sites[s];
             for (var i = 0; i < site.Bodies.Count; i++)
             {
-                var body = bodies[site.Bodies[i]];
-                if (!(body.Mass > 0.0))
-                {
-                    continue;
-                }
+                var index = site.Bodies[i];
+                var lever = bodies[index].Local[site.Slots[i]].Length;
+                heldLinear[index] += site.EffectiveStiffness;
+                heldSpin[index] += site.EffectiveStiffness * lever * lever;
+                heldDamping[index] += damping[s];
+            }
+        }
 
-                var siteStiffness = site.EffectiveStiffness;
-                fastest = Math.Max(fastest, Math.Sqrt(siteStiffness / body.Mass));
+        var fastest = 0.0;
+        for (var b = 0; b < bodies.Count; b++)
+        {
+            var body = bodies[b];
+            if (!(body.Mass > 0.0))
+            {
+                continue;
+            }
 
-                // An explicit dashpot diverges above dt = 2m/c just as a spring does above
-                // 2/omega. Sizing the joint on its heaviest body means the lightest one there
-                // is damped far beyond critical, so this bound governs whenever the masses at
-                // a pin are wildly different, and leaving it out would trade one divergence
-                // for another.
-                if (damping[s] > 0.0)
-                {
-                    fastest = Math.Max(fastest, damping[s] / body.Mass);
-                }
+            fastest = Math.Max(fastest, Math.Sqrt(heldLinear[b] / body.Mass));
+            fastest = Math.Max(fastest, heldDamping[b] / body.Mass);
 
-                var lever = body.Local[site.Slots[i]].Length;
-                var smallest = Math.Min(body.Inertia.X, Math.Min(body.Inertia.Y, body.Inertia.Z));
-                if (smallest > 0.0 && lever > 0.0)
-                {
-                    fastest = Math.Max(fastest, Math.Sqrt(siteStiffness * lever * lever / smallest));
-                }
+            var smallest = Math.Min(body.Inertia.X, Math.Min(body.Inertia.Y, body.Inertia.Z));
+            if (smallest > 0.0 && heldSpin[b] > 0.0)
+            {
+                fastest = Math.Max(fastest, Math.Sqrt(heldSpin[b] / smallest));
             }
         }
 
@@ -838,6 +856,16 @@ public partial class RhinoMCPModFunctions
         graph["mechanism_threshold_m"] = threshold;
         graph["span_m"] = span;
         graph["max_pin_displacement_m"] = worstPin;
+
+        // Where it came to rest, as distinct from the furthest it went on the way. A load
+        // applied suddenly overshoots to twice its static deflection and rings back - correct
+        // physics, and the right thing for a verdict to judge, but the wrong thing to
+        // calibrate against. The last sample is the projected limit on a run that converged,
+        // so it means the settled value in both cases and nothing at all when the run reached
+        // no conclusion.
+        graph["settled_displacement_m"] = run.DisplacementSamples.Count > 0
+            ? run.DisplacementSamples[run.DisplacementSamples.Count - 1]
+            : 0.0;
         graph["timestep_s"] = timestep;
         graph["timestep_safety"] = timestepSafety;
         graph["steps_run"] = run.Steps;

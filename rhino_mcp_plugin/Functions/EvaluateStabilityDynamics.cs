@@ -1184,6 +1184,19 @@ public partial class RhinoMCPModFunctions
         graph["mechanism_threshold_m"] = threshold;
         graph["span_m"] = span;
         graph["max_pin_displacement_m"] = worstPin;
+
+        // Where it came to rest, as distinct from the furthest it went on the way.
+        //
+        // A load applied suddenly overshoots to twice its static deflection and rings back:
+        // correct physics, not error, and the peak is the right thing for a verdict to judge.
+        // It is the wrong thing to calibrate against, because a well-damped integrator and an
+        // over-damped one then report different numbers for the same structure. This is the
+        // last sample, which for a run that converged is the projected limit rather than a
+        // point on a swing - so it means the settled value in both cases, and means nothing at
+        // all when `conclusive` is false.
+        graph["settled_displacement_m"] = run.DisplacementSamples.Count > 0
+            ? run.DisplacementSamples[run.DisplacementSamples.Count - 1]
+            : 0.0;
         graph["timestep_s"] = run.TimestepSeconds;
         graph["steps_run"] = run.Steps;
         graph["simulated_seconds"] = run.SimulatedSeconds;
