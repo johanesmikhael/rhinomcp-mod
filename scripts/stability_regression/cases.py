@@ -806,6 +806,8 @@ CASES: list[Case] = [
             "sway.sway_stiffness_y_n_per_m": (7.2e8, 9.2e8),
             "sway.sway_stiffness_x_n_per_m": (4.5e9, 5.8e9),
         },
+        # The probe is off by default now, and these are the cases that exist to measure it.
+        params={"lateral_load_fraction": 0.05},
     ),
     Case(
         name="bridge_braced_dynamic",
@@ -818,6 +820,7 @@ CASES: list[Case] = [
             "sway.sway_stiffness_y_n_per_m": (1.02e9, 1.28e9),
             "sway.sway_stiffness_x_n_per_m": (4.3e9, 5.5e9),
         },
+        params={"lateral_load_fraction": 0.05},
     ),
     # Committed failing. Two members hanging in mid-air with nothing holding them up must
     # fall: 1226 mm in half a second. They move 2.82 mm.

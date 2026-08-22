@@ -74,30 +74,26 @@ async def evaluate_stability(
             it joins - a screwed or doweled timber joint, where the timber's own
             stiffness is nearly irrelevant and a joint test gives this number
             directly. Per-joint values are not supported yet.
-        lateral_load_fraction: Pinned modes only. The sideways probe used to
-            measure sway stiffness, as a fraction of the weight carried.
-            Defaults to 0.05. This is an instrument, not a design load - the
-            codes' few-parts-per-thousand notional force moves this model less
-            than its own settling residual, so the reading would track the
-            residual rather than the structure.
+        lateral_load_fraction: Pinned modes only. The sideways probe that
+            measures sway stiffness, as a fraction of the weight carried.
+            **Off by default** - pass 0.05 to ask for it.
 
-            Set 0 to skip the probe, which is the cheapest speed-up available
-            and costs no correctness: measuring sway means settling the
-            assembly and settling it again under load along each horizontal
-            axis, so the probe is three further integrations on top of the
-            verdict run. Measured, a 47-member bridge goes 14.3 s to 2.3 s and
-            a small model on the rigid path 6.0 s to 1.1 s, with the verdict
-            unchanged in both.
+            It is off because measuring sway means settling the assembly and
+            settling it again under load along each horizontal axis: three
+            further integrations on top of the verdict run, six times the cost.
+            A 47-member bridge takes 14.3 s with it and 2.3 s without, and the
+            verdict is identical. Nothing is lost from the answer, only from
+            the report.
 
-            For screening many configurations, run with 0 first and re-run the
-            survivors with the probe on. Nothing is lost by the order: a model
-            that collapses skips the probe anyway, so only the ones that stand
-            ever cost the extra passes. What the probe buys, when you want it,
-            is the difference between a structure that is braced and one that
-            merely has not fallen yet - four of the test bridge's modes are
-            infinitesimal mechanisms that stand under their own weight, and
-            only the sway figure separates that bridge from a properly braced
-            one.
+            Ask for it once a candidate survives screening, because it answers
+            a question the verdict cannot: whether a structure is braced or
+            merely has not fallen yet. Four of the test bridge's modes are
+            infinitesimal mechanisms that stand under their own weight, and the
+            sway figure is the only thing separating that bridge from a
+            properly braced one. 0.05 is the value every figure in these notes
+            was measured at - the codes' few-parts-per-thousand notional force
+            moves this model less than its own settling residual, so a smaller
+            probe reads the residual rather than the structure.
         current_step: Number of solver steps to run. When omitted, Rhino uses a
             budget large enough for a collapse to develop; a short run makes a
             toppling assembly look stationary and so reads as stable. The run

@@ -147,6 +147,16 @@ the smaller element, and returns the centroid. The extent is computed and discar
 `TryBuildContactPatch` downstream tries to rebuild it from bounding boxes. Before reaching for
 a better box, check whether the geometry was already measured somewhere upstream.
 
+**A stiffness ceiling looked free and was not.** Cost is set by the stiffest body - the step
+is 2/omega against it - and on the splayed-leg case a 5000 kg block sat at 6.55e10 N/m over
+legs at 3.61e7, eighteen hundred times softer, contributing about a twentieth of a percent of
+the deflection and all of the timestep. Holding every body within 100x of the softest should
+therefore have been invisible and bought the square root of what was clipped. The closed-form
+cases said otherwise at once: the splayed legs went to 3.45 mm against an exact 0.603, and the
+two-storey stack 36% soft, while the rigid path was unaffected. Reverted, cause not yet found.
+**The arithmetic for why it should be safe was sound and the answer still moved**, which is the
+whole argument for having a case with an exact answer rather than a plausible one.
+
 ## On numerics
 
 **A test model's cost is set by its heaviest, stubbiest body, not by the physics under test.**

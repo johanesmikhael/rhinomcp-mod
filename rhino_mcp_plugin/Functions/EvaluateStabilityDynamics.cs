@@ -105,8 +105,21 @@ internal static class StabilityDynamics
     /// quadrupling the probe to 20% changes the stiff direction by 0.2%. The soft direction
     /// does move, about 7% lower, which is the geometric softening an infinitesimal
     /// mechanism is expected to show.
+    ///
+    /// **Off by default, because this evaluator's job is a first answer.** Measuring sway
+    /// means settling the assembly and settling it again under load along each horizontal
+    /// axis: three further integrations on top of the verdict run, and measured, six times
+    /// the cost - a 47-member bridge goes 14.3 s to 2.3 s when it is skipped, with the
+    /// verdict unchanged. Nothing is lost from the answer, only from the report, and a
+    /// screening pass over many configurations does not want the report.
+    ///
+    /// Ask for it with `lateral_load_fraction` when a candidate survives screening. 0.05 is
+    /// the value the figures elsewhere in this file were measured at. It is worth asking
+    /// for: four of the test bridge's modes are infinitesimal mechanisms that stand under
+    /// their own weight, and the sway figure is the only thing separating that bridge from a
+    /// properly braced one.
     /// </remarks>
-    public const double DefaultNotionalLoadFraction = 0.05;
+    public const double DefaultNotionalLoadFraction = 0.0;
 
     /// <summary>How long to simulate, in seconds, when the caller does not say.</summary>
     /// <remarks>
