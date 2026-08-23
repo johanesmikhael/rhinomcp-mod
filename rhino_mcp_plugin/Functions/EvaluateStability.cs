@@ -428,13 +428,22 @@ public partial class RhinoMCPModFunctions
                     // solver cannot give one joint a bearing and another a pin, and a joint
                     // that opens is exactly a joint whose points differ.
                     var integrator = parameters?["integrator"]?.ToString();
-                    if (contactMode && string.IsNullOrWhiteSpace(integrator))
+                    var rigidPath = true;
+                    if (!string.IsNullOrWhiteSpace(integrator))
                     {
-                        integrator = "rigid_bodies";
+                        if (string.Equals(integrator, "particles", StringComparison.OrdinalIgnoreCase))
+                        {
+                            rigidPath = false;
+                        }
+                        else if (!string.Equals(
+                            integrator, "rigid_bodies", StringComparison.OrdinalIgnoreCase))
+                        {
+                            // Named and not recognised. Falling back to a default here would
+                            // answer a different question than the one asked, silently.
+                            throw new InvalidOperationException(
+                                $"Unknown integrator '{integrator}'. Expected rigid_bodies or particles.");
+                        }
                     }
-
-                    var rigidPath = string.Equals(
-                        integrator, "rigid_bodies", StringComparison.OrdinalIgnoreCase);
 
                     // Same bodies, same pins, same member stiffness - Newton's second law
                     // instead of Kangaroo's weighted average. See StabilityDynamics.
@@ -460,7 +469,7 @@ public partial class RhinoMCPModFunctions
                         parameters, "imperfection_fraction",
                         StabilityDynamics.DefaultImperfectionFraction, 0.0);
 
-                    // Two integrators, and the particle one is still the default.
+                    // Two integrators, and the rigid-body one is now the default.
                     //
                     // "rigid_bodies" makes the body the thing that moves, so an element with
                     // nothing under it falls at g - verified against 0.5*g*t^2 to one part

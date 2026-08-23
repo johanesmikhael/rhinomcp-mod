@@ -1070,7 +1070,14 @@ CASES: list[Case] = [
             "sway.sway_stiffness_x_n_per_m": (4.5e9, 5.8e9),
         },
         # The probe is off by default now, and these are the cases that exist to measure it.
-        params={"lateral_load_fraction": 0.05},
+        #
+        # Measured on the particle path, and named as such now that the rigid path is the
+        # default. These bounds are a calibration, not a verdict, and the two integrators
+        # disagree about sway with nothing establishing which is right - so they are asserted
+        # where they were measured. This bridge additionally reports no sway at all on the
+        # rigid path: it does not settle inside the half-second run, and sway is only measured
+        # after settling.
+        params={"lateral_load_fraction": 0.05, "integrator": "particles"},
     ),
     Case(
         name="bridge_braced_dynamic",
@@ -1083,7 +1090,17 @@ CASES: list[Case] = [
             "sway.sway_stiffness_y_n_per_m": (1.02e9, 1.28e9),
             "sway.sway_stiffness_x_n_per_m": (4.3e9, 5.5e9),
         },
-        params={"lateral_load_fraction": 0.05},
+        # Measured on the particle path, and named as such now that the rigid path is the
+        # default. These bounds are a calibration, not a verdict: the two integrators disagree
+        # about sway - the braced bridge reads 9.0e8 on the rigid path against 1.13e9 here -
+        # and nothing has established which is right. Re-baselining them onto the new default
+        # would assert numbers nobody has checked; asserting them where they were measured
+        # keeps them meaningful and leaves the disagreement on the record rather than
+        # papering over it.
+        #
+        # The unbraced bridge additionally has no sway to report on the rigid path at all: it
+        # does not settle inside the half-second run, and sway is only measured after settling.
+        params={"lateral_load_fraction": 0.05, "integrator": "particles"},
     ),
     # Committed failing. Two members hanging in mid-air with nothing holding them up must
     # fall: 1226 mm in half a second. They move 2.82 mm.

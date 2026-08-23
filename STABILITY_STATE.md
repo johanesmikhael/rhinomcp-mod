@@ -22,13 +22,24 @@ counts, so the mode is kept as a name for a model whose joints are all bearings 
 exactly that. `StabilityContactGoal.cs`, `SolveContactFromGraph`, `torque_gain` and
 `contact_strength` are gone; two arbitrary constants went with them.
 
-`pinned_dynamic` carries two integrators. Particles is still the default for a model whose
-joints are welded or pinned; it reproduces a closed-form axial deflection to better than 5%,
-one storey and two, but cannot represent free motion at all. `integrator: "rigid_bodies"`
-falls correctly, expresses per-joint type and bearing extent, and is what `contact` selects on
-its own. Deleting one of them is item 2 of the simplification plan; the rigid path is now the
-one the work is heading toward, and the remaining gap is the two-storey stack at 0.787 mm
-against an exact 0.928.
+`pinned_dynamic` carries two integrators, and **`rigid_bodies` is now the default**. It falls
+correctly, builds each joint over the measured bearing, and is the only path that can express
+a joint type at all - the particle path holds a body's points to a fitted frame at one
+strength and joins elements by sharing a particle, so every joint there is a point pin and any
+joint type is silently discarded.
+
+`integrator: "particles"` remains for the two things it is still better at: it reproduces the
+closed-form axial deflection to about 1% where the rigid path is 15% soft on a two-storey
+stack (0.785 mm against an exact 0.928, cause still open), and it is an independent second
+implementation. That second point is worth less than it sounds - both paths were wrong by
+exactly 2x on joint stiffness for months, because they shared the mistake, and it was the
+closed-form micro cases rather than their agreement that caught it.
+
+Two sway calibrations name `particles` explicitly rather than following the default, because
+that is where they were measured: the braced bridge reads 9.0e8 N/m on the rigid path against
+1.13e9 on the particle one, and nothing establishes which is right. The unbraced bridge
+reports no sway at all on the rigid path - it does not settle inside the half-second run, and
+sway is only measured after settling.
 
 Each integrator carries its own `damping_ratio` default - 2% for particles, 20% for rigid
 bodies - because a damping ratio is a fraction of critical for some particular mode and the

@@ -156,27 +156,33 @@ async def evaluate_stability(
             "contact" has no direction to open along and falls back to welded; the
             result reports how many were actually sided.
 
-        integrator: pinned_dynamic mode only. "particles" (default) or "rigid_bodies".
-            They answer differently and the difference is not small.
-
-            "particles" holds each body's points to a fitted frame. It reproduces a
-            closed-form axial deflection to about 1%, is the calibrated default, and
-            cannot represent free motion at all - a body with nothing under it falls at
-            0.2% of g, so an unstable verdict can only be reached by deformation
-            crossing a limit, never by something toppling or dropping. Every joint is a
-            point, so a wall and a column of the same axial stiffness give the same
-            answer.
+        integrator: pinned_dynamic mode only. "rigid_bodies" (default) or
+            "particles". They answer differently and the difference is not small.
 
             "rigid_bodies" integrates the body itself under F = ma and Euler's
-            equations. It falls correctly, to one part in ten thousand, and builds each
-            joint over the bearing region the graph measured - so a 1150 mm wall comes
-            out 14 times stiffer in its own plane than across it, where the particle
-            path reports no difference. It is opt-in because it is less settled: a
-            two-storey stack needs a timestep four times finer than its own rule gives,
-            and it wants damping_ratio near 0.2 rather than 0.02.
+            equations. It falls correctly, to one part in ten thousand; it builds each
+            joint over the bearing region the graph measured, so a 1150 mm wall comes
+            out 14 times stiffer in its own plane than across it; and it is the only
+            path that can express a joint type at all. Its damping_ratio defaults to
+            0.2, which is its own number and not the particle path's.
 
-            Use "rigid_bodies" when walls, slabs or wide bearings carry load, or when
-            something has to be able to fall. Use the default otherwise.
+            "particles" holds each body's points to a fitted frame. It reproduces a
+            closed-form axial deflection to about 1% and is the reference the micro
+            tier is calibrated against, but it cannot represent free motion - a body
+            with nothing under it falls at 0.2% of g, so an unstable verdict can only
+            come from deformation crossing a limit, never from something toppling or
+            dropping.
+
+            It also cannot represent a joint type. A body there is particles held to a
+            fitted frame by a goal that takes ONE strength for all of them, and a joint
+            is a shared particle rather than a spring: one point has no lever arm, so
+            it is a pin by construction. Welded has nowhere to put its moment and a
+            shared particle can never open, so contact cannot happen either. Any
+            joint_type argument and every rule assign_joint_type wrote are silently
+            ignored on this path.
+
+            Use "particles" to reproduce a calibrated deflection or to cross-check.
+            Use the default for anything else.
         solver_substeps: Kangaroo substeps per solver step. Ignored by pinned_dynamic,
             which derives its own timestep from the stiffest spring holding the
             lightest mass.
