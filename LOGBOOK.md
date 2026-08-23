@@ -258,6 +258,26 @@ crosses the mechanism limit, so a failing case always reports a figure barely ab
 the stopping rule, not the structure. What separates decisive from marginal is how long it
 took to get there: 36k steps against the sound model's full 167k.
 
+**An imperfection applied as a velocity is a nudge to a truss and a shove to a stack.** It is
+applied that way deliberately - displacing particles stores the flaw as strain and the
+structure rings from an energy hundreds of times the load - but a span/1000 offset comes out
+as 0.43 m/s, and what that does depends entirely on what the joints are. A truss whose joints
+hold in tension rings and settles. A dry-stacked pavilion cannot: friction has no way to put
+back what slides, so every body keeps the ground it loses. The pinwheel read unstable at
+50 mm of accumulated sliding; with the imperfection off, nothing moved at all - 0.02 mm across
+the whole model. The verdict was measuring the kick. **Ask a bearing structure about a load,
+not about an impulse**: the notional lateral fraction is a load, and it separated the
+compositions cleanly where the imperfection had buried them.
+
+**Overlapping solids are not a joint.** Four pavilion walls written as centre lines and a
+thickness shared 200 x 200 mm of volume at every corner where one met another, and the graph
+duly found contacts there. The pinwheel then read unstable at 155 mm while the parallel
+arrangement stood, which is the opposite of the physics - a composition that faces two ways
+cannot be worse than one facing one way. Stating each wall as its plan rectangle makes
+abutting explicit and the error impossible to write. **A model that fails in a direction the
+physics forbids is a modelling error until proven otherwise**, and it is worth checking the
+geometry before the solver.
+
 ## On numerics
 
 **A test model's cost is set by its heaviest, stubbiest body, not by the physics under test.**

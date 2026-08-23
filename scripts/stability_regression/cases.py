@@ -713,6 +713,156 @@ def hybrid_check(rules, expect_stable: bool, weight_n: float, expect_types=None)
 
 
 # --------------------------------------------------------------------------------------
+# Pavilion: a podium, free-standing walls, and a roof slab laid on them
+# --------------------------------------------------------------------------------------
+#
+# The Barcelona arrangement, reduced to what decides whether it stands: a slab on the ground,
+# walls standing on it with nothing tying them down, and a slab laid on top of them. Nothing
+# is fixed to anything - every joint is a dry bearing - so the composition of the walls in
+# plan is the whole structure. Move the same four walls around and the answer changes.
+#
+# This is the case a point-pin model cannot have. A wall bearing on a slab is stiff in its own
+# plane and soft across it, and that difference only exists because the joint is built over
+# the measured bearing: a joint at a point has no lever arm and a 3 m wall then behaves like a
+# 200 mm column. The pinwheel stands because its walls face two ways; the parallel version
+# stands under its own weight and has nothing at all resisting sway across them.
+
+PAVILION_PODIUM = (8000.0, 5000.0, 200.0)
+PAVILION_WALL_THICKNESS = 200.0
+PAVILION_WALL_HEIGHT = 2500.0
+PAVILION_ROOF_THICKNESS = 200.0
+
+# Each wall as its plan rectangle, (x0, y0, x1, y1), rather than a centre line and a
+# thickness. Written as centre lines first, the four pinwheel walls overlapped 200 x 200 at
+# every corner where one met another - solids sharing volume, which is not a joint but a
+# modelling error, and the graph duly found contacts there that behaved like nothing real. The
+# pinwheel then read unstable at 155 mm in 3772 steps while the parallel arrangement stood,
+# which is the opposite of the physics. Stating the rectangles makes abutting explicit and the
+# error impossible to write.
+PAVILION_PINWHEEL = (
+    (600.0, 900.0, 3400.0, 1100.0),      # along x, low - stops at both walls it meets
+    (3400.0, 900.0, 3600.0, 4100.0),     # along y, right
+    (3600.0, 3900.0, 7600.0, 4100.0),    # along x, high
+    (400.0, 900.0, 600.0, 4100.0),       # along y, left
+)
+
+# The same four walls, all facing the same way, and none of them touching another. Every one
+# is stiff along x and nothing resists anything across it.
+PAVILION_PARALLEL = (
+    (400.0, 600.0, 3600.0, 800.0),
+    (4000.0, 1700.0, 7600.0, 1900.0),
+    (400.0, 3100.0, 3600.0, 3300.0),
+    (4000.0, 4200.0, 7600.0, 4400.0),
+)
+
+
+def pavilion_build(walls=PAVILION_PINWHEEL, roof_shift_x: float = 0.0) -> Callable[[], str]:
+    """Podium, walls, roof. `roof_shift_x` slides the roof off its supports."""
+
+    def build() -> str:
+        top = PAVILION_WALL_HEIGHT
+        lines = [
+            f'world_box("PODIUM", 0.0, 0.0, {-PAVILION_PODIUM[2]!r}, '
+            f'{PAVILION_PODIUM[0]!r}, {PAVILION_PODIUM[1]!r}, 0.0, '
+            f'{concrete_mass(*PAVILION_PODIUM)!r}, "PODIUM")'
+        ]
+
+        for i, (x0, y0, x1, y1) in enumerate(walls):
+            mass = concrete_mass(x1 - x0, y1 - y0, PAVILION_WALL_HEIGHT)
+            lines.append(
+                f'world_box("WALL_{i}", {x0!r}, {y0!r}, 0.0, {x1!r}, {y1!r}, {top!r}, '
+                f'{mass!r}, "WALL")')
+
+        lines.append(
+            f'world_box("ROOF", {roof_shift_x!r}, 0.0, {top!r}, '
+            f'{PAVILION_PODIUM[0] + roof_shift_x!r}, {PAVILION_PODIUM[1]!r}, '
+            f'{top + PAVILION_ROOF_THICKNESS!r}, '
+            f'{concrete_mass(PAVILION_PODIUM[0], PAVILION_PODIUM[1], PAVILION_ROOF_THICKNESS)!r}, '
+            f'"ROOF")')
+
+        return "\n".join(lines)
+
+    return build
+
+
+# Nothing is fixed to anything: the walls stand on the podium and the roof is laid on the
+# walls. Stated as bearings rather than left to the default, because a default weld here would
+# make the whole pavilion one welded box and answer a different question entirely.
+PAVILION_RULES = [
+    ("WALL", "PODIUM", "contact"),
+    ("ROOF", "WALL", "contact"),
+    ("WALL", "WALL", "contact"),
+]
+
+PAVILION_ALL_PAIRS = tuple((a, b) for a, b, _ in PAVILION_RULES)
+
+
+def pavilion_check(expect_stable: bool, sway=None):
+    """Apply the bearing rules, evaluate, and optionally check how it sways."""
+
+    def check(send: Callable[[str, dict], Any], ids: list[str]) -> list[str]:
+        problems = []
+        send("assign_joint_type", {"prune": True})
+        for a, b in PAVILION_ALL_PAIRS:
+            send("assign_joint_type", {"clear": True, "layer": a, "with_layer": b})
+        for a, b, joint in PAVILION_RULES:
+            send("assign_joint_type", {"joint_type": joint, "layer": a, "with_layer": b})
+
+        if SHOW_WORK:
+            send("graph_display", {"enabled": True, "contact_extent": True, "ids": ids})
+
+        # No imperfection, and that is a statement about this structure rather than a
+        # convenience.
+        #
+        # The imperfection is applied as a velocity - stress-free, which is why it is applied
+        # that way at all - and at a span/1000 offset it comes to 0.43 m/s here. On a truss
+        # whose joints hold in tension that is a nudge which rings out. On a dry-stacked
+        # pavilion it is a shove: friction has no way to put back what slides, so every body
+        # keeps the ground it loses. With it the pinwheel read unstable at 50 mm; without it
+        # nothing moves at all, 0.02 mm across the whole model. The verdict was measuring the
+        # kick.
+        #
+        # What this arrangement should be asked instead is how it resists a load that is
+        # actually a load, which is the notional lateral fraction below.
+        result = send("evaluate_stability", {
+            "mode": "pinned_dynamic",
+            "ids": ids,
+            "gravity": GRAVITY,
+            "display": SHOW_WORK,
+            "solver_substeps": 1,
+            "imperfection_fraction": 0.0,
+            "lateral_load_fraction": 0.05 if sway else 0.0,
+        })
+        if result.get("success") is not True:
+            return [str(result.get("message"))]
+
+        if bool(result.get("stable")) != expect_stable:
+            problems.append(
+                f"{result.get('verdict')} at "
+                f"{1000.0 * (result.get('max_pin_displacement_m') or 0.0):.1f} mm against a "
+                f"{1000.0 * (result.get('mechanism_threshold_m') or 0.0):.1f} mm limit, "
+                f"expected {'stable' if expect_stable else 'unstable'}")
+
+        if sway:
+            low, high = sway
+            block = result.get("sway") or {}
+            kx = block.get("sway_stiffness_x_n_per_m")
+            ky = block.get("sway_stiffness_y_n_per_m")
+            if not kx or not ky:
+                problems.append(f"no sway measured: {block}")
+            else:
+                ratio = max(kx, ky) / min(kx, ky)
+                if not (low <= ratio <= high):
+                    problems.append(
+                        f"sway anisotropy {ratio:.1f} (x {kx:.3g}, y {ky:.3g}), "
+                        f"expected {low}..{high}")
+
+        return problems
+
+    return check
+
+
+# --------------------------------------------------------------------------------------
 # Micro: a stack of columns whose axial shortening is a closed form
 # --------------------------------------------------------------------------------------
 #
@@ -1295,6 +1445,50 @@ CASES: list[Case] = [
             "hinges and each frame sways; the fixed base is what the as-built frame stands on"),
         build=hybrid_build(),
         check=hybrid_check(HYBRID_RULES_PINNED_BASE, False, hybrid_total_weight_n(HYBRID_SPAN_Y)),
+    ),
+    # Four walls facing two ways. Nothing is fixed to anything, so what holds the roof still
+    # is the arrangement of the walls under it.
+    Case(
+        name="pavilion_pinwheel",
+        mode="pinned_dynamic",
+        tier=SYSTEMS,
+        stable=True,
+        reason=(
+            "walls in a pinwheel present a plane in both directions, so the roof is braced "
+            "each way and the two sway stiffnesses are within a factor of three"),
+        build=pavilion_build(PAVILION_PINWHEEL),
+        check=pavilion_check(True, sway=(1.0, 3.0)),
+    ),
+    # The same four walls, the same roof, all facing one way. It still stands under its own
+    # weight - nothing asks it not to - and has essentially nothing resisting sway across the
+    # walls. A wall is stiff in its own plane and soft across it, and this is that fact at the
+    # scale of a building rather than of a joint.
+    #
+    # It is also a case a point-pin model cannot have. Every joint there is a point, a point
+    # has no lever arm, and the two directions would come out the same.
+    Case(
+        name="pavilion_parallel_walls",
+        mode="pinned_dynamic",
+        tier=SYSTEMS,
+        stable=True,
+        reason=(
+            "parallel walls brace one direction only: about 1.5e10 N/m along them against "
+            "2e6 across, four orders apart, where the pinwheel is within a factor of three"),
+        build=pavilion_build(PAVILION_PARALLEL),
+        check=pavilion_check(True, sway=(100.0, 1.0e6)),
+    ),
+    # The roof slid 4 m off the walls that carry it. Its centre of mass then sits outside
+    # everything holding it up, and a bearing carries no tension, so it goes.
+    Case(
+        name="pavilion_roof_off_walls",
+        mode="pinned_dynamic",
+        tier=SYSTEMS,
+        stable=False,
+        reason=(
+            "the roof is displaced 4 m in x, putting its centre of mass beyond the walls "
+            "under it, and nothing holds a dry bearing down"),
+        build=pavilion_build(PAVILION_PINWHEEL, roof_shift_x=4000.0),
+        check=pavilion_check(False),
     ),
     Case(
         name="joint_type_rules",
