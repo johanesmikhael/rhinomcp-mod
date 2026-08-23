@@ -1228,6 +1228,119 @@ def check_extent(send: Callable[[str, dict], Any], ids: list[str]) -> list[str]:
 # Moving a case from the fast tier into the slow tier is therefore a regression in itself,
 # and is meant to be visible in the diff.
 
+# --------------------------------------------------------------------------------------
+# Three contact states, two geometry kinds
+# --------------------------------------------------------------------------------------
+
+# A slab on a wall, drawn six times: at a half-millimetre gap, exactly touching, and sunk
+# 20 mm in, each as Breps and again as meshes. The footprint is 400 x 300 every time and
+# the three states differ only in where the slab sits, so any measurement that reads them
+# differently is reading the drawing rather than the bearing.
+#
+# The buried pair is the case the whole exercise is for. Sampling measures surface-to-surface
+# distance, which falls to zero as two things touch and grows again once they overlap, so it
+# reports nothing at all for either buried joint. Exact measurement puts the bearing on the
+# mean plane of the two faces - 2490 for a slab sunk 20 mm into a wall topping out at 2500 -
+# which is where the shared surface is.
+BEARING_STATE_WALL = (400.0, 300.0)
+BEARING_STATE_TOP = 2500.0
+BEARING_STATE_BURIAL = 20.0
+
+BEARING_STATES = (
+    ("GAP", 0.5, False),
+    ("TOUCH", 0.0, False),
+    ("BURIED", -BEARING_STATE_BURIAL, False),
+    ("MGAP", 0.5, True),
+    ("MTOUCH", 0.0, True),
+    ("MBURIED", -BEARING_STATE_BURIAL, True),
+)
+
+
+def bearing_states_scene() -> str:
+    lines = [
+        "import Rhino",
+        "",
+        "def kind_box(name, x0, y0, z0, x1, y1, z1, mass, as_mesh):",
+        "    brep = Rhino.Geometry.Box(",
+        "        Rhino.Geometry.Plane.WorldXY,",
+        "        Rhino.Geometry.Interval(x0, x1),",
+        "        Rhino.Geometry.Interval(y0, y1),",
+        "        Rhino.Geometry.Interval(z0, z1)).ToBrep()",
+        "    attrs = Rhino.DocObjects.ObjectAttributes()",
+        "    attrs.Name = name",
+        "    attrs.SetUserString('rhinomcp.stability.v1',",
+        "                        '{\"mass\": %r, \"mass_unit\": \"kg\"}' % mass)",
+        "    if as_mesh:",
+        "        mesh = Rhino.Geometry.Mesh()",
+        "        for part in Rhino.Geometry.Mesh.CreateFromBrep(",
+        "                brep, Rhino.Geometry.MeshingParameters.FastRenderMesh):",
+        "            mesh.Append(part)",
+        "        built.append(str(doc.Objects.AddMesh(mesh, attrs)))",
+        "    else:",
+        "        built.append(str(doc.Objects.AddBrep(brep, attrs)))",
+        "",
+    ]
+    dx, dy = BEARING_STATE_WALL
+    for index, (tag, offset, as_mesh) in enumerate(BEARING_STATES):
+        # Well apart in plan, so the only contact each pair has is its own.
+        x = index * 2000.0
+        top = BEARING_STATE_TOP
+        lines.append(
+            f"kind_box('WALL_{tag}', {x!r}, {-dy / 2.0!r}, 0.0, {x + dx!r}, {dy / 2.0!r}, "
+            f"{top!r}, 2000.0, {as_mesh!r})")
+        lines.append(
+            f"kind_box('SLAB_{tag}', {x - 100.0!r}, {-dy / 2.0 - 100.0!r}, {top + offset!r}, "
+            f"{x + dx + 100.0!r}, {dy / 2.0 + 100.0!r}, {top + offset + 200.0!r}, 500.0, "
+            f"{as_mesh!r})")
+    return "\n".join(lines) + "\n"
+
+
+# A tenth of a millimetre on a 400 mm bearing. The claim is exactness, so the tolerance is
+# the reporting precision rather than a fitting allowance.
+BEARING_STATE_TOLERANCE_MM = 0.1
+
+
+def check_bearing_states(send: Callable[[str, dict], Any], ids: list[str]) -> list[str]:
+    """The same footprint, whatever state and whatever kind it was drawn in."""
+    graph = send("get_connectivity_graph", {"ids": ids})
+    names = {node["i"]: node.get("name", "") for node in graph.get("n", [])}
+    measured = {}
+    for entry in graph.get("contact_extent_exact") or []:
+        pair = {names.get(entry["a"], ""), names.get(entry["b"], "")}
+        tag = next((t for t, _, _ in BEARING_STATES if f"WALL_{t}" in pair), None)
+        if tag is not None:
+            measured[tag] = entry
+
+    dx, dy = BEARING_STATE_WALL
+    expected = sorted((dx, dy), reverse=True)
+
+    problems = []
+    for tag, offset, _ in BEARING_STATES:
+        entry = measured.get(tag)
+        if entry is None:
+            problems.append(f"{tag}: no exact bearing measured")
+            continue
+
+        sides = sorted((entry["length_u"], entry["length_v"]), reverse=True)
+        for got, want, axis in zip(sides, expected, ("long", "short")):
+            if abs(got - want) > BEARING_STATE_TOLERANCE_MM:
+                problems.append(f"{tag}: {axis} side {got:.2f} against {want:.1f}")
+
+        # The bearing sits on the mean plane of the two faces, so burying the slab 20 mm
+        # moves it down 10 - not to the wall top, and not to the slab underside.
+        want_z = BEARING_STATE_TOP + offset / 2.0
+        if abs(entry["centre"][2] - want_z) > BEARING_STATE_TOLERANCE_MM:
+            problems.append(f"{tag}: bearing at z {entry['centre'][2]:.2f} against {want_z:.2f}")
+
+        want_penetration = max(0.0, -offset)
+        if abs(entry["penetration_depth"] - want_penetration) > BEARING_STATE_TOLERANCE_MM:
+            problems.append(
+                f"{tag}: penetration {entry['penetration_depth']:.2f} against "
+                f"{want_penetration:.1f}")
+
+    return problems
+
+
 FAST = "fast"
 SLOW = "slow"
 
@@ -1268,6 +1381,17 @@ CASES: list[Case] = [
             "an axis-aligned box reports the third as 1146 x 671"),
         build=extent_scene,
         check=check_extent,
+    ),
+    Case(
+        name="bearing_states_and_kinds",
+        mode="none",
+        tier=GEOMETRY,
+        stable=True,
+        reason=(
+            "one 400 x 300 bearing drawn six ways - gapped, touching and buried 20 mm, as "
+            "Breps and as meshes; sampling reports nothing at all for either buried pair"),
+        build=bearing_states_scene,
+        check=check_bearing_states,
     ),
     Case(
         name="stair3_step100",
