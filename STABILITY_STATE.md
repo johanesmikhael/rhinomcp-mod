@@ -237,6 +237,14 @@ duplicated later while the rule has to keep meaning the element it was written f
 stored prefixed - `layer:Beams`, `id:<guid>` - so a layer named after a GUID cannot be mistaken
 for the object of that name.
 
+A rule naming an object outlives that object - it is in the document text and the object is
+not - so deleting the beam leaves a rule that matches nothing and says nothing. Two of them
+accumulated here inside one afternoon of rebuilding test scenes. Every call reports them with
+a `stale` field saying which side is missing, `assign_joint_type()` with no arguments lists
+them and counts them, and `assign_joint_type(prune=True)` removes them and returns what it
+removed. Not removed on sight: a deleted object can be undone, and a rule dropped in between
+would not come back with it.
+
 Element rules go on the object beside its mass, in the same user string, so they travel with a
 copy. Pair rules go in document user text, because there is nowhere on a beam to record what
 it does when it meets a column. Each is order-insensitive: naming Beams/Columns and

@@ -51,12 +51,73 @@ public partial class RhinoMCPModFunctions
             var clear = parameters?["clear"]?.Type == JTokenType.Boolean &&
                 parameters["clear"].Value<bool>();
 
+            var pruning = parameters?["prune"]?.Type == JTokenType.Boolean &&
+                parameters["prune"].Value<bool>();
+
             var typeText = parameters?["joint_type"]?.ToString();
+
+            // Nothing asked for is a request to look, not an error. Without this there is no
+            // way to read the rule table at all, which makes "the stale ones are reported"
+            // untrue in the one case where someone is checking for them.
+            if (!clear && !pruning && string.IsNullOrWhiteSpace(typeText) &&
+                parameters?["ids"] == null && parameters?["names"] == null &&
+                parameters?["layer"] == null && parameters?["with_layer"] == null &&
+                parameters?["with_ids"] == null && parameters?["with_names"] == null &&
+                parameters?["selected"] == null)
+            {
+                var current = ReadPairRules(doc);
+                return new JObject
+                {
+                    ["success"] = true,
+                    ["scope"] = "list",
+                    ["rules"] = PairRulesReport(current, doc),
+                    ["stale_rules"] = current.Values.Count(rule => StaleReason(doc, rule) != null)
+                };
+            }
+
             var type = StabilityRigidBodies.JointType.Welded;
-            if (!clear && !StabilityRigidBodies.TryParseJointType(typeText, out type))
+            if (!clear && !pruning && !StabilityRigidBodies.TryParseJointType(typeText, out type))
             {
                 throw new InvalidOperationException(
                     $"Unknown joint_type '{typeText}'. Expected contact, pin or welded.");
+            }
+
+            // Rules that can no longer match anything, cleared out on request.
+            //
+            // Asked for rather than done on sight: a deleted object can be undone, and a rule
+            // dropped in between would not come back with it. Reported by every other call,
+            // so the tidying is visible before it is wanted.
+            if (parameters?["prune"]?.Type == JTokenType.Boolean &&
+                parameters["prune"].Value<bool>())
+            {
+                var all = ReadPairRules(doc);
+                var removed = new JArray();
+                foreach (var entry in all.ToList())
+                {
+                    var why = StaleReason(doc, entry.Value);
+                    if (why == null)
+                    {
+                        continue;
+                    }
+
+                    removed.Add(new JObject
+                    {
+                        ["a"] = entry.Value.A,
+                        ["b"] = entry.Value.B,
+                        ["joint_type"] = TypeName(entry.Value.Type),
+                        ["stale"] = why
+                    });
+                    all.Remove(entry.Key);
+                }
+
+                WritePairRules(doc, all);
+                return new JObject
+                {
+                    ["success"] = true,
+                    ["scope"] = "prune",
+                    ["removed"] = removed,
+                    ["rules"] = PairRulesReport(all, doc)
+                };
             }
 
             // Each side of a pair rule names a class of element, and there are two ways to
@@ -117,7 +178,7 @@ public partial class RhinoMCPModFunctions
                     ["scope"] = "pair",
                     ["cleared"] = clear,
                     ["rules_written"] = written,
-                    ["rules"] = PairRulesReport(rules)
+                    ["rules"] = PairRulesReport(rules, doc)
                 };
             }
 
@@ -175,7 +236,7 @@ public partial class RhinoMCPModFunctions
                 ["scope"] = "element",
                 ["cleared"] = clear,
                 ["assigned"] = assigned,
-                ["rules"] = PairRulesReport(ReadPairRules(doc))
+                ["rules"] = PairRulesReport(ReadPairRules(doc), doc)
             };
         }
         catch (Exception ex)
@@ -406,22 +467,90 @@ public partial class RhinoMCPModFunctions
             return;
         }
 
-        doc.Strings.SetString(JointTypeRulesKey, PairRulesReport(rules).ToString(Formatting.None));
+        doc.Strings.SetString(JointTypeRulesKey, PairRulesPayload(rules).ToString(Formatting.None));
     }
 
-    private static JArray PairRulesReport(Dictionary<string, PairRule> rules)
+    /// <summary>What is stored: the rule and nothing derived from the document.</summary>
+    private static JArray PairRulesPayload(Dictionary<string, PairRule> rules)
     {
-        var report = new JArray();
-        foreach (var rule in rules.Values
-            .OrderBy(r => r.A, StringComparer.OrdinalIgnoreCase)
-            .ThenBy(r => r.B, StringComparer.OrdinalIgnoreCase))
+        var payload = new JArray();
+        foreach (var rule in Ordered(rules))
         {
-            report.Add(new JObject
+            payload.Add(new JObject
             {
                 ["a"] = rule.A,
                 ["b"] = rule.B,
                 ["joint_type"] = TypeName(rule.Type)
             });
+        }
+
+        return payload;
+    }
+
+    private static IEnumerable<PairRule> Ordered(Dictionary<string, PairRule> rules)
+    {
+        return rules.Values
+            .OrderBy(r => r.A, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(r => r.B, StringComparer.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// Why a rule can no longer match anything.
+    /// </summary>
+    /// <remarks>
+    /// A rule naming an object outlives that object: it lives in document text and the object
+    /// does not, so deleting the beam leaves the rule behind, matching nothing and saying
+    /// nothing. They accumulate quietly - a document here collected two inside an afternoon of
+    /// rebuilding test scenes.
+    ///
+    /// Reported rather than removed on sight, because a deleted object can be undone and a
+    /// rule silently dropped in between would not come back with it. Removal is asked for.
+    /// </remarks>
+    private static string StaleReason(RhinoDoc doc, PairRule rule)
+    {
+        var reasons = new List<string>();
+        foreach (var token in new[] { rule.A, rule.B })
+        {
+            if (token.StartsWith(IdTokenPrefix, StringComparison.Ordinal))
+            {
+                var text = token.Substring(IdTokenPrefix.Length);
+                if (!Guid.TryParse(text, out var guid) || doc?.Objects.FindId(guid) == null)
+                {
+                    reasons.Add($"object {text} is not in the document");
+                }
+            }
+            else if (token.StartsWith(LayerTokenPrefix, StringComparison.Ordinal))
+            {
+                var name = token.Substring(LayerTokenPrefix.Length);
+                if (doc?.Layers.FindName(name, -1) == null)
+                {
+                    reasons.Add($"layer '{name}' does not exist");
+                }
+            }
+        }
+
+        return reasons.Count > 0 ? string.Join("; ", reasons) : null;
+    }
+
+    private static JArray PairRulesReport(Dictionary<string, PairRule> rules, RhinoDoc doc = null)
+    {
+        var report = new JArray();
+        foreach (var rule in Ordered(rules))
+        {
+            var entry = new JObject
+            {
+                ["a"] = rule.A,
+                ["b"] = rule.B,
+                ["joint_type"] = TypeName(rule.Type)
+            };
+
+            var stale = doc == null ? null : StaleReason(doc, rule);
+            if (stale != null)
+            {
+                entry["stale"] = stale;
+            }
+
+            report.Add(entry);
         }
 
         return report;

@@ -325,6 +325,7 @@ async def assign_joint_type(
     names: list[str] | None = None,
     selected: bool = False,
     clear: bool = False,
+    prune: bool = False,
 ) -> dict[str, Any]:
     """State what the connections in a model are, as rules rather than per joint.
 
@@ -360,6 +361,15 @@ async def assign_joint_type(
         with_names: The other side, by object name.
         selected: When True, applies to the current selection.
         clear: When True, removes the rule instead of writing it.
+        prune: When True, removes every rule that can no longer match - one
+            naming an object that has been deleted, or a layer that no longer
+            exists - and returns what it removed. Pass it on its own; no
+            joint_type is needed. Rules naming objects outlive those objects,
+            since they live in the document and the objects do not, so they
+            accumulate quietly. Every other call reports them under "rules"
+            with a "stale" field, so they are visible before this is wanted.
+            Not done automatically: a deleted object can be undone, and a rule
+            dropped in between would not come back with it.
 
     Any "with_" argument makes it a pair rule and requires one of layer/ids/
     names for the other side. Order never matters: Beams/Columns and
@@ -380,6 +390,9 @@ async def assign_joint_type(
     Element rules are stored on the object beside its mass, so they travel
     with a copy. Pair rules are stored in the document, because there is
     nowhere on a beam to record what it does when it meets a column.
+
+    Called with no arguments at all it lists the rules and changes nothing,
+    counting how many are stale under "stale_rules".
 
     The evaluation reports what each joint resolved to and which rule
     decided it, under "nodes".
@@ -413,6 +426,8 @@ async def assign_joint_type(
         params["selected"] = True
     if clear:
         params["clear"] = True
+    if prune:
+        params["prune"] = True
 
     rhino = get_rhino_connection()
     return rhino.send_command("assign_joint_type", params)
