@@ -55,16 +55,57 @@ namespace RhinoMCPModPlugin.Commands
 
                 if (index == pinnedOption)
                 {
+                    // Whatever the graph is showing, in whichever way it was scoped.
+                    //
+                    // This used to accept an id list and nothing else, so a graph pinned to
+                    // the whole document - which is what graph_display(scope="all") sets, and
+                    // what the overlay shows by default - was refused with "run mcpmodgraph
+                    // with a selection first". The graph was on screen at the time. A scope
+                    // with no id list is not a missing scope; it is a scope that names its
+                    // objects some other way, and every way it can is translated here.
                     var pinned = MCPConnectivityGraphController.PinnedScope;
-                    if (pinned?.Ids == null || pinned.Ids.Count == 0)
+                    if (pinned == null)
                     {
                         RhinoApp.WriteLine(
-                            "No pinned graph scope; run mcpmodgraph with a selection first.");
+                            "No graph is pinned; run mcpmodgraph, or graph_display over MCP.");
                         return false;
                     }
 
-                    parameters["ids"] = new JArray(pinned.Ids.Select(id => (object)id.ToString()).ToArray());
-                    label = $"pinned graph scope ({pinned.Ids.Count} objects)";
+                    if (pinned.IsWholeDocument)
+                    {
+                        label = "pinned graph scope (whole document)";
+                        return true;
+                    }
+
+                    var parts = new List<string>();
+                    if (pinned.Ids != null && pinned.Ids.Count > 0)
+                    {
+                        parameters["ids"] = new JArray(
+                            pinned.Ids.Select(id => (object)id.ToString()).ToArray());
+                        parts.Add($"{pinned.Ids.Count} objects");
+                    }
+
+                    if (pinned.Layers != null && pinned.Layers.Count > 0)
+                    {
+                        parameters["layer"] = new JArray(
+                            pinned.Layers.Select(name => (object)name).ToArray());
+                        parts.Add($"layers {string.Join(", ", pinned.Layers)}");
+                    }
+
+                    if (pinned.SelectedOnly)
+                    {
+                        parameters["selected"] = true;
+                        parts.Add("current selection");
+                    }
+
+                    if (parts.Count == 0)
+                    {
+                        RhinoApp.WriteLine(
+                            "The pinned graph scope names nothing this command can evaluate.");
+                        return false;
+                    }
+
+                    label = $"pinned graph scope ({string.Join("; ", parts)})";
                     return true;
                 }
 
@@ -130,17 +171,21 @@ namespace RhinoMCPModPlugin.Commands
             var defaultSolverThreshold =
                 unitContext.FromMeters(DefaultSolverThresholdMeters);
 
-            // Which idealisation to run. Welded asks whether the whole scope tips over;
-            // Contact gives every element its own body on bearing surfaces that carry no
-            // tension, and so can fail one element rather than the assembly; Pinned joins
-            // the elements rigidly at their contact points and only finds mechanisms.
+            // How the scope is modelled, which is a different question from what its joints
+            // are.
+            //
+            // These options used to be named Welded / Contact / PinnedJoints, after the three
+            // solvers behind them, and that name hid the distinction that matters now:
+            // "welded" is not "every joint is welded", it is *no joints at all* - the whole
+            // scope fused into one rigid body that either tips or does not. The other two were
+            // one body per element, differing only in what their joints were assumed to be,
+            // and that assumption is now something the model states per joint. So the first
+            // question is how many bodies there are, and the second is what to assume where
+            // nothing was stated.
             var getEvalMode = new GetOption();
-            getEvalMode.SetCommandPrompt("Evaluation mode");
-            var weldedEvalOption = getEvalMode.AddOption("Welded");
-            var contactEvalOption = getEvalMode.AddOption("Contact");
-            // Not "Pinned": the scope prompt already uses that word for the saved pinned
-            // selection, and the two mean entirely different things.
-            var pinnedEvalOption = getEvalMode.AddOption("PinnedJoints");
+            getEvalMode.SetCommandPrompt("Model the scope as");
+            var assemblyOption = getEvalMode.AddOption("Assembly");
+            var elementsOption = getEvalMode.AddOption("Elements");
             getEvalMode.AcceptNothing(true);
 
             var evalModeResult = getEvalMode.Get();
@@ -150,18 +195,69 @@ namespace RhinoMCPModPlugin.Commands
             }
 
             var evalModeIndex = getEvalMode.Option()?.Index ?? -1;
-            var evaluationMode = "welded";
-            if (evalModeIndex == contactEvalOption)
+            var multiBody = evalModeIndex == elementsOption;
+            var evaluationMode = multiBody ? "pinned" : "welded";
+            parameters["mode"] = evaluationMode;
+
+            if (!multiBody)
             {
-                evaluationMode = "contact";
-            }
-            else if (evalModeIndex == pinnedEvalOption)
-            {
-                evaluationMode = "pinned";
+                RhinoApp.WriteLine(
+                    "Assembly: the whole scope as one rigid body. It has no joints, so joint " +
+                    "types do not apply; it answers only whether that body tips or slides.");
             }
 
-            parameters["mode"] = evaluationMode;
-            var multiBody = evaluationMode != "welded";
+            if (multiBody)
+            {
+                var ruleCount = ReadPairRules(doc).Count;
+
+                // What a joint is where no rule names one. Rules beat it, so this is a default
+                // and is prompted as one - the old naming implied it was the answer.
+                var getDefaultJoint = new GetOption();
+                getDefaultJoint.SetCommandPrompt(
+                    ruleCount > 0
+                        ? $"Joint type where no rule names one ({ruleCount} rules will override it)"
+                        : "Joint type where no rule names one (no rules are set)");
+                var weldedJointOption = getDefaultJoint.AddOption("Welded");
+                var pinJointOption = getDefaultJoint.AddOption("Pin");
+                var contactJointOption = getDefaultJoint.AddOption("Contact");
+                getDefaultJoint.AcceptNothing(true);
+
+                if (getDefaultJoint.Get() == GetResult.Cancel)
+                {
+                    return Result.Cancel;
+                }
+
+                var jointIndex = getDefaultJoint.Option()?.Index ?? -1;
+                var defaultJoint = "welded";
+                if (jointIndex == pinJointOption)
+                {
+                    defaultJoint = "pin";
+                }
+                else if (jointIndex == contactJointOption)
+                {
+                    defaultJoint = "contact";
+                }
+
+                parameters["joint_type"] = defaultJoint;
+
+                // The rigid-body integrator, not offered as a choice.
+                //
+                // The particle path cannot represent a joint type at all: a body there is
+                // particles held to a fitted frame by Kangaroo's RigidMesh, which takes one
+                // strength for all of a body's points, and a joint is a shared particle rather
+                // than a spring. One point has no lever arm, so it is a pin by construction -
+                // welded has nowhere to put its moment and a shared particle can never open,
+                // so contact cannot happen either.
+                //
+                // Offering it here would let someone assign joint types, see them drawn in the
+                // overlay, and get an answer that quietly ignored every one of them. A warning
+                // was the first attempt and is a weaker fix than not offering the trap: this
+                // is the human-facing surface, and the choice it was offering was between a
+                // model of what you asked for and a model of something else. The particle path
+                // stays reachable over MCP with integrator="particles", where it earns its
+                // keep as the calibrated reference the closed-form cases are checked against.
+                parameters["integrator"] = "rigid_bodies";
+            }
 
             var getOption = new GetOption();
             getOption.SetCommandPrompt("Stability parameter mode");
