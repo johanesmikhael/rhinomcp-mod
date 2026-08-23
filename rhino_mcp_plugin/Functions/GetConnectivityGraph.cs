@@ -30,6 +30,7 @@ public partial class RhinoMCPModFunctions
 
         var edges = new JArray();
         var extents = new JArray();
+        var unmeasured = new JArray();
         foreach (var edge in graph.Edges)
         {
             edges.Add(new JArray(
@@ -59,6 +60,21 @@ public partial class RhinoMCPModFunctions
                     ["samples"] = edge.Extent.Samples
                 });
             }
+            else
+            {
+                // Why it was not measured, rather than only that it was not. A contact with
+                // no samples was never sampled; one with samples but no faces from a body is
+                // a grid that missed; one with faces on both sides is a pair the parallel
+                // test rejected.
+                unmeasured.Add(new JObject
+                {
+                    ["a"] = edge.A,
+                    ["b"] = edge.B,
+                    ["samples"] = edge.Extent.Samples,
+                    ["faces_a"] = edge.Extent.FacesA,
+                    ["faces_b"] = edge.Extent.FacesB
+                });
+            }
         }
 
         var result = new JObject
@@ -67,6 +83,7 @@ public partial class RhinoMCPModFunctions
             ["e"] = edges,
             ["contact_extent"] = extents,
             ["contact_extent_measured"] = extents.Count,
+            ["contact_extent_unmeasured"] = unmeasured,
             ["node_count"] = graph.Nodes.Count,
             ["edge_count"] = graph.Edges.Count,
             ["candidate_count"] = graph.CandidateCount,

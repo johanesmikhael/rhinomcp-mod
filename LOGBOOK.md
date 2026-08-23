@@ -226,6 +226,21 @@ on a pad, and the check runs per measured rectangle. It needed the opposite asse
 diagonal that must report *no* bearing. Every case in the tier said "this is right"; none said
 "this must not be there".
 
+**A cached measurement is not a measurement.** Three joints in a model reported zero samples,
+which said the sampler had never run - so two hypotheses were built on that and both were
+wrong, and a correct fix was written, tested against the same cache, judged a failure and
+reverted. The graph was being served from an in-memory cache that does not store sample
+counts, so every reading was a zero that meant "not recorded" rather than "not found". Forcing
+a recompute showed 115 and 134 samples on those joints and named the real cause in one line.
+**Before diagnosing from an instrument, check the instrument is connected**: the tell was that
+deleting the document's stored graph changed nothing, which should have been read as "this
+number is not coming from where I think" rather than as evidence about geometry.
+
+**A test that cannot fail for the reason you are testing proves nothing.** The one-sided
+fallback was correct when it was first written. It was reverted because it appeared to change
+nothing - and it appeared to change nothing because the cached result it was compared against
+could not change. Two hours and a revert for a fix that worked.
+
 **A pin is not a weaker weld.** The three joint types describe how the *measured bearing* is
 used, and a pin is the one that throws it away: it collapses the joint to its centre, which is
 the freedom it exists to grant. That is fine for a bolted shoe and wrong for anything acting

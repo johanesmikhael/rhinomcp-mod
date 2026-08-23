@@ -931,6 +931,9 @@ internal static class MCPConnectivityGraphBuilder
         extent = TryBearingNormal(facesA, facesB, out var normal)
             ? ReduceToExtent(samples, normal)
             : default;
+        extent.Samples = samples.Count;
+        extent.FacesA = facesA.Count;
+        extent.FacesB = facesB.Count;
         return true;
 
         void Accumulate(
@@ -1064,6 +1067,24 @@ internal static class MCPConnectivityGraphBuilder
     {
         normal = Vector3d.Unset;
 
+        // One side is enough when only one side was sampled.
+        //
+        // Faces are sampled on a grid taken from the body's own size, so an 8 x 5 m slab is
+        // sampled at 333 mm and a 200 mm bearing under a wall often catches none of it, while
+        // the wall's own face contributes over a hundred. Requiring a face from each body then
+        // threw away a bearing that had been measured perfectly well from one side: measured
+        // here, PODIUM-WALL_2 had 134 samples and no face group from the podium, WALL_3-ROOF
+        // had 115 and none from the roof, and both lost their extent.
+        //
+        // The face that *was* sampled is a real surface and its plane is the bearing plane.
+        // The pair test exists to catch an edge meeting a face, and it can only catch that
+        // when both sides are there to compare.
+        if (facesA.Count == 0 || facesB.Count == 0)
+        {
+            var only = facesA.Count > 0 ? facesA : facesB;
+            return TryDominantNormal(only, out normal);
+        }
+
         // The best *pair* of surfaces, not each body's busiest one.
         //
         // Taking the most-sampled face on each body independently fails on exactly the case
@@ -1106,6 +1127,24 @@ internal static class MCPConnectivityGraphBuilder
         }
 
         return bestScore > 0 && normal.IsValid;
+    }
+
+    /// <summary>The direction most of a body's sampled faces point, for a one-sided bearing.</summary>
+    private static bool TryDominantNormal(
+        Dictionary<(int, int, int), (Vector3d Normal, int Count)> faces, out Vector3d normal)
+    {
+        normal = Vector3d.Unset;
+        var best = 0;
+        foreach (var entry in faces.Values)
+        {
+            if (entry.Count > best)
+            {
+                best = entry.Count;
+                normal = entry.Normal;
+            }
+        }
+
+        return best > 0 && normal.IsValid;
     }
 
     private static ContactExtent ReduceToExtent(List<Point3d> samples, Vector3d normal)
@@ -1565,6 +1604,11 @@ internal struct ContactExtent
     public double HalfU;
     public double HalfV;
     public int Samples;
+
+    /// <summary>How many distinct face directions each body offered, for diagnosing a
+    /// bearing that was not measured. Set even when the extent is invalid.</summary>
+    public int FacesA;
+    public int FacesB;
 
     /// <summary>Area of the fitted rectangle, in document units squared.</summary>
     public double Area => 4.0 * HalfU * HalfV;
