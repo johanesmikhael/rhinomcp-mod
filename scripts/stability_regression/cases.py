@@ -463,6 +463,256 @@ def bridge_build(braced: bool) -> Callable[[], str]:
 
 
 # --------------------------------------------------------------------------------------
+# Hybrid: a concrete frame carrying a mass-timber deck
+# --------------------------------------------------------------------------------------
+#
+# Two portal frames 4 m apart, each a pair of 400 mm concrete columns on 700 mm pads, with a
+# glulam beam across their heads and CLT panels spanning between the two beams. One geometry,
+# built four ways, and the difference between the verdicts is the point.
+#
+# The materials are five times apart in density and within 2% in specific stiffness, which is
+# the whole reason this model is worth having: E/rho is 2.68e7 for steel and 2.62e7 for C24
+# spruce, and the evaluator only ever uses that ratio, so timber and concrete members of the
+# same size differ in what they weigh and hardly at all in how stiff they are. A model that
+# has only ever seen one material cannot tell those two facts apart.
+#
+# Dimensions in mm, and every mass follows from geometry times density, so the total weight is
+# an independent check on the whole build - a unit error anywhere shows up there before any
+# solver runs.
+
+TIMBER_GLULAM_DENSITY = 470.0      # GL24h, near enough
+TIMBER_CLT_DENSITY = 480.0         # C24 lamellae
+
+HYBRID_PAD = (700.0, 700.0, 250.0)
+HYBRID_COLUMN = (400.0, 400.0, 3000.0)
+HYBRID_BEAM_DEPTH = 400.0
+HYBRID_BEAM_WIDTH = 200.0
+HYBRID_PANEL_THICKNESS = 160.0
+
+HYBRID_SPAN_X = 6000.0             # between column centres, along the beam
+HYBRID_SPAN_Y = 4000.0             # between the two frames, spanned by the panels
+HYBRID_PANEL_COUNT = 4
+
+HYBRID_COLUMN_TOP = HYBRID_COLUMN[2]
+HYBRID_BEAM_TOP = HYBRID_COLUMN_TOP + HYBRID_BEAM_DEPTH
+
+# How far a panel lands on the beam under it. The beam is 200 wide and centred on the frame
+# line, so a panel reaching the frame line bears half the beam's width.
+HYBRID_BEARING = HYBRID_BEAM_WIDTH / 2.0
+
+# How far the defective panel reaches. Long enough that its centre of mass is 1800 mm past
+# the one bearing it has, and short enough to clear the far beam's near face at 3900 by a
+# margin no clustering tolerance can close.
+#
+# Do not read the reported displacement as a margin. The run stops as soon as the motion
+# crosses the mechanism limit, so an unstable case always reports a figure barely above it -
+# 41.5 mm against 40.9 - however decisively it is failing. What says this one is decisive is
+# that it crosses in 36k steps where the sound model runs the full 167k without ever getting
+# near.
+HYBRID_SHORT_PANEL = 3800.0
+
+
+# Set by the runner's --show flag: draw the graph and leave the settled geometry on screen.
+SHOW_WORK = False
+
+
+def timber_mass(dx_mm: float, dy_mm: float, dz_mm: float, density: float) -> float:
+    return density * (dx_mm / 1000.0) * (dy_mm / 1000.0) * (dz_mm / 1000.0)
+
+
+def hybrid_masses(panel_reach: float) -> dict[str, float]:
+    """Every body's mass, by geometry and density. The total is asserted against this."""
+    pad = concrete_mass(*HYBRID_PAD)
+    column = concrete_mass(*HYBRID_COLUMN)
+    beam = timber_mass(
+        HYBRID_SPAN_X + HYBRID_COLUMN[0], HYBRID_BEAM_WIDTH, HYBRID_BEAM_DEPTH,
+        TIMBER_GLULAM_DENSITY)
+    panel = timber_mass(
+        HYBRID_SPAN_X / HYBRID_PANEL_COUNT, panel_reach, HYBRID_PANEL_THICKNESS,
+        TIMBER_CLT_DENSITY)
+    return {"pad": pad, "column": column, "beam": beam, "panel": panel}
+
+
+def hybrid_total_weight_n(panel_reach: float, short_panels: int = 0) -> float:
+    m = hybrid_masses(HYBRID_SPAN_Y)
+    total = 4.0 * m["pad"] + 4.0 * m["column"] + 2.0 * m["beam"]
+    full = HYBRID_PANEL_COUNT - short_panels
+    total += full * m["panel"]
+    if short_panels:
+        total += short_panels * hybrid_masses(panel_reach)["panel"]
+
+    return total * GRAVITY
+
+
+def hybrid_build(short_panels: int = 0, panel_reach: float = 0.0) -> Callable[[], str]:
+    """The frame, with `short_panels` of them reaching only `panel_reach` in y."""
+
+    def build() -> str:
+        m = hybrid_masses(HYBRID_SPAN_Y)
+        lines = []
+        half_pad = HYBRID_PAD[0] / 2.0
+        half_col = HYBRID_COLUMN[0] / 2.0
+        half_beam = HYBRID_BEAM_WIDTH / 2.0
+
+        for xi, x in enumerate((0.0, HYBRID_SPAN_X)):
+            for yi, y in enumerate((0.0, HYBRID_SPAN_Y)):
+                lines.append(
+                    f'world_box("PAD_{xi}{yi}", {x - half_pad!r}, {y - half_pad!r}, '
+                    f'{-HYBRID_PAD[2]!r}, {x + half_pad!r}, {y + half_pad!r}, 0.0, '
+                    f'{m["pad"]!r}, "CONCRETE")')
+                lines.append(
+                    f'world_box("COLUMN_{xi}{yi}", {x - half_col!r}, {y - half_col!r}, 0.0, '
+                    f'{x + half_col!r}, {y + half_col!r}, {HYBRID_COLUMN_TOP!r}, '
+                    f'{m["column"]!r}, "CONCRETE")')
+
+        # One glulam beam along each frame line, running the full length over both columns.
+        for yi, y in enumerate((0.0, HYBRID_SPAN_Y)):
+            lines.append(
+                f'world_box("BEAM_{yi}", {-half_col!r}, {y - half_beam!r}, '
+                f'{HYBRID_COLUMN_TOP!r}, {HYBRID_SPAN_X + half_col!r}, {y + half_beam!r}, '
+                f'{HYBRID_BEAM_TOP!r}, {m["beam"]!r}, "GLULAM")')
+
+        # CLT panels spanning between the beams, bearing on the top of each.
+        width = HYBRID_SPAN_X / HYBRID_PANEL_COUNT
+        for i in range(HYBRID_PANEL_COUNT):
+            short = i < short_panels
+            reach = panel_reach if short else HYBRID_SPAN_Y
+            mass = hybrid_masses(reach)["panel"] if short else m["panel"]
+            lines.append(
+                f'world_box("PANEL_{i}", {i * width!r}, 0.0, {HYBRID_BEAM_TOP!r}, '
+                f'{(i + 1) * width!r}, {reach!r}, '
+                f'{HYBRID_BEAM_TOP + HYBRID_PANEL_THICKNESS!r}, {mass!r}, "CLT")')
+
+        return "\n".join(lines)
+
+    return build
+
+
+# What each pair of classes is, as an engineer would state it. These are the rules the cases
+# vary; everything else about the model is held fixed.
+HYBRID_RULES_AS_BUILT = [
+    # State what is known; where the real detail sits between two types, take the weaker.
+    #
+    # A verdict from this evaluator is a lower bound or it is nothing. Overstating a
+    # connection makes a structure look stiffer and more redundant than it is, and the failure
+    # that hides is the one nobody sees coming. Understating it costs a sound structure being
+    # reported as marginal, which is the error you can afford.
+    #
+    # Cast in one pour, so the pad and the column above it really are one moment connection.
+    # That is knowledge, not optimism, so it is stated.
+    ("CONCRETE", "CONCRETE", "welded"),
+    # A glulam beam in a bolted shoe carries force and no moment. Also known.
+    ("GLULAM", "CONCRETE", "pin"),
+    # A CLT panel laid on a beam. Nothing holds it down.
+    ("CLT", "GLULAM", "contact"),
+    # Panel to panel is where the judgement is. A screwed spline transfers shear along the
+    # joint and little moment, and none of the three types is that: welded keeps the whole
+    # 4000 mm line but adds full moment continuity, while pin keeps no line at all - it
+    # collapses the joint to one point, about which two panels simply hinge, so it is not a
+    # weaker weld but a different thing. The spline is between them and neither is it. Taking
+    # the weaker claims nothing of the screws, which is also what the deck has if they are
+    # missed on site.
+    ("CLT", "CLT", "contact"),
+]
+
+HYBRID_RULES_SPLINE_UPPER = [
+    # The same frame with the spline claimed as a full moment connection along the panel
+    # edge - the optimistic end of the bracket, kept because running both ends is how you see
+    # whether a detail is load-bearing for the verdict. Where the two disagree, the lower
+    # bound is the answer and the difference is what that detail is worth.
+    ("CONCRETE", "CONCRETE", "welded"),
+    ("GLULAM", "CONCRETE", "pin"),
+    ("CLT", "GLULAM", "contact"),
+    ("CLT", "CLT", "welded"),
+]
+
+HYBRID_RULES_DRY = [
+    # Nothing claimed anywhere: every joint a bearing, including the cast base. The floor of
+    # the bracket, and a real system in its own right - a dry-stacked frame.
+    ("CONCRETE", "CONCRETE", "contact"),
+    ("GLULAM", "CONCRETE", "contact"),
+    ("CLT", "GLULAM", "contact"),
+    ("CLT", "CLT", "contact"),
+]
+
+HYBRID_RULES_PINNED_BASE = [
+    # As built, except the column is set on the pad rather than cast into it - the base
+    # carries no moment, which is what turns a portal frame into a mechanism unless something
+    # else braces it.
+    ("CONCRETE", "CONCRETE", "pin"),
+    ("GLULAM", "CONCRETE", "pin"),
+    ("CLT", "GLULAM", "contact"),
+    ("CLT", "CLT", "contact"),
+]
+
+# Every pair any of the sets above names, so a case can clear the table before stating its own
+# and inherit nothing from whichever case ran before it.
+HYBRID_ALL_PAIRS = sorted({
+    (a, b)
+    for rules in (HYBRID_RULES_AS_BUILT, HYBRID_RULES_SPLINE_UPPER, HYBRID_RULES_DRY,
+                  HYBRID_RULES_PINNED_BASE)
+    for a, b, _ in rules
+})
+
+
+def hybrid_check(rules, expect_stable: bool, weight_n: float, expect_types=None):
+    """Apply one set of construction rules to the model, then evaluate it."""
+
+    def check(send: Callable[[str, dict], Any], ids: list[str]) -> list[str]:
+        problems = []
+
+        # Rules live in the document and outlast any one case, so each run states its own from
+        # a clean table rather than inheriting whatever the last case left behind.
+        send("assign_joint_type", {"prune": True})
+        for a, b in HYBRID_ALL_PAIRS:
+            send("assign_joint_type", {"clear": True, "layer": a, "with_layer": b})
+        for a, b, joint in rules:
+            send("assign_joint_type", {"joint_type": joint, "layer": a, "with_layer": b})
+
+        # Drawn as it goes when asked. The graph overlay shows what the solver was handed -
+        # which elements meet, and what each joint resolved to - and display leaves the
+        # settled geometry on screen afterwards. Off by default because a run that draws is a
+        # run someone has to be watching.
+        if SHOW_WORK:
+            send("graph_display", {"enabled": True, "contact_extent": True, "ids": ids})
+
+        result = send("evaluate_stability", {
+            "mode": "pinned_dynamic",
+            "ids": ids,
+            "gravity": GRAVITY,
+            "display": SHOW_WORK,
+            "solver_substeps": 1,
+            "lateral_load_fraction": 0.0,
+        })
+        if result.get("success") is not True:
+            return [str(result.get("message"))]
+
+        if bool(result.get("stable")) != expect_stable:
+            problems.append(
+                f"{result.get('verdict')} at {1000.0 * (result.get('max_pin_displacement_m') or 0.0):.1f} mm "
+                f"against a {1000.0 * (result.get('mechanism_threshold_m') or 0.0):.1f} mm limit, "
+                f"expected {'stable' if expect_stable else 'unstable'}")
+
+        # Independent of the solver: the weight is geometry times density, done by hand.
+        got = result.get("total_weight_n") or 0.0
+        if abs(got - weight_n) > 0.01 * weight_n:
+            problems.append(
+                f"total weight {got:.0f} N, expected {weight_n:.0f} from geometry and density")
+
+        if expect_types is not None:
+            counts = result.get("joint_type_counts") or {}
+            for name, want in expect_types.items():
+                if counts.get(name) != want:
+                    problems.append(
+                        f"{name} joints {counts.get(name)}, expected {want} - "
+                        f"the rules did not reach the joints they name")
+
+        return problems
+
+    return check
+
+
+# --------------------------------------------------------------------------------------
 # Micro: a stack of columns whose axial shortening is a closed form
 # --------------------------------------------------------------------------------------
 #
@@ -840,6 +1090,22 @@ MICRO = "micro"
 
 GEOMETRY = "geometry"
 
+# A fifth tier, for trying structural systems against each other rather than for guarding a
+# number or a verdict already known.
+#
+# Every other tier asks whether the evaluator is right about a case whose answer was
+# established by hand. This one asks the question the evaluator exists to answer: given one
+# geometry, which ways of building it stand up. The cases share a model and differ only in
+# what its connections are, so the comparison between them is the result - a first guess at
+# whether a system works, which is what this is for.
+#
+# It is also the answer to the coverage risk the plan named. Fifteen cases, mostly one bridge
+# and one stack, and four separate defects were each found the first time a case varied
+# something previously held fixed. A hybrid of concrete and mass timber varies almost
+# everything at once: two materials five times apart in density, three joint types in one
+# model, and panels that bear rather than connect.
+SYSTEMS = "systems"
+
 
 CASES: list[Case] = [
     Case(
@@ -952,6 +1218,84 @@ CASES: list[Case] = [
     # where a point has no lever arm, and three blocks stacked on three points is a mechanism.
     # If these two agree, the type is being dropped somewhere between the parameter and the
     # site - which is the failure mode a stiffness comparison would not catch.
+    # A concrete frame carrying a mass-timber deck, built as it would be built.
+    Case(
+        name="hybrid_as_built",
+        mode="pinned_dynamic",
+        tier=SYSTEMS,
+        stable=True,
+        reason=(
+            "pads cast into columns, beams pinned on the column heads, CLT panels bearing "
+            "100 mm on each beam - every panel's centre of mass is between its two bearings"),
+        build=hybrid_build(),
+        check=hybrid_check(HYBRID_RULES_AS_BUILT, True, hybrid_total_weight_n(HYBRID_SPAN_Y)),
+    ),
+    # The same frame with one panel too short to reach the far beam. It then bears 100 mm on
+    # one beam with its centre of mass 1400 mm past that bearing, which is the stair and the
+    # pedestal again in a different material: a bearing carries no tension, so it rotates off.
+    Case(
+        name="hybrid_panel_off_bearing",
+        mode="pinned_dynamic",
+        tier=SYSTEMS,
+        stable=False,
+        reason=(
+            "one CLT panel reaches 3800 of the 4000 mm span, so it bears on one beam only "
+            "with its centre of mass 1800 mm beyond that bearing, and unsplined panels "
+            "cannot hold it up - they meet on a vertical face"),
+        build=hybrid_build(short_panels=1, panel_reach=HYBRID_SHORT_PANEL),
+        check=hybrid_check(
+            HYBRID_RULES_AS_BUILT, False, hybrid_total_weight_n(HYBRID_SHORT_PANEL, short_panels=1)),
+    ),
+    # The same defective panel with its spline claimed as a moment connection: the optimistic
+    # end of the bracket. Its neighbours are sound and now carry it, so the answer flips.
+    #
+    # This is what running both ends is for. The verdict here rests entirely on a line of
+    # screws being as good as continuous timber, and the pair says so out loud: the lower
+    # bound is the answer, and the distance between the two is what that detail is worth. A
+    # single run at the optimistic end would have reported a sound deck and shown nothing.
+    Case(
+        name="hybrid_panel_spline_upper_bound",
+        mode="pinned_dynamic",
+        tier=SYSTEMS,
+        stable=True,
+        reason=(
+            "the same panel off its bearing, with the spline claimed as full moment "
+            "continuity along the panel edge - an upper bound, and the lower bound "
+            "disagrees, which is the finding"),
+        build=hybrid_build(short_panels=1, panel_reach=HYBRID_SHORT_PANEL),
+        check=hybrid_check(
+            HYBRID_RULES_SPLINE_UPPER, True,
+            hybrid_total_weight_n(HYBRID_SHORT_PANEL, short_panels=1)),
+    ),
+    # The floor of the bracket: nothing claimed anywhere, every joint a bearing. A rectangular
+    # frame with no moment connection at any joint has nothing to resist sway - it is a
+    # four-hinge mechanism in each frame, and the deck spanning between them only bears, so it
+    # braces nothing either. Unstable by hand before it is unstable in the solver.
+    Case(
+        name="hybrid_dry_stacked",
+        mode="pinned_dynamic",
+        tier=SYSTEMS,
+        stable=False,
+        reason=(
+            "no moment connection anywhere: each frame is a four-hinge mechanism and the "
+            "bearing deck cannot brace it"),
+        build=hybrid_build(),
+        check=hybrid_check(HYBRID_RULES_DRY, False, hybrid_total_weight_n(HYBRID_SPAN_Y)),
+    ),
+    # The one detail that decides this frame: whether the column is cast into its pad. Set on
+    # it instead, the base carries no moment, and pinned at base and head each frame is the
+    # same four-hinge mechanism. Everything else is as built.
+    Case(
+        name="hybrid_pinned_base",
+        mode="pinned_dynamic",
+        tier=SYSTEMS,
+        stable=False,
+        reason=(
+            "columns set on their pads rather than cast in, so base and head are both "
+            "hinges and each frame sways; the fixed base is what the as-built frame stands on"),
+        build=hybrid_build(),
+        check=hybrid_check(HYBRID_RULES_PINNED_BASE, False, hybrid_total_weight_n(HYBRID_SPAN_Y)),
+    ),
     Case(
         name="joint_type_rules",
         mode="pinned_dynamic",

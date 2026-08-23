@@ -226,6 +226,38 @@ on a pad, and the check runs per measured rectangle. It needed the opposite asse
 diagonal that must report *no* bearing. Every case in the tier said "this is right"; none said
 "this must not be there".
 
+**A pin is not a weaker weld.** The three joint types describe how the *measured bearing* is
+used, and a pin is the one that throws it away: it collapses the joint to its centre, which is
+the freedom it exists to grant. That is fine for a bolted shoe and wrong for anything acting
+along a line. Two CLT panels screwed edge to edge over 4000 mm, modelled as a pin, hinge about
+the single point they are left with and drop a panel the weld would have carried - 45 mm
+against a 41 mm limit, where the same model welded stands at 5. Weaker in the ordering does
+not mean weaker in every direction, and the ordering is about what a joint *carries*, not
+about how much of the geometry survives.
+
+**Where the real detail sits between two types, take the weaker.** A verdict here is a lower
+bound or it is nothing: overstating a connection makes a structure look stiffer and more
+redundant than it is, and the failure that hides is the one nobody sees coming, while
+understating costs a sound structure being called marginal. Applies where there is judgement -
+a screwed spline is neither of the types available - and not where there is knowledge: a pad
+cast into its column really is a moment connection, and refusing to say so is not caution but
+a worse model. **Run both ends when it matters**; the distance between them is what the detail
+is worth, and a single run at the optimistic end reports a sound deck and shows nothing.
+
+**A defect can be held up by something nobody modelled deliberately.** A CLT panel left short
+of its bearing came out stable, because the panels beside it were touching along their edges,
+that pair had no rule, and the default welded them into a deck that carried it. The joint that
+decided the verdict was the one nobody had mentioned. It became a case rather than a
+workaround - splined deck catches the panel, loose deck drops it - but the lesson is that an
+unstated joint is not an absent joint, and the default is doing work whether or not anyone
+thought about it.
+
+**An unstable verdict's displacement is not a margin.** The run stops the moment motion
+crosses the mechanism limit, so a failing case always reports a figure barely above it -
+41.5 mm against 40.9 - however hard it is failing. Reading that as a 1.5% margin is reading
+the stopping rule, not the structure. What separates decisive from marginal is how long it
+took to get there: 36k steps against the sound model's full 167k.
+
 ## On numerics
 
 **A test model's cost is set by its heaviest, stubbiest body, not by the physics under test.**

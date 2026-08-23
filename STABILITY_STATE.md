@@ -271,6 +271,30 @@ Every node in the result reports its `joint_type` and the `joint_type_rule` that
 (`pair:A|B`, `element:both`, `element:one`, `default`). A verdict that changed because a rule
 matched more joints than intended has to be diagnosable without re-deriving the rules by hand.
 
+### Lower bound, or nothing
+
+Where the real detail sits between two of the three types, state the weaker one. Overstating a
+connection makes a structure look stiffer and more redundant than it is, and the failure that
+hides is the one nobody sees coming; understating costs a sound structure being called
+marginal, which is the affordable error.
+
+That applies to judgement, not to knowledge. A pad cast into its column really is a moment
+connection and saying so is a better model, not a bolder one. A screwed spline between CLT
+panels is the other case: it transfers shear along the joint and little moment, `welded` keeps
+the whole 4000 mm line and adds full moment continuity, `pin` keeps no line at all - so the
+spline is between them and neither is it, and the weaker is what gets stated.
+
+**Run both ends when the detail matters.** The `systems` tier carries the same defective panel
+at both, and they disagree: the lower bound drops it, the upper bound carries it. That
+disagreement is the finding - it says the verdict rests entirely on a line of screws being as
+good as continuous timber. A single run at the optimistic end reports a sound deck and shows
+nothing.
+
+**A pin is not a weaker weld.** It is the type that throws the measured bearing away, which is
+the freedom it exists to grant. Modelled as a pin, two panels screwed over 4000 mm hinge about
+the single point they are left with. Weaker in the ordering does not mean weaker in every
+direction.
+
 `joint_type_rules` in the fast tier walks all four branches on one stair - bottom block on one
 layer, the two above on another, so the lower joint and the upper joint belong to different
 class pairs and a rule that matches one has to leave the other alone. It asserts the resolved

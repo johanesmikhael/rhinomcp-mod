@@ -37,7 +37,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2] / "rhino_mcp_server" / "src"))
 
 import cases as case_module
-from cases import FAST, GEOMETRY, MICRO, SLOW, Case
+from cases import FAST, GEOMETRY, MICRO, SLOW, SYSTEMS, Case
 from rhinomcp.server import RhinoConnection
 
 
@@ -214,7 +214,7 @@ def load_baseline() -> dict[str, Any]:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "--tier", default=FAST, choices=[FAST, GEOMETRY, MICRO, SLOW, "all"])
+        "--tier", default=FAST, choices=[FAST, GEOMETRY, MICRO, SLOW, SYSTEMS, "all"])
     parser.add_argument("--case", action="append", default=None)
     parser.add_argument("--update-baseline", action="store_true")
     # Run every pinned case on one integrator, to compare the two across the whole suite
@@ -225,6 +225,8 @@ def main() -> int:
                         help="skip the sway probe and take the coarser step, for screening")
     parser.add_argument("--timestep-safety", type=float, default=None,
                         help="rigid-body path only; the particle path has no such knob")
+    parser.add_argument("--show", action="store_true",
+                        help="draw the graph and leave the settled geometry on screen")
     parser.add_argument("--json", type=pathlib.Path, default=None)
     args = parser.parse_args()
 
@@ -235,6 +237,7 @@ def main() -> int:
     else:
         selected = case_module.in_tier(args.tier)
 
+    case_module.SHOW_WORK = args.show
     OVERRIDES["integrator"] = args.integrator
     OVERRIDES["fast"] = args.fast_settings
     OVERRIDES["timestep_safety"] = args.timestep_safety
