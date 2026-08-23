@@ -659,7 +659,8 @@ public partial class RhinoMCPModFunctions
             var a = bodies[links[index].A].Node;
             var b = bodies[links[index].B].Node;
             var type = rules.Resolve(
-                a?.LayerName, a?.ElementJointType, b?.LayerName, b?.ElementJointType,
+                a?.Node?["g"]?.ToString(), a?.LayerName, a?.ElementJointType,
+                b?.Node?["g"]?.ToString(), b?.LayerName, b?.ElementJointType,
                 out var which);
 
             var root = Find(index);

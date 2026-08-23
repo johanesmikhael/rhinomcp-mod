@@ -313,6 +313,8 @@ async def assign_joint_type(
     joint_type: str | None = None,
     layer: str | list[str] | None = None,
     with_layer: str | list[str] | None = None,
+    with_ids: list[str] | None = None,
+    with_names: list[str] | None = None,
     ids: list[str] | None = None,
     names: list[str] | None = None,
     selected: bool = False,
@@ -341,23 +343,33 @@ async def assign_joint_type(
             across it, so it opens as load leaves it. Dry masonry, a beam on
             a corbel, a precast panel on a pad. Synonyms: bearing, dry.
 
-        layer: The element class. A layer name, or a list of them.
-        with_layer: The other class, making this a rule about the joints
-            *between* two classes - "beam to column is welded". Requires
-            layer. Order does not matter: naming Beams/Columns and
-            Columns/Beams writes the same rule.
-        ids: Object GUIDs, for a rule about specific elements.
-        names: Object names, likewise.
+        layer: One side of the rule, named by layer. A name or a list.
+        ids: One side, named by object GUID. Use with with_layer/with_ids for
+            a pair rule; alone, it is an element rule.
+        names: One side, named by object name. Resolved to GUIDs as it is
+            written, since a name can be changed or duplicated later.
+        with_layer: The other side, by layer, making this a rule about the
+            joints *between* two classes - "beam to column is welded".
+        with_ids: The other side, by object GUID.
+        with_names: The other side, by object name.
         selected: When True, applies to the current selection.
         clear: When True, removes the rule instead of writing it.
 
-    Precedence, most specific first: a pair rule, then what one element says
-    about its own joints, then evaluate_stability's joint_type argument as
-    the default. Where two elements state different types and no pair rule
-    covers them, the weaker governs - a hinge assumed where a moment
-    connection exists reads softer and more mechanism-prone than the truth,
-    which fails safe for a stability verdict, and unlike "last rule wins" it
-    does not depend on the order the rules were given in.
+    Any "with_" argument makes it a pair rule and requires one of layer/ids/
+    names for the other side. Order never matters: Beams/Columns and
+    Columns/Beams write and match the same rule.
+
+    Precedence, most specific first: two named objects, then one object and
+    one layer, then two layers, then what one element says about its own
+    joints, then evaluate_stability's joint_type as the default. So "this
+    beam meets that column as a pin" survives a blanket "beams meet columns
+    welded" rather than being averaged with it.
+
+    Where two elements state different types and no pair rule covers them,
+    the weaker governs - a hinge assumed where a moment connection exists
+    reads softer and more mechanism-prone than the truth, which fails safe
+    for a stability verdict, and unlike "last rule wins" it does not depend
+    on the order the rules were given in.
 
     Element rules are stored on the object beside its mass, so they travel
     with a copy. Pair rules are stored in the document, because there is
@@ -371,6 +383,8 @@ async def assign_joint_type(
                           with_layer="Columns")
         assign_joint_type(joint_type="pin", layer="Truss")
         assign_joint_type(joint_type="contact", ids=[...])
+        assign_joint_type(joint_type="pin", ids=[beam],
+                          with_ids=[column])          # this joint only
     """
     from rhinomcp.server import get_rhino_connection
 
@@ -381,6 +395,10 @@ async def assign_joint_type(
         params["layer"] = layer
     if with_layer is not None:
         params["with_layer"] = with_layer
+    if with_ids:
+        params["with_ids"] = with_ids
+    if with_names:
+        params["with_names"] = with_names
     if ids:
         params["ids"] = ids
     if names:

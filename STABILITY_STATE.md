@@ -205,14 +205,26 @@ unit the tool takes.
 
 ```
 assign_joint_type(joint_type="welded", layer="Beams", with_layer="Columns")
-assign_joint_type(joint_type="pin",    layer="Truss")      # all its joints
-assign_joint_type(joint_type="contact", ids=[...])         # these elements
+assign_joint_type(joint_type="pin",    layer="Truss")        # all its joints
+assign_joint_type(joint_type="contact", ids=[...])           # these elements
+assign_joint_type(joint_type="pin", ids=[beam], with_ids=[column])   # this joint
 assign_joint_type(clear=True, layer="Beams", with_layer="Columns")
 ```
 
-Most specific first: a **pair rule**, then an **element rule**, then `evaluate_stability`'s own
-`joint_type` as the **default**. Where two element rules meet and no pair rule covers them the
-weaker governs, for the same reason the ordering exists at all.
+Either side of a pair rule can be named by layer or by object, the same choice Rhino gives
+everywhere else, and the tighter rule wins: **two objects**, then **an object and a layer**,
+then **two layers**, then an **element rule**, then `evaluate_stability`'s own `joint_type` as
+the **default**. That ordering is what makes "this beam meets that column as a pin" statable
+at all - without it the tighter case would have to move every joint between the two classes
+with it. Specificity, not order: a rule table is not a script.
+
+Where two element rules meet and no pair rule covers them the weaker governs, for the same
+reason the type ordering exists at all.
+
+Names are resolved to object ids as the rule is written, since a name can be changed or
+duplicated later while the rule has to keep meaning the element it was written for. Tokens are
+stored prefixed - `layer:Beams`, `id:<guid>` - so a layer named after a GUID cannot be mistaken
+for the object of that name.
 
 Element rules go on the object beside its mass, in the same user string, so they travel with a
 copy. Pair rules go in document user text, because there is nowhere on a beam to record what

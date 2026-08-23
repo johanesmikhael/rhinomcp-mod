@@ -59,26 +59,38 @@ public partial class RhinoMCPModFunctions
                     $"Unknown joint_type '{typeText}'. Expected contact, pin or welded.");
             }
 
-            var withLayers = ReadLayerTokens(parameters?["with_layer"]);
-            var layers = ReadLayerTokens(parameters?["layer"]);
+            // Each side of a pair rule names a class of element, and there are two ways to
+            // name one: by layer, which is how a trade is usually organised, and by object,
+            // for the joint that is genuinely its own case. Same choice Rhino gives everywhere
+            // else, and the same choice assign_mass already gives on its single scope.
+            var sideB = ReadPairTokens(doc, parameters, "with_layer", "with_ids", "with_names");
+            var sideA = ReadPairTokens(doc, parameters, "layer", "ids", "names");
 
-            // A pair rule is about two classes of element, so both sides have to be classes.
-            // Naming one side by id would be a rule about one object meeting a class, which is
-            // an element rule with extra steps and no way to state the other half.
-            if (withLayers.Count > 0)
+            if (sideB.Count > 0)
             {
-                if (layers.Count == 0)
+                if (sideA.Count == 0)
                 {
                     throw new InvalidOperationException(
-                        "'with_layer' names the other half of a pair rule, so 'layer' is required too.");
+                        "'with_layer'/'with_ids' name one half of a pair rule, so 'layer', 'ids' " +
+                        "or 'names' is required for the other.");
                 }
 
                 var rules = ReadPairRules(doc);
                 var written = new JArray();
-                foreach (var a in layers)
+                foreach (var a in sideA)
                 {
-                    foreach (var b in withLayers)
+                    foreach (var b in sideB)
                     {
+                        // A rule from an element to itself would fire on every joint between
+                        // two members of that class, which is what naming the class once
+                        // already means. Naming one *object* twice is a joint from a body to
+                        // itself, which does not exist.
+                        if (string.Equals(a, b, StringComparison.OrdinalIgnoreCase) &&
+                            a.StartsWith(IdTokenPrefix, StringComparison.Ordinal))
+                        {
+                            continue;
+                        }
+
                         var key = PairKey(a, b);
                         if (clear)
                         {
@@ -91,8 +103,8 @@ public partial class RhinoMCPModFunctions
 
                         written.Add(new JObject
                         {
-                            ["layer"] = a,
-                            ["with_layer"] = b,
+                            ["a"] = a,
+                            ["b"] = b,
                             ["joint_type"] = clear ? null : TypeName(type)
                         });
                     }
@@ -197,15 +209,86 @@ public partial class RhinoMCPModFunctions
         return tokens;
     }
 
+    /// <summary>A class of element, as one of the two things a pair rule names.</summary>
+    /// <remarks>
+    /// Prefixed rather than bare so a layer called after a GUID cannot be mistaken for the
+    /// object of that name. It also makes the stored rule readable: "layer:Beams" says what
+    /// kind of thing it is without needing the code that wrote it.
+    /// </remarks>
+    internal const string LayerTokenPrefix = "layer:";
+    internal const string IdTokenPrefix = "id:";
+
+    /// <summary>How specific a token is, so the tighter rule wins where two match.</summary>
+    private static int TokenRank(string token)
+    {
+        return token != null && token.StartsWith(IdTokenPrefix, StringComparison.Ordinal) ? 2 : 1;
+    }
+
     /// <summary>One pair rule, with the classes it was written for.</summary>
     internal sealed class PairRule
     {
-        public string LayerA;
-        public string LayerB;
+        public string A;
+        public string B;
         public StabilityRigidBodies.JointType Type;
 
+        /// <summary>How specific this rule is: two named objects beat an object and a layer.</summary>
+        public int Rank => TokenRank(A) + TokenRank(B);
+
         /// <summary>How this rule names itself in a report, the same way round every time.</summary>
-        public string Label => "pair:" + LayerA + "|" + LayerB;
+        public string Label => "pair:" + Friendly(A) + "|" + Friendly(B);
+
+        private static string Friendly(string token)
+        {
+            return token != null && token.StartsWith(LayerTokenPrefix, StringComparison.Ordinal)
+                ? token.Substring(LayerTokenPrefix.Length)
+                : token;
+        }
+    }
+
+    /// <summary>
+    /// One side of a pair rule, from whichever of the scope arguments was given.
+    /// </summary>
+    private static List<string> ReadPairTokens(
+        RhinoDoc doc, JObject parameters, string layerKey, string idsKey, string namesKey)
+    {
+        var tokens = new List<string>();
+        foreach (var layer in ReadLayerTokens(parameters?[layerKey]))
+        {
+            tokens.Add(LayerTokenPrefix + layer.Trim());
+        }
+
+        if (parameters?[idsKey] is JArray ids)
+        {
+            foreach (var token in ids)
+            {
+                if (Guid.TryParse(token?.ToString(), out var guid))
+                {
+                    tokens.Add(IdTokenPrefix + guid);
+                }
+            }
+        }
+
+        // Names are resolved to ids as they are written, because a name is a label on an
+        // object and can be changed or duplicated, while the rule has to keep meaning the
+        // element it was written for.
+        if (parameters?[namesKey] is JArray names && doc != null)
+        {
+            var wanted = names.Select(n => n?.ToString())
+                .Where(n => !string.IsNullOrWhiteSpace(n))
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            if (wanted.Count > 0)
+            {
+                foreach (var obj in doc.Objects)
+                {
+                    if (!string.IsNullOrWhiteSpace(obj?.Name) && wanted.Contains(obj.Name))
+                    {
+                        tokens.Add(IdTokenPrefix + obj.Id);
+                    }
+                }
+            }
+        }
+
+        return tokens;
     }
 
     /// <summary>Separator for a pair key: a control character no layer name can contain.</summary>
@@ -242,8 +325,8 @@ public partial class RhinoMCPModFunctions
         var ordered = string.Compare(left, right, StringComparison.OrdinalIgnoreCase) <= 0;
         return new PairRule
         {
-            LayerA = ordered ? left : right,
-            LayerB = ordered ? right : left,
+            A = ordered ? left : right,
+            B = ordered ? right : left,
             Type = type
         };
     }
@@ -260,11 +343,11 @@ public partial class RhinoMCPModFunctions
         try
         {
             // An array rather than an object keyed by the pair, so nothing has to parse a key
-            // back into two layer names.
+            // back into the two classes it was built from.
             foreach (var entry in JArray.Parse(stored).OfType<JObject>())
             {
-                var a = entry["layer"]?.ToString();
-                var b = entry["with_layer"]?.ToString();
+                var a = entry["a"]?.ToString();
+                var b = entry["b"]?.ToString();
                 if (string.IsNullOrWhiteSpace(a) || string.IsNullOrWhiteSpace(b))
                 {
                     continue;
@@ -301,13 +384,13 @@ public partial class RhinoMCPModFunctions
     {
         var report = new JArray();
         foreach (var rule in rules.Values
-            .OrderBy(r => r.LayerA, StringComparer.OrdinalIgnoreCase)
-            .ThenBy(r => r.LayerB, StringComparer.OrdinalIgnoreCase))
+            .OrderBy(r => r.A, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(r => r.B, StringComparer.OrdinalIgnoreCase))
         {
             report.Add(new JObject
             {
-                ["layer"] = rule.LayerA,
-                ["with_layer"] = rule.LayerB,
+                ["a"] = rule.A,
+                ["b"] = rule.B,
                 ["joint_type"] = TypeName(rule.Type)
             });
         }
@@ -335,18 +418,37 @@ public partial class RhinoMCPModFunctions
         public int PairCount => _pairs.Count;
 
         /// <summary>What the joint between these two elements is, and which rule said so.</summary>
+        /// <remarks>
+        /// Each body offers what it can be named by - the object itself, and the layer it sits
+        /// on - and the tightest rule matching any combination wins. Two named objects beat an
+        /// object and a layer, which beats two layers, so "this beam meets that column as a
+        /// pin" survives a blanket "beams meet columns welded" rather than being averaged with
+        /// it. Specificity, not order: a rule table is not a script.
+        /// </remarks>
         public StabilityRigidBodies.JointType Resolve(
-            string layerA, StabilityRigidBodies.JointType? elementA,
-            string layerB, StabilityRigidBodies.JointType? elementB,
+            string guidA, string layerA, StabilityRigidBodies.JointType? elementA,
+            string guidB, string layerB, StabilityRigidBodies.JointType? elementB,
             out string rule)
         {
-            if (!string.IsNullOrWhiteSpace(layerA) && !string.IsNullOrWhiteSpace(layerB) &&
-                _pairs.TryGetValue(PairKey(layerA, layerB), out var paired))
+            PairRule best = null;
+            foreach (var tokenA in Tokens(guidA, layerA))
+            {
+                foreach (var tokenB in Tokens(guidB, layerB))
+                {
+                    if (_pairs.TryGetValue(PairKey(tokenA, tokenB), out var candidate) &&
+                        (best == null || candidate.Rank > best.Rank))
+                    {
+                        best = candidate;
+                    }
+                }
+            }
+
+            if (best != null)
             {
                 // The rule's own name for itself, not one built from the order these two
                 // bodies happened to arrive in.
-                rule = paired.Label;
-                return paired.Type;
+                rule = best.Label;
+                return best.Type;
             }
 
             // Weakest of the two elements' own rules. Not "last one wins": that would make the
@@ -373,6 +475,19 @@ public partial class RhinoMCPModFunctions
 
             rule = "default";
             return Default;
+        }
+
+        private static IEnumerable<string> Tokens(string guid, string layer)
+        {
+            if (!string.IsNullOrWhiteSpace(guid))
+            {
+                yield return IdTokenPrefix + guid.Trim();
+            }
+
+            if (!string.IsNullOrWhiteSpace(layer))
+            {
+                yield return LayerTokenPrefix + layer.Trim();
+            }
         }
     }
 }

@@ -220,6 +220,8 @@ def check_joint_type_rules(send: Callable[[str, dict], Any], ids: list[str]) -> 
         # which is the sort of coupling a suite is supposed to be free of.
         send("assign_joint_type", {"clear": True, "layer": "STEP_A", "with_layer": "STEP_B"})
         send("assign_joint_type", {"clear": True, "layer": "STEP_B", "with_layer": "STEP_B"})
+        send("assign_joint_type",
+             {"clear": True, "ids": [ids[1]], "with_ids": [ids[2]]})
         send("assign_joint_type", {"clear": True, "ids": ids})
 
     def nodes_by_type(label: str, expect_stable: bool) -> list[tuple[str, str]]:
@@ -254,6 +256,23 @@ def check_joint_type_rules(send: Callable[[str, dict], Any], ids: list[str]) -> 
     if got != [("pin", "element:both"), ("pin", "element:one")]:
         problems.append(
             f"element rule: {got}, expected one joint resolved by one element and one by both")
+
+    clear_rules()
+
+    # A rule naming two objects beats one naming their layers. Without that, the tighter rule
+    # is unstatable: every joint between the two classes would have to move together, and
+    # "this one connection is different" is exactly the case a per-joint rule exists for.
+    send("assign_joint_type", {"joint_type": "pin", "layer": "STEP_B", "with_layer": "STEP_B"})
+    send("assign_joint_type",
+         {"joint_type": "welded", "ids": [ids[1]], "with_ids": [ids[2]]})
+    got = nodes_by_type("id pair over layer pair", True)
+    types = sorted(entry[0] for entry in got)
+    rules = sorted(entry[1] for entry in got)
+    if types != ["welded", "welded"]:
+        problems.append(
+            f"id pair over layer pair: {got}, expected the object rule to override the layer one")
+    if sum(rule.startswith("pair:id:") for rule in rules) != 1:
+        problems.append(f"id pair over layer pair: {rules}, expected one rule named by object")
 
     clear_rules()
     got = nodes_by_type("cleared", True)
