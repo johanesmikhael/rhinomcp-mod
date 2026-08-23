@@ -192,6 +192,40 @@ the limit. What separates it from a mechanism is direction, not distance: a mech
 one way, a rocking block reverses. Reversals plus a peak that is not growing, and no new tuned
 number.
 
+**A best fit through a region assumes the region is one surface.** The bearing plane was
+fitted to the sampled contact points, which is right whenever two faces lie on each other and
+meaningless the moment they do not: a square-cut diagonal landing on a flat pad is sampled on
+its own inclined end *and* on the pad's top, and the fitted plane splits the difference at 45
+degrees - a direction neither surface points in. As a contact joint that sheds the vertical
+load those members carry and pushes them sideways, so a braced bridge walked off its supports,
+112 mm against a 61 mm limit, while the same bridge welded or pinned stood at half a
+millimetre. **The controls are what located it**: all-welded and all-pin both stood, so it was
+not the pinned truss; turning the imperfection off and raising the damping changed nothing, so
+it was neither a jolt artefact nor ringing. That left the bearings, and the normals said so
+outright.
+
+**The fix is to take the direction from the surfaces, and to refuse when there is none.** A
+normal from the dominant face pair rather than from a point cloud, and no extent at all when
+the two faces are more than 20 degrees from parallel, because a member touching along one edge
+has a contact point and no bearing plane. Inventing a direction there is worse than admitting
+none: a contact with no normal falls back to welded, which is wrong in a way that shows up in
+`contact_joints_sided` rather than wrong in a way that moves a verdict.
+
+**Ranking the faces by sample count picked the wrong pair.** A 150 mm column standing on a pad
+is sampled far more often down its four sides - each contributing a row along the bottom
+edge - than across the small square actually bearing, so its "dominant" face came out
+horizontal-pointing and the column lost the extent it had always had. What identifies a
+bearing is that *two* surfaces lie on each other, so the pair is what has to be searched, not
+each body's busiest face independently. The geometry tier caught this on the first run after
+the change.
+
+**An assertion that a measurement is right cannot fail on a measurement that was never made.**
+The extent case had checked the bearing normal was vertical since it was written, and the 45
+degree fit sailed past it for weeks - because that case only ever drew elements sitting square
+on a pad, and the check runs per measured rectangle. It needed the opposite assertion too: a
+diagonal that must report *no* bearing. Every case in the tier said "this is right"; none said
+"this must not be there".
+
 ## On numerics
 
 **A test model's cost is set by its heaviest, stubbiest body, not by the physics under test.**

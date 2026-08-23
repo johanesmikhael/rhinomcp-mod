@@ -713,6 +713,7 @@ plane = Rhino.Geometry.Plane(
     Rhino.Geometry.Vector3d(math.cos(ang), math.sin(ang), 0.0),
     Rhino.Geometry.Vector3d(-math.sin(ang), math.cos(ang), 0.0))
 add_box("WALL_ROT30", plane, {EXTENT_WALL_LENGTH!r}, {EXTENT_WALL_THICKNESS!r}, 2000.0, 400.0)
+axis_box("DIAGONAL", (500.0,1400.0,0.0), (1700.0,1400.0,1200.0), {EXTENT_COLUMN_SIDE!r}, 54.0)
 """
 
 
@@ -723,6 +724,18 @@ EXTENT_EXPECTED = {
     "WALL_ROT30": (EXTENT_WALL_LENGTH, EXTENT_WALL_THICKNESS, EXTENT_WALL_ROTATION_DEG),
     "COLUMN": (EXTENT_COLUMN_SIDE, EXTENT_COLUMN_SIDE, None),
 }
+
+# A square-cut member landing on a flat pad at 45 degrees touches it along one edge, and an
+# edge is not a bearing: there is no plane to report and no direction for a contact joint to
+# open along. Saying so is the point of listing it here.
+#
+# Fitting a plane through the sampled region instead reported 45 degrees - the average of the
+# member's inclined end and the pad's top, a direction neither surface points in - and a
+# contact joint built on it shed the vertical load those members carry and pushed them
+# sideways. On a braced bridge whose diagonals land on its pads that walked the truss off its
+# supports, 112 mm against a 61 mm limit, where the same model welded or pinned stood at half
+# a millimetre. The normal now comes from the surfaces rather than from a fit.
+EXTENT_NO_BEARING = ("DIAGONAL",)
 
 # Five percent. The sampling walks a grid across the smaller element, so an edge sample can
 # sit up to one spacing short of the true boundary; measured, the worst side is 152 against
@@ -784,6 +797,18 @@ def check_extent(send: Callable[[str, dict], Any], ids: list[str]) -> list[str]:
     for name in EXTENT_EXPECTED:
         if name not in seen:
             problems.append(f"{name} has no measured bearing extent")
+
+    # And the other direction: what must NOT be measured. Every assertion above says a
+    # rectangle is right, and none of them can fail on a joint that has no rectangle to
+    # begin with - which is exactly how a 45 degree bearing plane survived until a bridge
+    # walked off its supports.
+    for entry in measured:
+        pair = [names.get(entry["a"], ""), names.get(entry["b"], "")]
+        for name in EXTENT_NO_BEARING:
+            if name in pair:
+                problems.append(
+                    f"{name} reports a bearing extent, normal {entry.get('normal')} - it meets "
+                    "the pad along one edge, and an edge has no bearing plane")
 
     return problems
 

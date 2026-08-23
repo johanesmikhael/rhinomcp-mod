@@ -907,8 +907,14 @@ internal static class MCPConnectivityGraphBuilder
         var count = 0;
         var samples = new List<Point3d>();
 
-        Accumulate(a, b);
-        Accumulate(b, a);
+        // Which way each body's surface faces where it is being touched, counted per distinct
+        // face direction rather than averaged. Averaged, a pad's top and its side come out at
+        // 45 degrees and that is a direction neither surface points in.
+        var facesA = new Dictionary<(int, int, int), (Vector3d Normal, int Count)>();
+        var facesB = new Dictionary<(int, int, int), (Vector3d Normal, int Count)>();
+
+        Accumulate(a, b, facesA);
+        Accumulate(b, a, facesB);
 
         if (count == 0)
         {
@@ -922,10 +928,13 @@ internal static class MCPConnectivityGraphBuilder
         }
 
         contactPoint = centroid;
-        extent = ReduceToExtent(samples);
+        extent = TryBearingNormal(facesA, facesB, out var normal)
+            ? ReduceToExtent(samples, normal)
+            : default;
         return true;
 
-        void Accumulate(Mesh source, Mesh target)
+        void Accumulate(
+            Mesh source, Mesh target, Dictionary<(int, int, int), (Vector3d Normal, int Count)> faces)
         {
             var targetBox = target.GetBoundingBox(true);
             targetBox.Inflate(maxGap);
@@ -954,6 +963,11 @@ internal static class MCPConnectivityGraphBuilder
                     continue;
                 }
 
+                // The face's own direction, from its corners rather than from the mesh's
+                // normal array, which a proxy mesh may never have had computed.
+                var faceNormal = Vector3d.CrossProduct(p1 - p0, p2 - p0);
+                var hasNormal = faceNormal.Unitize();
+
                 var steps = SampleSteps(faceBox, spacing);
                 for (var i = 0; i <= steps; i++)
                 {
@@ -981,6 +995,20 @@ internal static class MCPConnectivityGraphBuilder
                         sum += bearing;
                         samples.Add(bearing);
                         count++;
+
+                        if (!hasNormal)
+                        {
+                            continue;
+                        }
+
+                        // Grouped by direction to a hundredth, which separates a box's six
+                        // faces without splitting one curved surface into a hundred groups.
+                        var key = (
+                            (int)Math.Round(faceNormal.X * 100.0),
+                            (int)Math.Round(faceNormal.Y * 100.0),
+                            (int)Math.Round(faceNormal.Z * 100.0));
+                        var seen = faces.TryGetValue(key, out var entry) ? entry.Count : 0;
+                        faces[key] = (faceNormal, seen + 1);
                     }
                 }
             }
@@ -1001,7 +1029,86 @@ internal static class MCPConnectivityGraphBuilder
     /// reads as the rectangle containing it. That is visible on screen, which is the point of
     /// drawing it before anything consumes it.
     /// </remarks>
-    private static ContactExtent ReduceToExtent(List<Point3d> samples)
+    /// <summary>How parallel two surfaces must be before they count as bearing on each other.</summary>
+    /// <remarks>
+    /// Twenty degrees. A face bearing is two surfaces lying on each other, so their normals
+    /// are antiparallel; anything else is an edge or a corner touching a face, which has a
+    /// contact point but no bearing plane. The tolerance is loose because a mesh of a curved
+    /// or slightly-out-of-plane surface is not exactly flat, and tight enough that the 45
+    /// degrees a diagonal makes against a pad cannot pass.
+    /// </remarks>
+    private const double BearingParallelCosine = 0.94;
+
+    /// <summary>
+    /// The direction a bearing carries load along, from the surfaces rather than from a fit.
+    /// </summary>
+    /// <remarks>
+    /// Fitting a plane through the sampled region assumes the region *is* a plane. It is not
+    /// when a square-cut diagonal lands on a flat pad: the samples then lie on the member's
+    /// inclined end and on the pad's top at once, and the best-fit plane splits the difference.
+    /// A braced bridge came out with four of its pad bearings tilted 45 degrees, which as a
+    /// contact joint sheds the vertical load those members carry and pushes them sideways -
+    /// the truss walked off its supports, 112 mm against a 61 mm limit, while the same model
+    /// welded or pinned stood at half a millimetre.
+    ///
+    /// So the normal comes from the dominant face each body presents, and if the two are not
+    /// nearly antiparallel there is no bearing plane to report. That case is real and common -
+    /// a diagonal on a pad touches along one edge - and saying so is better than inventing a
+    /// direction: a contact joint with no normal falls back to welded, which is wrong in a way
+    /// that shows up in contact_joints_sided rather than wrong in a way that moves a verdict.
+    /// </remarks>
+    private static bool TryBearingNormal(
+        Dictionary<(int, int, int), (Vector3d Normal, int Count)> facesA,
+        Dictionary<(int, int, int), (Vector3d Normal, int Count)> facesB,
+        out Vector3d normal)
+    {
+        normal = Vector3d.Unset;
+
+        // The best *pair* of surfaces, not each body's busiest one.
+        //
+        // Taking the most-sampled face on each body independently fails on exactly the case
+        // this is for: a 150 mm column standing on a pad is sampled far more often down its
+        // four sides - each contributing a row along the bottom edge - than across the small
+        // square that is actually bearing, so its dominant face came out horizontal-pointing
+        // and the column lost the extent it has had all along. What identifies a bearing is
+        // that two surfaces lie on each other, so the pair is what has to be searched.
+        var bestScore = 0;
+        foreach (var a in facesA.Values)
+        {
+            foreach (var b in facesB.Values)
+            {
+                var alignment = a.Normal * b.Normal;
+                if (Math.Abs(alignment) < BearingParallelCosine)
+                {
+                    continue;
+                }
+
+                // Most-sampled among those that qualify, so a stray face pair touching at one
+                // point cannot outrank the surface carrying the load.
+                var score = a.Count + b.Count;
+                if (score <= bestScore)
+                {
+                    continue;
+                }
+
+                // Mesh orientation is not guaranteed, so the two are brought onto the same
+                // side rather than assumed opposed, and averaged so a slight disagreement
+                // splits rather than picking a winner.
+                var mean = alignment > 0.0 ? a.Normal + b.Normal : a.Normal - b.Normal;
+                if (!mean.Unitize())
+                {
+                    continue;
+                }
+
+                bestScore = score;
+                normal = mean;
+            }
+        }
+
+        return bestScore > 0 && normal.IsValid;
+    }
+
+    private static ContactExtent ReduceToExtent(List<Point3d> samples, Vector3d normal)
     {
         // Three points is the minimum that determines a plane at all.
         if (samples == null || samples.Count < 3)
@@ -1009,8 +1116,17 @@ internal static class MCPConnectivityGraphBuilder
             return default;
         }
 
-        if (Plane.FitPlaneToPoints(samples, out var plane) != PlaneFitResult.Success ||
-            !plane.IsValid)
+        // The plane through the samples' centre, square to the bearing surface. Its origin is
+        // where the samples are; only its direction comes from the geometry.
+        var centre = Point3d.Origin;
+        foreach (var sample in samples)
+        {
+            centre += sample;
+        }
+
+        centre /= samples.Count;
+        var plane = new Plane(centre, normal);
+        if (!plane.IsValid)
         {
             return default;
         }
