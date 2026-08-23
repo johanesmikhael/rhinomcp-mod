@@ -431,6 +431,7 @@ internal static class MCPConnectivityGraphBuilder
                 continue;
             }
 
+            var proxy = BuildProxyMesh(obj.Geometry, tolerance);
             nodes.Add(new Node
             {
                 ObjectId = obj.Id,
@@ -438,7 +439,8 @@ internal static class MCPConnectivityGraphBuilder
                 Center = bbox.Center,
                 BoundingBox = bbox,
                 Geometry = obj.Geometry,
-                ProxyMesh = BuildProxyMesh(obj.Geometry, tolerance)
+                ProxyMesh = proxy,
+                Regions = PlanarBearing.ExtractRegions(obj.Geometry, proxy, tolerance)
             });
         }
 
@@ -480,9 +482,14 @@ internal static class MCPConnectivityGraphBuilder
                     continue;
                 }
 
+                PlanarBearing.TryMeasure(
+                    nodes[i].Regions, nodes[j].Regions,
+                    nodes[i].BoundingBox, nodes[j].BoundingBox,
+                    ContactGap(tolerance), tolerance, out var exact);
+
                 edges.Add(new Edge
                 {
-                    A = i, B = j, ContactPoint = contactPoint, Extent = contactExtent
+                    A = i, B = j, ContactPoint = contactPoint, Extent = contactExtent, Exact = exact
                 });
             }
         }
@@ -515,7 +522,7 @@ internal static class MCPConnectivityGraphBuilder
         var quantum = Math.Max(tolerance * 0.1, 1e-9);
 
         var builder = new StringBuilder();
-        builder.Append("v2|").Append(tolerance.ToString("R", CultureInfo.InvariantCulture))
+        builder.Append("v3|").Append(tolerance.ToString("R", CultureInfo.InvariantCulture))
             .Append("|").Append(scope.Key);
 
         // Covers every candidate, not just the first MaxNodes: a change beyond the cap
@@ -1567,6 +1574,12 @@ internal struct Node
     public BoundingBox BoundingBox;
     public GeometryBase Geometry;
     public Mesh ProxyMesh;
+
+    /// <summary>
+    /// The body's flat surface regions, extracted once here rather than per candidate pair.
+    /// A node with many neighbours would otherwise re-read the same faces for each of them.
+    /// </summary>
+    public List<PlanarRegion> Regions;
 }
 
 internal struct Edge
@@ -1581,6 +1594,15 @@ internal struct Edge
     /// seeing rather than hiding: those joints have a location and no measured extent.
     /// </summary>
     public ContactExtent Extent;
+
+    /// <summary>
+    /// The same bearing measured by intersecting the two bodies' flat regions instead of
+    /// sampling the space between them. Carried beside <see cref="Extent"/> rather than
+    /// replacing it, because the comparison between the two is what decides whether it may
+    /// replace it - the sampled path answers most of the suite correctly and the exact one
+    /// has to be shown to agree before it is trusted anywhere.
+    /// </summary>
+    public PlanarBearingResult Exact;
 }
 
 /// <summary>

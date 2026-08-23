@@ -31,6 +31,8 @@ public partial class RhinoMCPModFunctions
         var edges = new JArray();
         var extents = new JArray();
         var unmeasured = new JArray();
+        var exact = new JArray();
+        var exactUnmeasured = new JArray();
         foreach (var edge in graph.Edges)
         {
             edges.Add(new JArray(
@@ -60,7 +62,55 @@ public partial class RhinoMCPModFunctions
                     ["samples"] = edge.Extent.Samples
                 });
             }
+            if (edge.Exact.IsValid)
+            {
+                // The same joint measured by region intersection rather than by sampling.
+                // Reported beside the sampled extent, not instead of it: until the two have
+                // been compared across the suite, replacing one with the other would be a
+                // change nobody had measured.
+                exact.Add(new JObject
+                {
+                    ["a"] = edge.A,
+                    ["b"] = edge.B,
+                    ["centre"] = RoundPoint(edge.Exact.Frame.Origin),
+                    ["u"] = RoundVector(edge.Exact.Frame.XAxis),
+                    ["v"] = RoundVector(edge.Exact.Frame.YAxis),
+                    ["normal"] = RoundVector(edge.Exact.Frame.ZAxis),
+                    ["length_u"] = Math.Round(edge.Exact.HalfU * 2.0, 3),
+                    ["length_v"] = Math.Round(edge.Exact.HalfV * 2.0, 3),
+                    // Rectangle area and polygon area differ exactly when the bearing is not
+                    // rectangular, so the pair of them says whether the rectangle is a fair
+                    // description of it.
+                    ["area"] = Math.Round(edge.Exact.RectangleArea, 3),
+                    ["polygon_area"] = Math.Round(edge.Exact.PolygonArea, 3),
+                    // Deliberate overlap and a wall driven through a slab look identical to
+                    // the geometry. The depth is what tells them apart.
+                    ["penetration_depth"] = Math.Round(edge.Exact.PenetrationDepth, 3),
+                    ["offset"] = Math.Round(edge.Exact.Offset, 3),
+                    ["pairs"] = edge.Exact.Pairs,
+                    ["pieces"] = edge.Exact.Pieces,
+                    ["regions_a"] = edge.Exact.RegionsA,
+                    ["regions_b"] = edge.Exact.RegionsB
+                });
+            }
+
             else
+            {
+                // Why the exact measurement did not land, in the same shape as the sampled
+                // one's diagnostics. Zero regions on a side means nothing flat was found on
+                // it; regions on both sides with no pairs means every combination failed the
+                // parallel or offset test; pairs with no result means the intersection did.
+                exactUnmeasured.Add(new JObject
+                {
+                    ["a"] = edge.A,
+                    ["b"] = edge.B,
+                    ["pairs"] = edge.Exact.Pairs,
+                    ["regions_a"] = edge.Exact.RegionsA,
+                    ["regions_b"] = edge.Exact.RegionsB
+                });
+            }
+
+            if (!edge.Extent.IsValid)
             {
                 // Why it was not measured, rather than only that it was not. A contact with
                 // no samples was never sampled; one with samples but no faces from a body is
@@ -84,6 +134,9 @@ public partial class RhinoMCPModFunctions
             ["contact_extent"] = extents,
             ["contact_extent_measured"] = extents.Count,
             ["contact_extent_unmeasured"] = unmeasured,
+            ["contact_extent_exact"] = exact,
+            ["contact_extent_exact_measured"] = exact.Count,
+            ["contact_extent_exact_unmeasured"] = exactUnmeasured,
             ["node_count"] = graph.Nodes.Count,
             ["edge_count"] = graph.Edges.Count,
             ["candidate_count"] = graph.CandidateCount,

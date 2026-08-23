@@ -120,6 +120,45 @@ internal static class MCPConnectivityGraphStore
                 edges.Add(restored);
             }
 
+            // The exact bearings ride in their own array rather than being appended to each
+            // edge's positional payload, which is already read by index and would become
+            // hard to extend a second time. Index into it by edge order.
+            if (payload["ex"] is JArray exactArray)
+            {
+                for (var i = 0; i < exactArray.Count && i < edges.Count; i++)
+                {
+                    if (exactArray[i] is not JArray e || e.Count < 14)
+                    {
+                        continue;
+                    }
+
+                    var frame = new Plane(
+                        new Point3d(e[0].Value<double>(), e[1].Value<double>(), e[2].Value<double>()),
+                        new Vector3d(e[3].Value<double>(), e[4].Value<double>(), e[5].Value<double>()),
+                        new Vector3d(e[6].Value<double>(), e[7].Value<double>(), e[8].Value<double>()));
+                    if (!frame.IsValid)
+                    {
+                        continue;
+                    }
+
+                    var restoredEdge = edges[i];
+                    restoredEdge.Exact = new PlanarBearingResult
+                    {
+                        IsValid = true,
+                        Frame = frame,
+                        HalfU = e[9].Value<double>(),
+                        HalfV = e[10].Value<double>(),
+                        PolygonArea = e[11].Value<double>(),
+                        Offset = e[12].Value<double>(),
+                        Pieces = e[13].Value<int>(),
+                        Pairs = e.Count > 14 ? e[14].Value<int>() : 0,
+                        RegionsA = e.Count > 15 ? e[15].Value<int>() : 0,
+                        RegionsB = e.Count > 16 ? e[16].Value<int>() : 0
+                    };
+                    edges[i] = restoredEdge;
+                }
+            }
+
             graph = new MCPConnectivityGraph(nodes, edges, tolerance)
             {
                 CandidateCount = payload.Value<int?>("cc") ?? nodes.Count,
@@ -208,8 +247,29 @@ internal static class MCPConnectivityGraphStore
             edges.Add(payload);
         }
 
+        var exact = new JArray();
+        foreach (var edge in graph.Edges)
+        {
+            if (!edge.Exact.IsValid)
+            {
+                exact.Add(new JArray());
+                continue;
+            }
+
+            var frame = edge.Exact.Frame;
+            exact.Add(new JArray(
+                frame.Origin.X, frame.Origin.Y, frame.Origin.Z,
+                frame.XAxis.X, frame.XAxis.Y, frame.XAxis.Z,
+                frame.YAxis.X, frame.YAxis.Y, frame.YAxis.Z,
+                edge.Exact.HalfU, edge.Exact.HalfV,
+                edge.Exact.PolygonArea, edge.Exact.Offset,
+                edge.Exact.Pieces, edge.Exact.Pairs,
+                edge.Exact.RegionsA, edge.Exact.RegionsB));
+        }
+
         return new JObject
         {
+            ["ex"] = exact,
             ["tol"] = graph.Tolerance,
             ["cc"] = graph.CandidateCount,
             ["ec"] = graph.ExaminedCount,

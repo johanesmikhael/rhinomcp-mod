@@ -142,3 +142,73 @@ Prefer exact; fall back to sampling for curved faces and skew contacts. Every ex
   intersection, `ContactExtent`
 - `rhino_mcp_plugin/Functions/GetConnectivityGraph.cs` - the reported fields
 - `scripts/stability_regression/cases.py` - the geometry tier cases
+
+---
+
+# Step A result: the two measurements compared
+
+Built by `scripts/stability_regression/compare_bearings.py`, over every model the suite
+draws. The exact measurement is emitted beside the sampled one; nothing reads it yet.
+
+**Coverage.** 226 joints across 20 models. Both methods measure 219 of them. The exact
+method measures 4 that sampling missed entirely and misses 4 that sampling reported.
+
+**Where both answer, sampling is the one that is wrong**, and by more than the 5% the
+geometry tier allows for:
+
+| model | joint | sampled | exact | drawn |
+| --- | --- | --- | --- | --- |
+| hybrid | `COLUMN_01-PAD_01` | 544.3 x 544.3 | 400.0 x 400.0 | 400 x 400 |
+| hybrid | `COLUMN_11-PAD_11` | 542.6 x 542.6 | 400.0 x 400.0 | 400 x 400 |
+| hybrid | `COLUMN_00-PAD_00` | 536.0 x 536.0 | 400.0 x 400.0 | 400 x 400 |
+| hybrid | `COLUMN_10-PAD_10` | 453.4 x 453.4 | 400.0 x 400.0 | 400 x 400 |
+| micro | `COL_1_1-BLOCK_0` | 201.2 x 201.2 | 150.0 x 150.0 | 150 x 150 |
+| hybrid | `PANEL_3-BEAM_1` | 1500.0 x 107.9 | 1500.0 x 100.0 | 1500 x 100 |
+| geometry | `WALL-PAD` | 1150.3 x 152.0 | 1150.0 x 150.0 | 1150 x 150 |
+| geometry | `WALL_ROT30-PAD` | 1150.1 x 151.0 | 1150.0 x 150.0 | 1150 x 150 |
+
+Four identical column-on-pad joints sampled at 453, 536, 542 and 544 for one drawn 400 -
+the spread is the grid landing differently under each. Exact reads 400.0 x 400.0 on all
+four. The rotated wall is exact at 1150.0 x 150.0, which is the case an axis-aligned box
+gets 370% wrong, so the frame is right and not only the size.
+
+**Sampling degenerates to a line on butt joints.** `COL_0_2-PAD`, `M_01-M_00`, `B-A` and
+every other end-to-end meeting sampled as `150.0 x 0.0` with a normal 90 degrees off:
+a rectangle of zero width, which carries no moment about one axis at all. Exact reads
+150 x 150. This is not a precision difference, it is a joint the solver was told is a
+hinge when it is a full bearing.
+
+**Interpenetration, which is what this was for.** Every one of the bridge's chords is
+drawn on its centreline and therefore sits half sunk into its pad. Sampling read
+`M_00-PAD_0` as 1001.7 x 102.2 **on a horizontal normal** - a vertical bearing measured
+sideways. Exact reads 1000.0 x 75.0 at `penetration_depth` 75, which is the geometry:
+the chord hangs half off the pad edge, so half its 150 width bears.
+
+**What exact refuses.** `DIAGONAL` on a pad, the splayed legs under their block, and the
+three skew brace crossings: no parallel region pair exists, so no bearing is reported. That
+is by construction rather than by the 20-degree guard, which is what the plan wanted. It
+also means step B cannot simply switch - the splayed-leg case has a bearing today and would
+lose it, so the fallback to sampling is required, not optional.
+
+## Two defects the comparison found, both in the new code
+
+Neither would have been visible without building the table, which is the argument for the
+table.
+
+1. **The plan prefilter compared boxes in 3D**, so it rejected pairs for being exactly the
+   distance apart that the offset test had just accepted. Every chord-to-pad bearing on the
+   bridge came back unmeasured. A's box is now slid along the normal onto B's plane first.
+2. **Burial was bounded by a bounding-box projection.** A brace drawn on a diagonal has a
+   150 mm section and a box measuring 2978 mm along its own normal, so two braces nearly
+   three metres apart paired as a bearing. Burial is now bounded by the body's thickness at
+   that face, read from its opposite face: 150 either way the member is drawn.
+
+## What step B still has to decide
+
+- Two crossing members that interpenetrate share a **volume**, not a face. Exact reports
+  the mid-plane of the shared box (`BR_0-M_00`, 181 x 128 at 150 mm penetration); sampling
+  reports a 138.6 x 28.7 sliver. Neither is obviously right and the case deserves stating
+  before either is trusted.
+- `bridge_braced` `BR_4-PAD_1`: exact 1489.2 x 150.0 against sampled 1414.5 x 154.8. The
+  brace lands skew on the pad, so the exact rectangle is the bounding box of a genuinely
+  non-rectangular polygon. `polygon_area` beside `area` is what says so.
