@@ -337,11 +337,9 @@ namespace RhinoMCPModPlugin.Commands
                     $"motion_trend: {result["motion_trend"]}, " +
                     $"rotation_trend: {result["rotation_trend"]}, " +
                     $"steps_run: {result["solver_steps_run"]}");
-                var contactSource =
-                    result["contact_strength_auto"]?.Value<bool>() == true ? "auto" : "explicit";
                 RhinoApp.WriteLine(
-                    $"contact_strength: {result["contact_strength"]} ({contactSource}), " +
-                    $"friction: {result["friction"]}, " +
+                    $"joint types: {result["joint_type_counts"]}, " +
+                    $"default {result["joint_type_default"]}, " +
                     $"total_mass: {result["total_mass_kg"]} kg");
                 if (result["bodies"] is JArray movedBodies)
                 {

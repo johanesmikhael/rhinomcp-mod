@@ -58,6 +58,23 @@ internal static class StabilityRigidBodies
     /// </remarks>
     public const double TimestepSafety = 0.2;
 
+    /// <summary>
+    /// Damping as a fraction of critical, for this path's own mode.
+    /// </summary>
+    /// <remarks>
+    /// Not the particle path's 2%, and the difference is not a detail. That figure damps each
+    /// particle against its own local stiffness, which over-damps the slow global mode; here
+    /// each joint is damped against relative motion at that joint, which barely touches a mode
+    /// where both ends of a joint move together. A number measured for one is meaningless for
+    /// the other, and sharing one was how the rigid path came to be quietly under-damped.
+    ///
+    /// 0.2 is what the contact and overturning cases settle at. The closed-form axial cases
+    /// want 1.0 and say so in the suite: they measure a settled deflection, where any residual
+    /// ringing is error, while a verdict only needs the motion to be bounded. Two questions,
+    /// two answers, and the case that needs the other one names it.
+    /// </remarks>
+    public const double DefaultDampingRatio = 0.2;
+
     /// <summary>One rigid body, integrated.</summary>
     internal sealed class Body
     {

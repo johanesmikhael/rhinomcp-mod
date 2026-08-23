@@ -383,83 +383,20 @@ public partial class RhinoMCPModFunctions
                     $"Unknown evaluation mode '{modeText}'; use 'welded', 'pinned', 'contact' or 'pinned_dynamic'.");
             }
 
+            // "contact" is a joint type now, not a solver.
+            //
+            // It was a separate relaxed solver answering "does anything leave anything else",
+            // with its own contact stiffness, its own pseudo-time step and a torque_gain that
+            // existed only because Kangaroo's projective step has no moments. The multi-body
+            // integrator answers the same question from Newton's and Euler's equations, with
+            // the bearing pushing and not pulling and the moment falling out of r x F, and it
+            // reproduces every verdict the old one was trusted for. So the mode is kept as a
+            // name for a model whose joints are all bearings, and it means exactly that.
             var contactMode = string.Equals(modeText, "contact", StringComparison.OrdinalIgnoreCase) ||
                 string.Equals(modeText, ContactEvaluationMode, StringComparison.OrdinalIgnoreCase);
             if (contactMode)
             {
-                // Left alone, the contact solver now sizes every stiffness from the load it
-                // carries: see the note on DefaultJointPenetrationMeters for why an absolute
-                // modulus is a pseudo-time step here rather than a material property. The
-                // two surfaces are separate knobs because they are different materials - a
-                // soil under the assembly, dry masonry inside it - and an explicit strength
-                // on either still pins that one to the old absolute law.
-                var contactStrengthIsAuto = parameters?["contact_strength"] == null;
-                var contactStrength = contactStrengthIsAuto
-                    ? DefaultContactStrength
-                    : ReadFiniteParameter(
-                        parameters, "contact_strength", DefaultContactStrength, 0.0,
-                        inclusiveMinimum: false);
-                var groundStrengthIsAuto = floorStrengthIsAuto;
-                var groundStrength = floorStrength;
-                var jointPenetration = ReadFiniteParameter(
-                    parameters,
-                    "joint_penetration",
-                    unitContext.FromMeters(DefaultJointPenetrationMeters),
-                    0.0,
-                    inclusiveMinimum: false);
-                var groundSettlement = ReadFiniteParameter(
-                    parameters,
-                    "ground_settlement",
-                    unitContext.FromMeters(DefaultGroundSettlementMeters),
-                    0.0,
-                    inclusiveMinimum: false);
-                var torqueGain = ReadFiniteParameter(
-                    parameters, "torque_gain", DefaultTorqueGain, 0.0, inclusiveMinimum: false);
-                var bodyStrength = rigidStrengthIsAuto
-                    ? contactStrength * AutoRigidFloorRatio
-                    : rigidStrength;
-
-                var contactStable = SolveContactFromGraph(
-                    graph,
-                    stabilityNodes,
-                    currentStep,
-                    contactStrength,
-                    contactStrengthIsAuto,
-                    groundStrength,
-                    groundStrengthIsAuto,
-                    unitContext.ToMeters(jointPenetration),
-                    unitContext.ToMeters(groundSettlement),
-                    torqueGain,
-                    bodyStrength,
-                    rigidStrengthIsAuto,
-                    unitContext.ToMeters(floorZ),
-                    gravity,
-                    unitContext.ToMeters(assignTol),
-                    unitContext.ToMeters(threshold),
-                    solverSubsteps,
-                    unitContext.LengthToMeters,
-                    WantsDisplay(parameters) ? doc : null);
-
-                var contactResult = BuildPinnedResult(graph, doc, unitContext, contactStable, gravity,
-                    floorZ, floorZIsAuto, bodyStrength, totalMassKilograms, unitWarnings);
-                contactResult["evaluation_mode"] = ContactEvaluationMode;
-                contactResult["contact_strength_auto"] = contactStrengthIsAuto;
-                contactResult["ground_strength_auto"] = groundStrengthIsAuto;
-                contactResult["joint_penetration"] = jointPenetration;
-                contactResult["joint_penetration_m"] = unitContext.ToMeters(jointPenetration);
-                contactResult["ground_settlement"] = groundSettlement;
-                contactResult["ground_settlement_m"] = unitContext.ToMeters(groundSettlement);
-                contactResult["ground_strength"] = groundStrength;
-                contactResult["joint_weight_min_n_per_m"] = graph["joint_weight_min_n_per_m"];
-                contactResult["joint_weight_max_n_per_m"] = graph["joint_weight_max_n_per_m"];
-                contactResult["friction"] = DefaultContactFriction;
-                contactResult["contact_count"] = graph["contact_count"];
-                contactResult["open_contacts"] = graph["open_contacts"];
-                contactResult["ground_contact_points"] = graph["ground_contact_points"];
-                contactResult["contacts"] = graph["contacts"];
-                contactResult["torque_gain"] = torqueGain;
-                contactResult["contact_strength"] = contactStrength;
-                return contactResult;
+                pinned = true;
             }
 
             if (pinned)
@@ -499,13 +436,37 @@ public partial class RhinoMCPModFunctions
                 // limit, while an integrator, a lateral load test and the mode shape all
                 // said it stands. Deleting it removes the defect rather than patching it.
                 {
+                    // Which integrator, decided first because two of the defaults below
+                    // depend on it. Contact mode is the rigid path by definition: Kangaroo's
+                    // RigidMesh takes one strength for all of a body's points, so the particle
+                    // solver cannot give one joint a bearing and another a pin, and a joint
+                    // that opens is exactly a joint whose points differ.
+                    var integrator = parameters?["integrator"]?.ToString();
+                    if (contactMode && string.IsNullOrWhiteSpace(integrator))
+                    {
+                        integrator = "rigid_bodies";
+                    }
+
+                    var rigidPath = string.Equals(
+                        integrator, "rigid_bodies", StringComparison.OrdinalIgnoreCase);
+
                     // Same bodies, same pins, same member stiffness - Newton's second law
                     // instead of Kangaroo's weighted average. See StabilityDynamics.
                     var duration = ReadFiniteParameter(
                         parameters, "duration_seconds", StabilityDynamics.DefaultDurationSeconds,
                         0.0, inclusiveMinimum: false);
+                    // A damping ratio is a fraction of critical for some particular mode, and
+                    // the two integrators do not damp the same one. The particle path damps
+                    // each particle against its own local stiffness, which over-damps the slow
+                    // global mode; the rigid path damps each joint against relative motion
+                    // there, which barely touches a mode where both ends of a joint move
+                    // together. 2% measured on one is not 2% on the other, so each carries its
+                    // own default rather than sharing a number that was only ever measured once.
+                    var dampingDefault = rigidPath
+                        ? StabilityRigidBodies.DefaultDampingRatio
+                        : StabilityDynamics.DefaultDampingRatio;
                     var damping = ReadFiniteParameter(
-                        parameters, "damping_ratio", StabilityDynamics.DefaultDampingRatio, 0.0);
+                        parameters, "damping_ratio", dampingDefault, 0.0);
                     var lateralLoad = ReadFiniteParameter(
                         parameters, "lateral_load_fraction",
                         StabilityDynamics.DefaultNotionalLoadFraction, 0.0);
@@ -533,7 +494,9 @@ public partial class RhinoMCPModFunctions
                     // value for the whole assembly for now; per-element and pairwise rules
                     // follow, and this stays as the default they fall back to.
                     var jointTypeText = parameters?["joint_type"]?.ToString();
-                    var defaultJointType = StabilityRigidBodies.JointType.Welded;
+                    var defaultJointType = contactMode
+                        ? StabilityRigidBodies.JointType.Contact
+                        : StabilityRigidBodies.JointType.Welded;
                     if (!string.IsNullOrWhiteSpace(jointTypeText) &&
                         !StabilityRigidBodies.TryParseJointType(jointTypeText, out defaultJointType))
                     {
@@ -545,8 +508,7 @@ public partial class RhinoMCPModFunctions
                     // element says about its own joints, then this. See AssignJointType.
                     var jointTypeRules = new JointTypeRules(ReadPairRules(doc), defaultJointType);
 
-                    var integrator = parameters?["integrator"]?.ToString();
-                    if (string.Equals(integrator, "rigid_bodies", StringComparison.OrdinalIgnoreCase))
+                    if (rigidPath)
                     {
                         var rigidStable = SolvePinnedRigidFromGraph(
                             graph,

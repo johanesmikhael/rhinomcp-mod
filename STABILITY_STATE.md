@@ -9,16 +9,31 @@ answers are known independently of the solver.
 | mode | bodies | joints | question |
 | --- | --- | --- | --- |
 | `welded` | whole scope as one rigid body | none | does the assembly tip or slide? |
-| `contact` | one per element | bearing patches, compression only, friction 0.6 | can an element rotate off, lift, slide? |
-| `pinned_dynamic` | one per element | pins at clustered nodes, integrated in real seconds | is it a mechanism, how far does it move, and how stiff is it? |
+| `pinned_dynamic` | one per element | whatever the joint rules say they are, integrated in real seconds | is it a mechanism, how far does it move, and how stiff is it? |
+| `contact` | one per element | all bearings: `joint_type="contact"` on the rigid path | can an element rotate off, lift, slide? |
 | `pinned` | alias for `pinned_dynamic` | - | the relaxed solver is deleted; see `SIMPLIFICATION_PLAN.md` |
 
-`pinned_dynamic` carries two integrators. Particles is the default; it now reproduces a
-closed-form axial deflection to better than 5%, one storey and two, but still cannot represent
-free motion. `integrator: "rigid_bodies"` falls correctly and remains opt-in: it needs a
-timestep four times finer than its own rule gives to avoid diverging on a two-storey stack,
-and does not settle inside a run even then. Deleting one of them is item 2 of the
-simplification plan, and neither has earned it.
+**`contact` is a joint type now, not a solver.** It was a separate relaxed solver with its own
+contact stiffness, its own pseudo-time step and a `torque_gain` that existed only because
+Kangaroo's projective step has no moments. The multi-body integrator answers the same question
+from Newton's and Euler's equations - the bearing pushes and does not pull, the moment falls
+out of `r x F` - and reproduces every verdict the old one was trusted for, at identical step
+counts, so the mode is kept as a name for a model whose joints are all bearings and means
+exactly that. `StabilityContactGoal.cs`, `SolveContactFromGraph`, `torque_gain` and
+`contact_strength` are gone; two arbitrary constants went with them.
+
+`pinned_dynamic` carries two integrators. Particles is still the default for a model whose
+joints are welded or pinned; it reproduces a closed-form axial deflection to better than 5%,
+one storey and two, but cannot represent free motion at all. `integrator: "rigid_bodies"`
+falls correctly, expresses per-joint type and bearing extent, and is what `contact` selects on
+its own. Deleting one of them is item 2 of the simplification plan; the rigid path is now the
+one the work is heading toward, and the remaining gap is the two-storey stack at 0.787 mm
+against an exact 0.928.
+
+Each integrator carries its own `damping_ratio` default - 2% for particles, 20% for rigid
+bodies - because a damping ratio is a fraction of critical for some particular mode and the
+two do not damp the same one. Sharing one number is how the rigid path came to be quietly
+under-damped.
 
 Welded is an upper bound: it supplies every moment connection the real assembly lacks.
 

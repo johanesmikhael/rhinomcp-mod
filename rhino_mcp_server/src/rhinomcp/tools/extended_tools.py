@@ -13,7 +13,6 @@ async def evaluate_stability(
     current_step: int | None = None,
     joint_penetration: float | None = None,
     ground_settlement: float | None = None,
-    torque_gain: float | None = None,
     duration_seconds: float | None = None,
     damping_ratio: float | None = None,
     integrator: str | None = None,
@@ -57,12 +56,12 @@ async def evaluate_stability(
             Pinned and contact modes report per-element displacement and rotation and
             names the element that moved furthest, and its result carries no
             floor strength, assembly transform or support margin.
-        joint_penetration: Contact mode only. How far a bearing surface may close
-            under its own load, in document units. This is the automatic mode's
-            real knob; it sets the per-step motion directly.
-        ground_settlement: Contact mode only. How far a body may settle into the
-            ground under its own load, in document units. Separate from the
-            joints because the ground is a soil and the joints are not.
+        joint_penetration: How far a bearing surface may close under its own
+            load, in document units. Sizes the joint stiffness where none is
+            stated.
+        ground_settlement: How far a body may settle into the ground under its
+            own load, in document units. Separate from the joints because the
+            ground is a soil and the joints are not.
         joint_stiffness_n_per_m: Pinned modes only. Axial joint stiffness in N/m,
             stated rather than derived, and applied to EVERY member in the scope.
             That last part matters: left unset, each member gets its own
@@ -232,8 +231,6 @@ async def evaluate_stability(
         params["lateral_load_fraction"] = lateral_load_fraction
     if joint_stiffness_n_per_m is not None:
         params["joint_stiffness_n_per_m"] = joint_stiffness_n_per_m
-    if torque_gain is not None:
-        params["torque_gain"] = torque_gain
     if current_step is not None:
         params["current_step"] = current_step
     if graph is not None:
