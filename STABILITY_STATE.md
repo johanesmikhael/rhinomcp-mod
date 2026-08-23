@@ -293,7 +293,11 @@ nothing.
 **A pin is not a weaker weld.** It is the type that throws the measured bearing away, which is
 the freedom it exists to grant. Modelled as a pin, two panels screwed over 4000 mm hinge about
 the single point they are left with. Weaker in the ordering does not mean weaker in every
-direction.
+direction - and the sharpest form of that is `contact`, the weakest type, being *stiffer in
+rotation* than `pin`, because it keeps the bearing. A frame on dry bearings stands and sways
+no more than the same frame cast in; the same frame on pinned bases is a mechanism. The
+ordering is about what a joint carries, not about how much it restrains, so weakest-governs
+is a rule about tension rather than a guarantee of the softest structure.
 
 `joint_type_rules` in the fast tier walks all four branches on one stair - bottom block on one
 layer, the two above on another, so the lower joint and the upper joint belong to different

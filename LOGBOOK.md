@@ -258,6 +258,23 @@ crosses the mechanism limit, so a failing case always reports a figure barely ab
 the stopping rule, not the structure. What separates decisive from marginal is how long it
 took to get there: 36k steps against the sound model's full 167k.
 
+**The type ordering is about what a joint carries, not about how much it restrains.**
+Contact is weakest in the ordering and *stiffer in rotation than pin*, because a pin discards
+the measured bearing while a contact keeps it: a 700 mm pad under a 400 mm column resists
+rotation with k d^2 for as long as it is in compression. So a frame with nothing but dry
+bearings stands under its own weight and sways no more than the same frame cast in - 1.44e8
+against 1.45e8 N/m - while the same frame with *pinned* bases is a genuine mechanism at 44 mm.
+Weakest-governs therefore does not mean softest-governs, and "fails safe" holds for tension
+and not for every direction at once. Worth knowing before trusting the ordering to be
+conservative.
+
+**A wrong verdict can pass for a season because a wrong reason agreed with it.** The
+dry-stacked frame was asserted unstable, with a hand-written reason calling it a four-hinge
+mechanism, and it passed - until the imperfection was turned off and it stood without moving
+at all. There were never any hinges: every joint was a bearing, and a bearing is not a hinge.
+The case had been green because the kick made it fail and the reason made that sound
+inevitable. **A case whose reason cites a mechanism should name the hinges.**
+
 **An imperfection applied as a velocity is a nudge to a truss and a shove to a stack.** It is
 applied that way deliberately - displacing particles stores the flaw as strain and the
 structure rings from an energy hundreds of times the load - but a span/1000 offset comes out

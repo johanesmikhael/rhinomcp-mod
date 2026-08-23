@@ -1417,20 +1417,30 @@ CASES: list[Case] = [
             HYBRID_RULES_SPLINE_UPPER, True,
             hybrid_total_weight_n(HYBRID_SHORT_PANEL, short_panels=1)),
     ),
-    # The floor of the bracket: nothing claimed anywhere, every joint a bearing. A rectangular
-    # frame with no moment connection at any joint has nothing to resist sway - it is a
-    # four-hinge mechanism in each frame, and the deck spanning between them only bears, so it
-    # braces nothing either. Unstable by hand before it is unstable in the solver.
+    # The floor of the bracket: nothing claimed anywhere, every joint a bearing. It stands,
+    # and the reason is worth having a case for.
+    #
+    # A dry bearing is not a hinge. A 700 mm pad under a 400 mm column resists rotation with
+    # k d^2 over its own width for as long as it stays in compression, so a frame with nothing
+    # but bearings has real moment capacity at every joint - measured, its sway stiffness is
+    # 1.44e8 N/m against the as-built frame's 1.45e8, which is no difference at all. What it
+    # lacks is any capacity once a bearing opens, and that is a question about the load, not
+    # about the frame standing under its own weight.
+    #
+    # This case asserted unstable and passed until the imperfection was turned off, at which
+    # point it stood without moving at all. The verdict had been the kick. The physics in the
+    # reason was wrong too - a four-hinge mechanism needs hinges, and there were none.
     Case(
         name="hybrid_dry_stacked",
         mode="pinned_dynamic",
         tier=SYSTEMS,
-        stable=False,
+        stable=True,
         reason=(
-            "no moment connection anywhere: each frame is a four-hinge mechanism and the "
-            "bearing deck cannot brace it"),
+            "every joint a bearing, which carries moment over its own width while it is in "
+            "compression - so a dry frame stands under its own weight, and sways no more "
+            "than the as-built one"),
         build=hybrid_build(),
-        check=hybrid_check(HYBRID_RULES_DRY, False, hybrid_total_weight_n(HYBRID_SPAN_Y)),
+        check=hybrid_check(HYBRID_RULES_DRY, True, hybrid_total_weight_n(HYBRID_SPAN_Y)),
     ),
     # The one detail that decides this frame: whether the column is cast into its pad. Set on
     # it instead, the base carries no moment, and pinned at base and head each frame is the
@@ -1441,8 +1451,9 @@ CASES: list[Case] = [
         tier=SYSTEMS,
         stable=False,
         reason=(
-            "columns set on their pads rather than cast in, so base and head are both "
-            "hinges and each frame sways; the fixed base is what the as-built frame stands on"),
+            "columns set on their pads rather than cast in, so base and head are both real "
+            "hinges and each frame is a mechanism - and note it is the *pinned* frame that "
+            "goes, not the dry one: a pin discards the bearing, a contact keeps it"),
         build=hybrid_build(),
         check=hybrid_check(HYBRID_RULES_PINNED_BASE, False, hybrid_total_weight_n(HYBRID_SPAN_Y)),
     ),

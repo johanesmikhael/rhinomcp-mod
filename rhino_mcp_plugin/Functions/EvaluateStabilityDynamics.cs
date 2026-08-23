@@ -83,8 +83,30 @@ internal static class StabilityDynamics
     ///
     /// The direction is derived from the particle index rather than drawn at random, so a
     /// verdict is reproducible.
+    ///
+    /// **It is off by default, and the reason is what it does to a joint that cannot pull.**
+    /// The flaw is seeded as a velocity because seeding it as a displacement would store it
+    /// as strain - 26 kJ against the 81 J gravity does over the same distance - and at
+    /// span/1000 that velocity is 0.43 m/s on a 9 m model. A truss absorbs it: its joints
+    /// hold in tension, so the structure rings and settles back to where it was. A structure
+    /// held by bearings cannot, because friction has no way to put back what slides, so every
+    /// body keeps the ground it loses and the drift accumulates. A dry-stacked pavilion read
+    /// unstable at 50 mm of it; with this off the same model moved 0.02 mm. The verdict was
+    /// measuring the kick.
+    ///
+    /// What it was for is now done better by something else. It exists because two bridges
+    /// integrated from perfect geometry reported the same 0.216 mm and the bracing appeared
+    /// to do nothing - but that is a question about *sway*, and sway is measured by pushing
+    /// the structure sideways with a notional load, which excites the mode directly and has
+    /// always run with the jolt switched off. Measured across the suite, turning this off
+    /// changes no verdict at all: every case answers the same, and two of them stop reporting
+    /// motion that was never the structure's.
+    ///
+    /// It stays available, because a mechanism that needs a nudge to reveal itself is a real
+    /// thing and this is how to give it one. It is a modelling assumption, and an assumption
+    /// that changes an answer should be asked for rather than inherited.
     /// </remarks>
-    public const double DefaultImperfectionFraction = 1.0 / 1000.0;
+    public const double DefaultImperfectionFraction = 0.0;
 
     /// <summary>
     /// The horizontal probe load, as a fraction of the vertical load carried.
