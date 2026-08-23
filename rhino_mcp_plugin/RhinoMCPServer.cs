@@ -330,6 +330,7 @@ namespace RhinoMCPModPlugin
                 ["evaluate_stability"] = this.handler.EvaluateStability,
                 ["assign_mass"] = this.handler.AssignMassScoped,
                 ["assign_joint_type"] = this.handler.AssignJointType,
+                ["graph_display"] = this.handler.GraphDisplay,
                 ["delete_objects"] = this.handler.DeleteObjects,
                 ["modify_object"] = this.handler.ModifyObject,
                 ["modify_objects"] = this.handler.ModifyObjects,

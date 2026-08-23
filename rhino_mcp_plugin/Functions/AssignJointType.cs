@@ -188,6 +188,35 @@ public partial class RhinoMCPModFunctions
         }
     }
 
+    /// <summary>
+    /// What one object says its own joints are, from the user string its mass lives in.
+    /// </summary>
+    /// <remarks>
+    /// Shared with the graph overlay rather than left inline in the evaluator, so what is
+    /// drawn and what is solved cannot drift apart. An overlay that colours joints by a
+    /// second reading of the same rules is worth less than no overlay at all.
+    /// </remarks>
+    internal static bool TryGetElementJointType(
+        Rhino.DocObjects.RhinoObject rhinoObject, out StabilityRigidBodies.JointType type)
+    {
+        type = StabilityRigidBodies.JointType.Welded;
+        var stored = rhinoObject?.Attributes?.GetUserString(StabilityKey);
+        if (string.IsNullOrWhiteSpace(stored))
+        {
+            return false;
+        }
+
+        try
+        {
+            return StabilityRigidBodies.TryParseJointType(
+                JObject.Parse(stored)["joint_type"]?.ToString(), out type);
+        }
+        catch (Exception)
+        {
+            return false;
+        }
+    }
+
     internal static string TypeName(StabilityRigidBodies.JointType type)
     {
         return type.ToString().ToLowerInvariant();

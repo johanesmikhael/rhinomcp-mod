@@ -245,22 +245,8 @@ public partial class RhinoMCPModFunctions
                 // What this element says its own joints are, read from the same user string
                 // the mass came from. Read here rather than in the solver because this is the
                 // one place the graph's node is paired with its Rhino object.
-                StabilityRigidBodies.JointType? elementJointType = null;
-                if (!string.IsNullOrWhiteSpace(userText))
-                {
-                    try
-                    {
-                        var stored = JObject.Parse(userText)["joint_type"]?.ToString();
-                        if (StabilityRigidBodies.TryParseJointType(stored, out var parsedType))
-                        {
-                            elementJointType = parsedType;
-                        }
-                    }
-                    catch (Exception)
-                    {
-                        // An unparseable payload already failed the mass read above.
-                    }
-                }
+                StabilityRigidBodies.JointType? elementJointType =
+                    TryGetElementJointType(rhinoObject, out var parsedType) ? parsedType : null;
 
                 stabilityNodes.Add(new StabilityNode
                 {

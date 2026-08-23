@@ -22,6 +22,36 @@ internal sealed class MCPConnectivityGraphConduit : DisplayConduit
     private readonly Color _extentColor = Color.FromArgb(255, 120, 255, 160);
     private readonly Color _extentFillColor = Color.FromArgb(60, 120, 255, 160);
 
+    // One colour per joint type, so what the solver will do with a bearing is visible on the
+    // bearing itself rather than in a table somewhere else.
+    private static readonly Color ContactColour = Color.FromArgb(255, 120, 255, 160);
+    private static readonly Color PinColour = Color.FromArgb(255, 120, 200, 255);
+    private static readonly Color WeldedColour = Color.FromArgb(255, 255, 170, 60);
+
+    private static Color ColourFor(Functions.StabilityRigidBodies.JointType type)
+    {
+        return type switch
+        {
+            Functions.StabilityRigidBodies.JointType.Contact => ContactColour,
+            Functions.StabilityRigidBodies.JointType.Pin => PinColour,
+            _ => WeldedColour
+        };
+    }
+
+    /// <summary>
+    /// The same colour, dimmed, for a joint no rule named.
+    /// </summary>
+    /// <remarks>
+    /// A joint that fell through to the default and one that was deliberately stated will be
+    /// solved identically, and that is exactly why the difference has to be visible: an
+    /// overlay where they look the same cannot answer "did my rule reach this joint", which is
+    /// the question the overlay exists for.
+    /// </remarks>
+    private static Color Dimmed(Color colour, int alpha)
+    {
+        return Color.FromArgb(alpha, colour.R / 2 + 40, colour.G / 2 + 40, colour.B / 2 + 40);
+    }
+
     protected override void DrawForeground(DrawEventArgs e)
     {
         var doc = RhinoDoc.ActiveDoc;
@@ -57,11 +87,48 @@ internal sealed class MCPConnectivityGraphConduit : DisplayConduit
             degree[edge.B]++;
         }
 
+        // What each joint will be, resolved from the same rules the evaluator reads, per
+        // node so the lookup happens once rather than per edge. The default here is welded,
+        // which is what evaluate_stability defaults to for every mode but contact - the
+        // overlay cannot know which mode will be run, so it shows the rules and marks
+        // anything not covered by one as assumed.
+        var rules = new Functions.RhinoMCPModFunctions.JointTypeRules(
+            Functions.RhinoMCPModFunctions.ReadPairRules(doc),
+            Functions.StabilityRigidBodies.JointType.Welded);
+        var layers = new string[graph.Nodes.Count];
+        var stated = new Functions.StabilityRigidBodies.JointType?[graph.Nodes.Count];
+        for (var i = 0; i < graph.Nodes.Count; i++)
+        {
+            var rhinoObject = doc.Objects.FindId(graph.Nodes[i].ObjectId);
+            layers[i] = rhinoObject == null
+                ? null
+                : doc.Layers.FindIndex(rhinoObject.Attributes.LayerIndex)?.Name;
+            stated[i] = Functions.RhinoMCPModFunctions.TryGetElementJointType(
+                rhinoObject, out var elementType)
+                ? elementType
+                : null;
+        }
+
+        var typeCounts = new Dictionary<Functions.StabilityRigidBodies.JointType, int>();
+        var ruled = 0;
+
         foreach (var edge in graph.Edges)
         {
             var a = graph.Nodes[edge.A].Center;
             var b = graph.Nodes[edge.B].Center;
             var contact = edge.ContactPoint;
+
+            var jointType = rules.Resolve(
+                graph.Nodes[edge.A].ObjectId.ToString(), layers[edge.A], stated[edge.A],
+                graph.Nodes[edge.B].ObjectId.ToString(), layers[edge.B], stated[edge.B],
+                out var jointRule);
+            var byRule = jointRule != "default";
+            typeCounts.TryGetValue(jointType, out var seen);
+            typeCounts[jointType] = seen + 1;
+            if (byRule)
+            {
+                ruled++;
+            }
 
             if (contact.IsValid)
             {
@@ -70,7 +137,18 @@ internal sealed class MCPConnectivityGraphConduit : DisplayConduit
                 // that actually matters when checking a joint.
                 e.Display.DrawLine(a, contact, _edgeColor, 2);
                 e.Display.DrawLine(contact, b, _edgeColor, 2);
-                e.Display.DrawPoint(contact, PointStyle.X, 5, _contactColor);
+
+                // The joint marker takes the type's colour whenever types are being shown, so
+                // a joint with no measured region - the ones a bearing colour cannot reach -
+                // still says what it will be solved as.
+                var typeColour = ColourFor(jointType);
+                e.Display.DrawPoint(
+                    contact,
+                    PointStyle.X,
+                    5,
+                    MCPConnectivityGraphController.ShowContactExtent
+                        ? (byRule ? typeColour : Dimmed(typeColour, 255))
+                        : _contactColor);
 
                 // The bearing region the contact was reduced from. Off by default because it
                 // is for checking the reduction rather than for reading the graph: a wall
@@ -81,8 +159,12 @@ internal sealed class MCPConnectivityGraphConduit : DisplayConduit
                 if (MCPConnectivityGraphController.ShowContactExtent && edge.Extent.IsValid)
                 {
                     var corners = edge.Extent.Corners();
-                    e.Display.DrawPolygon(corners, _extentFillColor, true);
-                    e.Display.DrawPolygon(corners, _extentColor, false);
+                    var outline = byRule ? typeColour : Dimmed(typeColour, 255);
+                    var fill = byRule
+                        ? Color.FromArgb(60, typeColour)
+                        : Dimmed(typeColour, 30);
+                    e.Display.DrawPolygon(corners, fill, true);
+                    e.Display.DrawPolygon(corners, outline, false);
 
                     // The normal, at a tenth of the rectangle's own size, so a patch fitted to
                     // the wrong plane shows up as a spike pointing the wrong way.
@@ -90,7 +172,7 @@ internal sealed class MCPConnectivityGraphConduit : DisplayConduit
                     e.Display.DrawLine(
                         edge.Extent.Frame.Origin,
                         edge.Extent.Frame.Origin + edge.Extent.Frame.ZAxis * size * 0.4,
-                        _extentColor,
+                        outline,
                         1);
                 }
             }
@@ -129,6 +211,39 @@ internal sealed class MCPConnectivityGraphConduit : DisplayConduit
             false,
             14);
 
+        var line = graph.Truncated ? 80.0 : 60.0;
+
+        // The legend, one line per type that actually occurs. Colour alone is not a legend:
+        // green means bearing to whoever wrote it and nothing to anyone reading it.
+        if (MCPConnectivityGraphController.ShowContactExtent)
+        {
+            foreach (var entry in typeCounts.OrderBy(pair => (int)pair.Key))
+            {
+                e.Display.Draw2dText(
+                    $"{Functions.RhinoMCPModFunctions.TypeName(entry.Key)}: {entry.Value}",
+                    ColourFor(entry.Key),
+                    new Point2d(20, line),
+                    false,
+                    14);
+                line += 20.0;
+            }
+
+            // Stated against assumed. A joint drawn dim will be solved exactly like a bright
+            // one of the same colour; what differs is whether anyone said so, which is what
+            // this overlay is for checking.
+            if (ruled < graph.Edges.Count)
+            {
+                e.Display.Draw2dText(
+                    $"{graph.Edges.Count - ruled} of {graph.Edges.Count} joints drawn dim: " +
+                    "no rule names them, so they take evaluate_stability's default",
+                    Color.FromArgb(255, 190, 190, 190),
+                    new Point2d(20, line),
+                    false,
+                    14);
+                line += 20.0;
+            }
+        }
+
         // Contacts found by intersection or proximity carry no region, and a count that is
         // not the edge count says so plainly rather than leaving a silently empty screen.
         if (MCPConnectivityGraphController.ShowContactExtent && measured < graph.Edges.Count)
@@ -137,9 +252,10 @@ internal sealed class MCPConnectivityGraphConduit : DisplayConduit
                 $"{graph.Edges.Count - measured} contacts have no measured extent " +
                 "(found by intersection or proximity, not by sampling)",
                 _contactColor,
-                new Point2d(20, graph.Truncated ? 80 : 60),
+                new Point2d(20, line),
                 false,
                 14);
+            line += 20.0;
         }
 
         if (graph.Truncated)
@@ -1629,7 +1745,7 @@ internal static class MCPConnectivityGraphController
         }
     }
 
-    private static void MarkDirty()
+    public static void MarkDirty()
     {
         lock (SyncRoot)
         {

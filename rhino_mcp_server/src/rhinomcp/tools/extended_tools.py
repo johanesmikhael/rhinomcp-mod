@@ -413,6 +413,68 @@ async def assign_joint_type(
 
 
 @mcp.tool()
+async def graph_display(
+    enabled: bool | None = None,
+    contact_extent: bool | None = None,
+    scope: str | None = None,
+    ids: list[str] | None = None,
+    layer: str | list[str] | None = None,
+    selected: bool = False,
+) -> dict[str, Any]:
+    """Show or hide the connectivity-graph overlay in Rhino's viewport.
+
+    The overlay draws what the evaluator will actually see: which elements
+    touch, where they touch, the bearing region behind each contact, and
+    what joint type each one resolves to. It is the check that the model
+    being solved is the model that was meant - a joint the graph never
+    found cannot be assigned a type, and a bearing measured on the wrong
+    plane restrains the wrong rotation.
+
+    Colours follow joint type: welded amber, pin blue, contact green. A
+    joint drawn dim took evaluate_stability's default because no rule named
+    it; a bright one was named by a rule. Both solve the same way - what
+    differs is whether anyone said so.
+
+    Called with no arguments this reports the current state and changes
+    nothing.
+
+    Args:
+        enabled: Show or hide the overlay.
+        contact_extent: Draw the measured bearing region behind each
+            contact, and colour joints by type. Turning it on turns the
+            overlay on; turning it off leaves the overlay alone.
+        scope: Pass "all" to graph the whole document. Large documents
+            truncate, and the overlay says so when they do.
+        ids: Graph only these objects.
+        layer: Graph only this layer, or these layers.
+        selected: Graph only the current selection.
+
+    Omitting every scope argument leaves whatever scope is pinned alone,
+    which is different from asking for the whole document.
+
+    Returns the resulting state: enabled, contact_extent and the scope.
+    """
+    from rhinomcp.server import get_rhino_connection
+
+    params: dict[str, Any] = {}
+    if enabled is not None:
+        params["enabled"] = enabled
+    if contact_extent is not None:
+        params["contact_extent"] = contact_extent
+    if scope is not None:
+        params["scope"] = scope
+    if ids:
+        params["ids"] = ids
+    if layer is not None:
+        params["layer"] = layer
+    if selected:
+        params["selected"] = True
+
+    rhino = get_rhino_connection()
+    return rhino.send_command("graph_display", params)
+
+
+@mcp.tool()
 async def get_selected_objects() -> str:
     """Get id, name, type, and layer of all currently selected objects in Rhino."""
     from rhinomcp.server import get_rhino_connection

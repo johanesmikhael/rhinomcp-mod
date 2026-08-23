@@ -233,6 +233,21 @@ Columns/Beams writes and matches the same rule, and the rule reports itself the 
 whichever order the graph listed the joint's two bodies in - that order is arbitrary and a
 label built from it would flip between runs of the same model.
 
+### Seeing it: the graph overlay
+
+`graph_display(enabled=True, contact_extent=True)` turns on the connectivity overlay and
+colours every joint by the type it resolves to - **welded amber, pin blue, contact green** -
+using the same rule table the evaluator reads, through the same code, so what is drawn and
+what is solved cannot drift apart. A joint drawn **dim** took the default because no rule names
+it; a bright one was named. Both solve identically, and that is exactly why the difference has
+to be visible: it is the only way to answer "did my rule reach this joint".
+
+It exists as an MCP tool because the `mcpmodgraph` command asks for its scope at the command
+line, so driving it over the socket blocks forever and needs a Rhino restart. An agent could
+build a model, resolve its joints, and never see the picture that would show whether the
+joints it resolved were the ones it meant. `capture_view` renders the overlay, so the check is
+available without a human at the screen.
+
 Every node in the result reports its `joint_type` and the `joint_type_rule` that decided it
 (`pair:A|B`, `element:both`, `element:one`, `default`). A verdict that changed because a rule
 matched more joints than intended has to be diagnosable without re-deriving the rules by hand.
