@@ -241,11 +241,34 @@ public partial class RhinoMCPModFunctions
 
                 node["mass"] = massKilograms;
                 node["mass_unit"] = StabilityUnits.KilogramUnit;
+
+                // What this element says its own joints are, read from the same user string
+                // the mass came from. Read here rather than in the solver because this is the
+                // one place the graph's node is paired with its Rhino object.
+                StabilityRigidBodies.JointType? elementJointType = null;
+                if (!string.IsNullOrWhiteSpace(userText))
+                {
+                    try
+                    {
+                        var stored = JObject.Parse(userText)["joint_type"]?.ToString();
+                        if (StabilityRigidBodies.TryParseJointType(stored, out var parsedType))
+                        {
+                            elementJointType = parsedType;
+                        }
+                    }
+                    catch (Exception)
+                    {
+                        // An unparseable payload already failed the mass read above.
+                    }
+                }
+
                 stabilityNodes.Add(new StabilityNode
                 {
                     Node = node,
                     Geometry = geometry,
-                    MassKilograms = massKilograms
+                    MassKilograms = massKilograms,
+                    LayerName = doc.Layers.FindIndex(rhinoObject.Attributes.LayerIndex)?.Name,
+                    ElementJointType = elementJointType
                 });
             }
 
@@ -518,6 +541,10 @@ public partial class RhinoMCPModFunctions
                             $"Unknown joint_type '{jointTypeText}'. Expected contact, pin or welded.");
                     }
 
+                    // Rules beat the default: a pair of element classes first, then what one
+                    // element says about its own joints, then this. See AssignJointType.
+                    var jointTypeRules = new JointTypeRules(ReadPairRules(doc), defaultJointType);
+
                     var integrator = parameters?["integrator"]?.ToString();
                     if (string.Equals(integrator, "rigid_bodies", StringComparison.OrdinalIgnoreCase))
                     {
@@ -537,7 +564,7 @@ public partial class RhinoMCPModFunctions
                             ReadFiniteParameter(
                                 parameters, "timestep_safety",
                                 StabilityRigidBodies.TimestepSafety, 0.0, inclusiveMinimum: false),
-                            defaultJointType,
+                            jointTypeRules,
                             unitContext.LengthToMeters,
                             WantsDisplay(parameters) ? doc : null);
 
@@ -557,7 +584,7 @@ public partial class RhinoMCPModFunctions
                             "verdict", "conclusive", "converged", "decay_ratio_per_swing",
                             "projected_displacement_m", "lateral_load_fraction", "sway",
                             "joint_count", "joint_type_default", "joint_type_counts",
-                            "contact_joints_sided", "contact_joints_open",
+                            "contact_joints_sided", "contact_joints_open", "joint_type_pair_rules",
                             "bounded_response", "motion_reversals",
                             "mechanism_threshold_m", "verdict_metric",
                             "motion_samples_m"
@@ -2624,5 +2651,18 @@ public partial class RhinoMCPModFunctions
         public JObject Node { get; set; }
         public GeometryBase Geometry { get; set; }
         public double MassKilograms { get; set; }
+
+        /// <summary>The element's class, for matching pair rules. Its layer name.</summary>
+        public string LayerName { get; set; }
+
+        /// <summary>
+        /// What this element says its joints are, or null if it has not said.
+        /// </summary>
+        /// <remarks>
+        /// Null rather than a default, because "no rule here" and "welded here" resolve
+        /// differently the moment the element opposite has a rule of its own: the weakest of
+        /// two stated rules governs, while one stated rule governs alone.
+        /// </remarks>
+        public StabilityRigidBodies.JointType? ElementJointType { get; set; }
     }
 }

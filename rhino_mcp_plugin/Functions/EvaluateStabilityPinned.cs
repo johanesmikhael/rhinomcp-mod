@@ -161,7 +161,7 @@ public partial class RhinoMCPModFunctions
         double groundToleranceMeters,
         bool sharePins = true,
         JArray clusterReport = null,
-        StabilityRigidBodies.JointType defaultJointType = StabilityRigidBodies.JointType.Welded)
+        JointTypeRules jointTypeRules = null)
     {
         var bodies = new List<PinnedBody>(nodes.Count);
         foreach (var node in nodes)
@@ -281,7 +281,7 @@ public partial class RhinoMCPModFunctions
             }
         }
 
-        ClusterJointsIntoNodes(bodies, links, clusterReport, defaultJointType);
+        ClusterJointsIntoNodes(bodies, links, clusterReport, jointTypeRules);
 
         return bodies;
     }
@@ -525,7 +525,7 @@ public partial class RhinoMCPModFunctions
     /// </remarks>
     private static void ClusterJointsIntoNodes(
         List<PinnedBody> bodies, List<JointLink> links, JArray report,
-        StabilityRigidBodies.JointType defaultJointType = StabilityRigidBodies.JointType.Welded)
+        JointTypeRules jointTypeRules = null)
     {
         if (links.Count == 0)
         {
@@ -644,6 +644,32 @@ public partial class RhinoMCPModFunctions
             }
         }
 
+        // What each node is, resolved once per cluster from the rules.
+        //
+        // Per cluster rather than per link, because a cluster is one node and one node has one
+        // type: two contacts that merged are the same joint seen twice. Where the links inside
+        // it disagree - a beam-to-column rule and a beam-to-beam rule landing in the same
+        // cluster - the weakest governs, the same way it does where two elements disagree.
+        var rules = jointTypeRules ??
+            new JointTypeRules(null, StabilityRigidBodies.JointType.Welded);
+        var nodeTypes = new Dictionary<int, StabilityRigidBodies.JointType>();
+        var nodeRules = new Dictionary<int, string>();
+        foreach (var index in Enumerable.Range(0, links.Count))
+        {
+            var a = bodies[links[index].A].Node;
+            var b = bodies[links[index].B].Node;
+            var type = rules.Resolve(
+                a?.LayerName, a?.ElementJointType, b?.LayerName, b?.ElementJointType,
+                out var which);
+
+            var root = Find(index);
+            if (!nodeTypes.TryGetValue(root, out var best) || type < best)
+            {
+                nodeTypes[root] = type;
+                nodeRules[root] = which;
+            }
+        }
+
         // One point per body per node, so the bodies meeting there share a single particle.
         var placed = new HashSet<(int Body, int Node)>();
         foreach (var index in Enumerable.Range(0, links.Count))
@@ -651,13 +677,16 @@ public partial class RhinoMCPModFunctions
             var root = Find(index);
             var point = nodePoints[root];
             nodeExtents.TryGetValue(root, out var nodeExtent);
+            var nodeType = nodeTypes.TryGetValue(root, out var found)
+                ? found
+                : rules.Default;
             foreach (var body in new[] { links[index].A, links[index].B })
             {
                 if (placed.Add((body, root)))
                 {
                     bodies[body].JointPoints.Add(point);
                     bodies[body].JointExtents.Add(nodeExtent);
-                    bodies[body].JointTypes.Add(defaultJointType);
+                    bodies[body].JointTypes.Add(nodeType);
                 }
             }
         }
@@ -703,13 +732,21 @@ public partial class RhinoMCPModFunctions
                 memberList.Add(bodies[member].Node.Node["g"]?.ToString());
             }
 
+            // The type each node came out as, and the rule that decided it. A verdict that
+            // changed because a rule matched more joints than intended has to be diagnosable
+            // without re-deriving the rules by hand.
             report.Add(new JObject
             {
                 ["bodies"] = members.Count,
                 ["edges"] = pair.Value.Count,
                 ["diameter_m"] = diameter,
                 ["centre_m"] = new JArray(centre.X, centre.Y, centre.Z),
-                ["members"] = memberList
+                ["members"] = memberList,
+                ["joint_type"] = TypeName(
+                    nodeTypes.TryGetValue(pair.Key, out var nodeType) ? nodeType : rules.Default),
+                ["joint_type_rule"] = nodeRules.TryGetValue(pair.Key, out var nodeRule)
+                    ? nodeRule
+                    : "default"
             });
         }
     }

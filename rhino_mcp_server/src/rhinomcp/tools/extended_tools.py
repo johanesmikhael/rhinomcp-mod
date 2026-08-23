@@ -312,6 +312,92 @@ async def assign_mass(
 
 
 @mcp.tool()
+async def assign_joint_type(
+    joint_type: str | None = None,
+    layer: str | list[str] | None = None,
+    with_layer: str | list[str] | None = None,
+    ids: list[str] | None = None,
+    names: list[str] | None = None,
+    selected: bool = False,
+    clear: bool = False,
+) -> dict[str, Any]:
+    """State what the connections in a model are, as rules rather than per joint.
+
+    Connection type is domain knowledge and geometry cannot supply it: a
+    screwed panel and a dry-stacked one look identical to an intersection
+    test. So state it the way an engineer knows it - by construction type,
+    for a pair of element classes - and the evaluator resolves each joint.
+
+    Read by pinned_dynamic with integrator="rigid_bodies". Ignored by the
+    other modes, which have their own fixed idea of what a joint is.
+
+    Args:
+        joint_type: "welded", "pin" or "contact".
+
+            "welded" - carries force and moment over the measured bearing,
+            always. A moment connection: beam to column, a plate welded or
+            bolted rigid. Synonyms: weld, fixed, moment.
+            "pin" - the bearing collapses to its centre, so it carries force
+            in three directions and no moment. Truss to truss, a single
+            bolt. Synonyms: pinned, hinge.
+            "contact" - the bearing pushes and does not pull, with friction
+            across it, so it opens as load leaves it. Dry masonry, a beam on
+            a corbel, a precast panel on a pad. Synonyms: bearing, dry.
+
+        layer: The element class. A layer name, or a list of them.
+        with_layer: The other class, making this a rule about the joints
+            *between* two classes - "beam to column is welded". Requires
+            layer. Order does not matter: naming Beams/Columns and
+            Columns/Beams writes the same rule.
+        ids: Object GUIDs, for a rule about specific elements.
+        names: Object names, likewise.
+        selected: When True, applies to the current selection.
+        clear: When True, removes the rule instead of writing it.
+
+    Precedence, most specific first: a pair rule, then what one element says
+    about its own joints, then evaluate_stability's joint_type argument as
+    the default. Where two elements state different types and no pair rule
+    covers them, the weaker governs - a hinge assumed where a moment
+    connection exists reads softer and more mechanism-prone than the truth,
+    which fails safe for a stability verdict, and unlike "last rule wins" it
+    does not depend on the order the rules were given in.
+
+    Element rules are stored on the object beside its mass, so they travel
+    with a copy. Pair rules are stored in the document, because there is
+    nowhere on a beam to record what it does when it meets a column.
+
+    The evaluation reports what each joint resolved to and which rule
+    decided it, under "nodes".
+
+    Examples:
+        assign_joint_type(joint_type="welded", layer="Beams",
+                          with_layer="Columns")
+        assign_joint_type(joint_type="pin", layer="Truss")
+        assign_joint_type(joint_type="contact", ids=[...])
+    """
+    from rhinomcp.server import get_rhino_connection
+
+    params: dict[str, Any] = {}
+    if joint_type is not None:
+        params["joint_type"] = joint_type
+    if layer is not None:
+        params["layer"] = layer
+    if with_layer is not None:
+        params["with_layer"] = with_layer
+    if ids:
+        params["ids"] = ids
+    if names:
+        params["names"] = names
+    if selected:
+        params["selected"] = True
+    if clear:
+        params["clear"] = True
+
+    rhino = get_rhino_connection()
+    return rhino.send_command("assign_joint_type", params)
+
+
+@mcp.tool()
 async def get_selected_objects() -> str:
     """Get id, name, type, and layer of all currently selected objects in Rhino."""
     from rhinomcp.server import get_rhino_connection

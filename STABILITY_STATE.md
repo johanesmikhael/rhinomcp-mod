@@ -182,6 +182,40 @@ Where a joint has no measured bearing region - found by proximity rather than by
 meeting - `contact` has no direction to open along and falls back to welded. The result says
 so: `contact_joints_sided` against `joint_count`.
 
+### Stating it: `assign_joint_type`
+
+An engineer states a rule, not four hundred joints, and the unit they state it in is a **pair
+of element classes**: "beam to column is welded", "truss to truss is pinned". So that is the
+unit the tool takes.
+
+```
+assign_joint_type(joint_type="welded", layer="Beams", with_layer="Columns")
+assign_joint_type(joint_type="pin",    layer="Truss")      # all its joints
+assign_joint_type(joint_type="contact", ids=[...])         # these elements
+assign_joint_type(clear=True, layer="Beams", with_layer="Columns")
+```
+
+Most specific first: a **pair rule**, then an **element rule**, then `evaluate_stability`'s own
+`joint_type` as the **default**. Where two element rules meet and no pair rule covers them the
+weaker governs, for the same reason the ordering exists at all.
+
+Element rules go on the object beside its mass, in the same user string, so they travel with a
+copy. Pair rules go in document user text, because there is nowhere on a beam to record what
+it does when it meets a column. Each is order-insensitive: naming Beams/Columns and
+Columns/Beams writes and matches the same rule, and the rule reports itself the same way round
+whichever order the graph listed the joint's two bodies in - that order is arbitrary and a
+label built from it would flip between runs of the same model.
+
+Every node in the result reports its `joint_type` and the `joint_type_rule` that decided it
+(`pair:A|B`, `element:both`, `element:one`, `default`). A verdict that changed because a rule
+matched more joints than intended has to be diagnosable without re-deriving the rules by hand.
+
+`joint_type_rules` in the fast tier walks all four branches on one stair - bottom block on one
+layer, the two above on another, so the lower joint and the upper joint belong to different
+class pairs and a rule that matches one has to leave the other alone. It asserts the resolved
+types *and* the verdicts, since the type reaching the report is not the same claim as the type
+reaching the solver.
+
 ## Contacts still reduce to a point on the particle path
 
 The connectivity graph emits **one bearing point per element pair**, so every joint in the

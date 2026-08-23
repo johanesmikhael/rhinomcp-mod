@@ -965,14 +965,14 @@ public partial class RhinoMCPModFunctions
         double imperfectionFraction,
         double lateralLoadFraction,
         double timestepSafety,
-        StabilityRigidBodies.JointType defaultJointType,
+        JointTypeRules jointTypeRules,
         double lengthToMeters,
         RhinoDoc displayDoc)
     {
         var clusterReport = new JArray();
         var pinned = BuildPinnedBodies(
             graph, nodes, lengthToMeters, floorZMeters, GroundContactToleranceMeters,
-            sharePins: true, clusterReport: clusterReport, defaultJointType: defaultJointType);
+            sharePins: true, clusterReport: clusterReport, jointTypeRules: jointTypeRules);
         if (pinned.Count == 0)
         {
             throw new InvalidOperationException("No bodies were built for the rigid-body solver.");
@@ -1324,7 +1324,8 @@ public partial class RhinoMCPModFunctions
         // to be diagnosable without re-deriving the rules by hand - and a contact that fell
         // back to welded for want of a measured bearing plane is a silent stiffening
         // otherwise.
-        graph["joint_type_default"] = defaultJointType.ToString().ToLowerInvariant();
+        graph["joint_type_default"] = TypeName(jointTypeRules.Default);
+        graph["joint_type_pair_rules"] = jointTypeRules.PairCount;
         graph["joint_type_counts"] = new JObject
         {
             ["contact"] = sites.Count(s => !s.Grounded && s.Type == StabilityRigidBodies.JointType.Contact),

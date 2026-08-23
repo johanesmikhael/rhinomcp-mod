@@ -61,7 +61,17 @@ def clear():
     doc.Objects.Clear()
 
 
-def add_box(name, plane, dx, dy, dz, mass):
+def layer_index(name):
+    "The named layer, made if it is not there. Add returns -1 for one that already exists."
+    existing = doc.Layers.FindName(name, -1)
+    if existing is not None:
+        return existing.Index
+    layer = Rhino.DocObjects.Layer()
+    layer.Name = name
+    return doc.Layers.Add(layer)
+
+
+def add_box(name, plane, dx, dy, dz, mass, layer=None):
     box = Rhino.Geometry.Box(
         plane,
         Rhino.Geometry.Interval(-dx / 2.0, dx / 2.0),
@@ -69,6 +79,8 @@ def add_box(name, plane, dx, dy, dz, mass):
         Rhino.Geometry.Interval(-dz / 2.0, dz / 2.0))
     attrs = Rhino.DocObjects.ObjectAttributes()
     attrs.Name = name
+    if layer is not None:
+        attrs.LayerIndex = layer_index(layer)
     attrs.SetUserString("rhinomcp.stability.v1", '{{"mass": %r, "mass_unit": "kg"}}' % mass)
     object_id = doc.Objects.AddBrep(box.ToBrep(), attrs)
     built.append(str(object_id))
@@ -85,11 +97,11 @@ def axis_box(name, a, b, side, mass):
     return add_box(name, plane, side, side, length, mass)
 
 
-def world_box(name, x0, y0, z0, x1, y1, z1, mass):
+def world_box(name, x0, y0, z0, x1, y1, z1, mass, layer=None):
     plane = Rhino.Geometry.Plane(
         Rhino.Geometry.Point3d((x0 + x1) / 2.0, (y0 + y1) / 2.0, (z0 + z1) / 2.0),
         Rhino.Geometry.Vector3d.ZAxis)
-    return add_box(name, plane, x1 - x0, y1 - y0, z1 - z0, mass)
+    return add_box(name, plane, x1 - x0, y1 - y0, z1 - z0, mass, layer)
 
 
 clear()
@@ -146,6 +158,109 @@ def stair_build(step: float) -> Callable[[], str]:
         return "\n".join(lines)
 
     return build
+
+
+# --------------------------------------------------------------------------------------
+# Joint-type rules: the same stair, answered by whichever rule is most specific
+# --------------------------------------------------------------------------------------
+#
+# The three blocks of the +150 mm stair, the bottom one on layer STEP_A and the two above
+# it on STEP_B, so the two joints belong to different element-class pairs: the lower is
+# A-to-B and the upper is B-to-B. That is what makes precedence observable - a rule that
+# matches one joint and not the other has to show up as one node changing type and the
+# other not.
+#
+# Four states, one per branch of the resolution:
+#
+#   no rules                    both welded, from evaluate_stability's own default
+#   pair rule A x B = pin       lower pin ("pair:"), upper still welded ("default")
+#   element rule on STEP_B      lower pin ("element:b"), upper pin ("element:both")
+#   cleared                     both welded again
+#
+# The verdicts come along for free and are the same physics as stair3_step100_pin_joint: a
+# stack held at points is a mechanism whatever its margin, so any state with a pin in it is
+# unstable and the two welded states stand. That is the check that the resolved type reaches
+# the solver rather than merely being reported.
+
+RULE_STAIR_STEP = 100.0
+
+
+def rule_stair_build() -> str:
+    mass = concrete_mass(STAIR_BLOCK, STAIR_BLOCK, STAIR_HEIGHT)
+    lines = []
+    for i in range(3):
+        x0 = i * RULE_STAIR_STEP
+        z0 = i * STAIR_HEIGHT
+        layer = "STEP_A" if i == 0 else "STEP_B"
+        lines.append(
+            f'world_box("STAIR_{i}", {x0!r}, 0.0, {z0!r}, '
+            f'{x0 + STAIR_BLOCK!r}, {STAIR_BLOCK!r}, {z0 + STAIR_HEIGHT!r}, {mass!r}, '
+            f'{layer!r})')
+    return "\n".join(lines)
+
+
+RULE_EVAL = {
+    "mode": "pinned_dynamic",
+    "integrator": "rigid_bodies",
+    "joint_type": "welded",
+    "damping_ratio": 0.2,
+    "lateral_load_fraction": 0.0,
+    "gravity": 9.80665,
+    "solver_substeps": 1,
+    "display": False,
+}
+
+
+def check_joint_type_rules(send: Callable[[str, dict], Any], ids: list[str]) -> list[str]:
+    problems = []
+
+    def clear_rules() -> None:
+        # Both kinds, because both persist: pair rules in document text and element rules on
+        # the objects. A rule left behind would silently change every later case in the run,
+        # which is the sort of coupling a suite is supposed to be free of.
+        send("assign_joint_type", {"clear": True, "layer": "STEP_A", "with_layer": "STEP_B"})
+        send("assign_joint_type", {"clear": True, "layer": "STEP_B", "with_layer": "STEP_B"})
+        send("assign_joint_type", {"clear": True, "ids": ids})
+
+    def nodes_by_type(label: str, expect_stable: bool) -> list[tuple[str, str]]:
+        result = send("evaluate_stability", dict(RULE_EVAL, ids=ids))
+        if result.get("success") is not True:
+            problems.append(f"{label}: {result.get('message')}")
+            return []
+        if bool(result.get("stable")) != expect_stable:
+            problems.append(
+                f"{label}: {result.get('verdict')}, expected "
+                f"{'stable' if expect_stable else 'unstable'}")
+        return sorted(
+            (node.get("joint_type"), node.get("joint_type_rule"))
+            for node in result.get("nodes") or [])
+
+    clear_rules()
+
+    got = nodes_by_type("no rules", True)
+    if got != [("welded", "default"), ("welded", "default")]:
+        problems.append(f"no rules: {got}, expected both welded from the default")
+
+    send("assign_joint_type",
+         {"joint_type": "pin", "layer": "STEP_A", "with_layer": "STEP_B"})
+    got = nodes_by_type("pair rule", False)
+    if got != [("pin", "pair:STEP_A|STEP_B"), ("welded", "default")]:
+        problems.append(
+            f"pair rule: {got}, expected the A-to-B joint pinned and the B-to-B joint left")
+
+    send("assign_joint_type", {"clear": True, "layer": "STEP_A", "with_layer": "STEP_B"})
+    send("assign_joint_type", {"joint_type": "pin", "layer": "STEP_B"})
+    got = nodes_by_type("element rule", False)
+    if got != [("pin", "element:both"), ("pin", "element:one")]:
+        problems.append(
+            f"element rule: {got}, expected one joint resolved by one element and one by both")
+
+    clear_rules()
+    got = nodes_by_type("cleared", True)
+    if got != [("welded", "default"), ("welded", "default")]:
+        problems.append(f"cleared: {got}, expected the rules to be gone")
+
+    return problems
 
 
 # --------------------------------------------------------------------------------------
@@ -793,6 +908,17 @@ CASES: list[Case] = [
     # where a point has no lever arm, and three blocks stacked on three points is a mechanism.
     # If these two agree, the type is being dropped somewhere between the parameter and the
     # site - which is the failure mode a stiffness comparison would not catch.
+    Case(
+        name="joint_type_rules",
+        mode="pinned_dynamic",
+        tier=FAST,
+        stable=True,
+        reason=(
+            "pair rule beats element rule beats default, and the resolved type reaches the "
+            "solver: every state with a pin in it is a mechanism, the welded states stand"),
+        build=rule_stair_build,
+        check=check_joint_type_rules,
+    ),
     Case(
         name="stair3_step100_welded_joint",
         mode="pinned_dynamic",
