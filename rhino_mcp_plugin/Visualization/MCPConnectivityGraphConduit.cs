@@ -28,6 +28,22 @@ internal sealed class MCPConnectivityGraphConduit : DisplayConduit
     private static readonly Color PinColour = Color.FromArgb(255, 120, 200, 255);
     private static readonly Color WeldedColour = Color.FromArgb(255, 255, 170, 60);
 
+    /// <summary>
+    /// The exactly measured bearing, drawn over the sampled one.
+    /// </summary>
+    /// <remarks>
+    /// Deliberately not a joint-type colour. The two rectangles answer the same question by
+    /// two methods and the point of drawing both is to see where they disagree, so the exact
+    /// one has to read as a measurement rather than as another joint. Outline only, no fill,
+    /// so the sampled patch underneath stays visible through it.
+    ///
+    /// Magenta because white was tried first and is invisible: Rhino's default viewport
+    /// background is white, so both the rectangles and the legend line explaining them
+    /// vanished into it. Magenta is distinct from all three joint-type colours and readable
+    /// on a light background and a dark one.
+    /// </remarks>
+    private static readonly Color ExactColour = Color.FromArgb(255, 235, 40, 200);
+
     private static Color ColourFor(Functions.StabilityRigidBodies.JointType type)
     {
         return type switch
@@ -175,6 +191,27 @@ internal sealed class MCPConnectivityGraphConduit : DisplayConduit
                         outline,
                         1);
                 }
+
+                // The same bearing measured by intersecting the two bodies' flat faces,
+                // drawn over the sampled one rather than instead of it. Nothing solves on
+                // this yet; it is here so the disagreement between the two can be looked at
+                // in the model instead of read out of a table.
+                //
+                // Drawn outside the block above on purpose: a joint whose faces overlap has
+                // no sampled region at all, so the cases this was built for are exactly the
+                // ones that would otherwise still draw nothing.
+                if (MCPConnectivityGraphController.ShowContactExtent && edge.Exact.IsValid)
+                {
+                    var exactCorners = edge.Exact.Corners();
+                    e.Display.DrawPolygon(exactCorners, ExactColour, false);
+
+                    var exactSize = Math.Max(edge.Exact.HalfU, edge.Exact.HalfV);
+                    e.Display.DrawLine(
+                        edge.Exact.Frame.Origin,
+                        edge.Exact.Frame.Origin + edge.Exact.Frame.ZAxis * exactSize * 0.4,
+                        ExactColour,
+                        1);
+                }
             }
             else
             {
@@ -199,6 +236,9 @@ internal sealed class MCPConnectivityGraphConduit : DisplayConduit
         }
 
         var measured = graph.Edges.Count(edge => edge.Extent.IsValid);
+        var measuredExactly = graph.Edges.Count(edge => edge.Exact.IsValid);
+        var onlyExact = graph.Edges.Count(edge => edge.Exact.IsValid && !edge.Extent.IsValid);
+        var buried = graph.Edges.Count(edge => edge.Exact.PenetrationDepth > 0.0);
         var extentLabel = MCPConnectivityGraphController.ShowContactExtent
             ? $" | extent {measured}/{graph.Edges.Count} measured"
             : string.Empty;
@@ -255,6 +295,27 @@ internal sealed class MCPConnectivityGraphConduit : DisplayConduit
                 new Point2d(20, line),
                 false,
                 14);
+            line += 20.0;
+        }
+
+        // What the white rectangles are, and where the two methods part company. A count on
+        // its own would not say that: the interesting number is not how many were measured
+        // exactly but how many the sampler could not reach at all.
+        if (MCPConnectivityGraphController.ShowContactExtent)
+        {
+            var note = $"magenta outline: exact bearing, {measuredExactly}/{graph.Edges.Count} " +
+                "measured by face intersection (not solved on yet)";
+            if (onlyExact > 0)
+            {
+                note += $"; {onlyExact} of them have no sampled region";
+            }
+
+            if (buried > 0)
+            {
+                note += $"; {buried} joints interpenetrate";
+            }
+
+            e.Display.Draw2dText(note, ExactColour, new Point2d(20, line), false, 14);
             line += 20.0;
         }
 

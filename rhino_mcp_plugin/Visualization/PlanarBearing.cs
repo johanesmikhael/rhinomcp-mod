@@ -63,6 +63,17 @@ internal struct PlanarBearingResult
 
     public double RectangleArea => 4.0 * HalfU * HalfV;
 
+    public Point3d[] Corners()
+    {
+        return new[]
+        {
+            Frame.PointAt(-HalfU, -HalfV),
+            Frame.PointAt(HalfU, -HalfV),
+            Frame.PointAt(HalfU, HalfV),
+            Frame.PointAt(-HalfU, HalfV)
+        };
+    }
+
     public double PenetrationDepth => Offset < 0.0 ? -Offset : 0.0;
 }
 
