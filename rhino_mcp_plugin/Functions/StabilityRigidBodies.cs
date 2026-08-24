@@ -1080,58 +1080,63 @@ public partial class RhinoMCPModFunctions
                 continue;
             }
 
-            // The lowest-numbered body at the site, so all four Gauss points of one bearing
-            // agree on whose force is being reported.
-            var pick = 0;
-            for (var i = 1; i < site.Bodies.Count; i++)
+            // Every body at the site, not only the lowest-numbered one. A site is a star:
+            // at a truss node seven members are pulled toward one shared target, and
+            // reporting one of them describes one member's force and discards the other six.
+            // Newton's third law makes the two-body case redundant and the many-body case
+            // not: the seven do not come in pairs, they sum to nothing between them.
+            for (var i = 0; i < site.Bodies.Count; i++)
             {
-                if (site.Bodies[i] < site.Bodies[pick])
+                var body = site.Bodies[i];
+                var slot = site.Slots[i];
+                if (body >= slotJoints.Count || slot >= slotJoints[body].Length)
                 {
-                    pick = i;
+                    continue;
                 }
+
+                var joint = slotJoints[body][slot];
+                if (joint < 0)
+                {
+                    continue;
+                }
+
+                var normal = site.Normal.IsValid && site.Outward.Count == site.Bodies.Count
+                    ? site.Normal * site.Outward[i]
+                    : Vector3d.Unset;
+
+                var key = (body, joint);
+                if (!totals.TryGetValue(key, out var entry))
+                {
+                    entry = (Vector3d.Zero, normal, site.Anchor, site.Type,
+                        new List<int>(site.Bodies), double.NegativeInfinity, 0, 0.0, false);
+                }
+
+                var force = siteForces[s][i];
+                entry.Force += force;
+                entry.Points++;
+                // The joint's capacity is what its points hold between them.
+                entry.Capacity += site.Capacity;
+                entry.Reached |= site.ReachedCapacity;
+
+                // The most any single bearing point is being pulled outward. Summing the four
+                // points of a bearing gives the force the joint carries, and hides the one
+                // thing a fastener is sized for: an eccentric bearing can be in net
+                // compression while its far edge is in tension, which is what lifts and what
+                // a bolt has to hold.
+                if (normal.IsValid)
+                {
+                    entry.PeakTension = Math.Max(entry.PeakTension, force * normal);
+                }
+
+                // The joint's position, which is where any picture of the force has to put
+                // it. Averaged over the site's own points so a bearing with extent reports
+                // its centre rather than whichever Gauss point was seen first.
+                entry.Point = entry.Points == 1
+                    ? site.Anchor
+                    : entry.Point + (site.Anchor - entry.Point) / entry.Points;
+
+                totals[key] = entry;
             }
-
-            var body = site.Bodies[pick];
-            var slot = site.Slots[pick];
-            if (body >= slotJoints.Count || slot >= slotJoints[body].Length)
-            {
-                continue;
-            }
-
-            var joint = slotJoints[body][slot];
-            if (joint < 0)
-            {
-                continue;
-            }
-
-            var normal = site.Normal.IsValid && site.Outward.Count == site.Bodies.Count
-                ? site.Normal * site.Outward[pick]
-                : Vector3d.Unset;
-
-            var key = (body, joint);
-            if (!totals.TryGetValue(key, out var entry))
-            {
-                entry = (Vector3d.Zero, normal, site.Anchor, site.Type,
-                    new List<int>(site.Bodies), double.NegativeInfinity, 0, 0.0, false);
-            }
-
-            var force = siteForces[s][pick];
-            entry.Force += force;
-            entry.Points++;
-            // The joint's capacity is what its points hold between them.
-            entry.Capacity += site.Capacity;
-            entry.Reached |= site.ReachedCapacity;
-
-            // The most any single bearing point is being pulled outward. Summing the four
-            // points of a bearing gives the force the joint carries, and hides the one thing
-            // a fastener is sized for: an eccentric bearing can be in net compression while
-            // its far edge is in tension, which is what lifts and what a bolt has to hold.
-            if (normal.IsValid)
-            {
-                entry.PeakTension = Math.Max(entry.PeakTension, force * normal);
-            }
-
-            totals[key] = entry;
         }
 
         foreach (var pair in totals)
@@ -1158,6 +1163,18 @@ public partial class RhinoMCPModFunctions
             }
 
             record["bearing_points"] = entry.Points;
+
+            // Where the force acts and which way it points, in solver metres. Without these
+            // a force can be tabulated and not drawn: the magnitude says how hard, and
+            // nothing says where or which way.
+            record["at_m"] = new JArray(
+                Math.Round(entry.Point.X, 6),
+                Math.Round(entry.Point.Y, 6),
+                Math.Round(entry.Point.Z, 6));
+            record["vector_n"] = new JArray(
+                Math.Round(entry.Force.X, 3),
+                Math.Round(entry.Force.Y, 3),
+                Math.Round(entry.Force.Z, 3));
             if (entry.Normal.IsValid)
             {
                 var tension = entry.Force * entry.Normal;
@@ -1611,7 +1628,8 @@ public partial class RhinoMCPModFunctions
         // to be diagnosable without re-deriving the rules by hand - and a contact that fell
         // back to welded for want of a measured bearing plane is a silent stiffening
         // otherwise.
-        graph["joint_forces"] = JointForceReport(pinned, sites, siteForces, slotJoints);
+        var jointForces = JointForceReport(pinned, sites, siteForces, slotJoints);
+        graph["joint_forces"] = jointForces;
         // Joints held at their stated limit. A verdict that changed because a joint yielded
         // has to say so, rather than leaving it to be inferred from a deflection.
         graph["joints_with_capacity"] = sites.Count(
@@ -1675,7 +1693,7 @@ public partial class RhinoMCPModFunctions
         if (displayDoc != null)
         {
             ClearAfterEvaluationCache(displayDoc);
-            WriteMultiBodyDisplay(displayDoc, pinned);
+            WriteMultiBodyDisplay(displayDoc, pinned, jointForces, lengthToMeters);
             global::RhinoMCPModPlugin.MCPStabilityController.SetEnabled(true);
         }
 

@@ -648,18 +648,32 @@ def check_joint_forces(send: Callable[[str, dict], Any], ids: list[str]) -> list
 
     problems = []
 
-    # Six joints: three columns to the block above and three to the pad below. The two sides
-    # differ only by the columns' own weight, so their magnitudes interleave and cannot be
-    # told apart by sorting - which is what a first version of this check tried to do.
+    # Six joints: three columns to the block above and three to the pad below. Each is
+    # reported once per body at it, so twelve records describe six joints - both sides of
+    # Newton's third law, equal and opposite. Counting a joint once means taking one record
+    # per unordered pair of bodies.
+    #
+    # The two sides of a joint differ only by the columns' own weight, so their magnitudes
+    # interleave and cannot be told apart by sorting - which is what a first version of this
+    # check tried to do.
     #
     # Two things pin the answer without needing to separate them. The ratio between the
     # largest and the smallest is the ratio statics demands, 1.2, and it is a pure statement
     # about the distribution. The sum over all six is the block's weight counted twice, once
     # into the columns and once out of them, plus the columns' own.
-    if len(forces) != 6:
-        problems.append(f"{len(forces)} joints reported, expected 6")
+    seen = set()
+    joints = []
+    for f in forces:
+        key = tuple(sorted([f["body"]] + list(f.get("with") or [])))
+        if key in seen:
+            continue
+        seen.add(key)
+        joints.append(f)
 
-    magnitudes = sorted(f["force_n"] for f in forces)
+    if len(joints) != 6:
+        problems.append(f"{len(joints)} joints reported, expected 6")
+
+    magnitudes = sorted(f["force_n"] for f in joints)
     if magnitudes[0] > 0.0:
         ratio = magnitudes[-1] / magnitudes[0]
         if abs(ratio - far / near) > MICRO_REACTION_TOLERANCE * (far / near):
@@ -674,7 +688,7 @@ def check_joint_forces(send: Callable[[str, dict], Any], ids: list[str]) -> list
         problems.append(f"reactions sum to {total:.0f} N against {want_total:.0f} N")
 
     # A column under a block is in compression, whatever else is true.
-    for f in forces:
+    for f in joints:
         tension = f.get("tension_n")
         if tension is None:
             problems.append("a joint reported no sense, so it had no measured bearing plane")
