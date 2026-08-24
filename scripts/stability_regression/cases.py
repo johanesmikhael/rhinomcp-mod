@@ -735,7 +735,7 @@ def check_bridge_on_pads(send: Callable[[str, dict], Any], ids: list[str]) -> li
     send("assign_joint_type", {"joint_type": "contact", "ids": pads})
 
     if SHOW_WORK:
-        send("graph_display", {"enabled": True, "contact_extent": True, "ids": ids})
+        send("graph_display", {"enabled": True, "ids": ids})
 
     result = send("evaluate_stability", {
         "mode": "pinned_dynamic",
@@ -922,7 +922,7 @@ def hybrid_check(rules, expect_stable: bool, weight_n: float, expect_types=None)
         # settled geometry on screen afterwards. Off by default because a run that draws is a
         # run someone has to be watching.
         if SHOW_WORK:
-            send("graph_display", {"enabled": True, "contact_extent": True, "ids": ids})
+            send("graph_display", {"enabled": True, "ids": ids})
 
         result = send("evaluate_stability", {
             "mode": "pinned_dynamic",
@@ -1057,7 +1057,7 @@ def pavilion_check(expect_stable: bool, sway=None):
             send("assign_joint_type", {"joint_type": joint, "layer": a, "with_layer": b})
 
         if SHOW_WORK:
-            send("graph_display", {"enabled": True, "contact_extent": True, "ids": ids})
+            send("graph_display", {"enabled": True, "ids": ids})
 
         # No imperfection, and that is a statement about this structure rather than a
         # convenience.

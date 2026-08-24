@@ -15,34 +15,41 @@ namespace RhinoMCPModPlugin;
 
 internal sealed class MCPConnectivityGraphConduit : DisplayConduit
 {
-    private readonly Color _edgeColor = Color.FromArgb(180, 255, 120, 40);
-    private readonly Color _nodeColor = Color.FromArgb(240, 80, 180, 255);
-    private readonly Color _contactColor = Color.FromArgb(255, 255, 240, 90);
-    private readonly Color _isolatedColor = Color.FromArgb(255, 255, 60, 60);
-    private readonly Color _extentColor = Color.FromArgb(255, 120, 255, 160);
-    private readonly Color _extentFillColor = Color.FromArgb(60, 120, 255, 160);
+    // Chosen to read on a white viewport, which is Rhino's default, and still on a dark or a
+    // rendered one. The first palette here was pale green and cyan: legible against the dark
+    // background it was designed on and nearly gone against white, geometry as well as text.
+    // Mid-lightness saturated hues are the ones that survive both.
+    private readonly Color _edgeColor = Color.FromArgb(210, 190, 95, 25);
+    private readonly Color _nodeColor = Color.FromArgb(255, 25, 95, 185);
+    private readonly Color _isolatedColor = Color.FromArgb(255, 215, 25, 25);
 
     // One colour per joint type, so what the solver will do with a bearing is visible on the
     // bearing itself rather than in a table somewhere else.
-    private static readonly Color ContactColour = Color.FromArgb(255, 120, 255, 160);
-    private static readonly Color PinColour = Color.FromArgb(255, 120, 200, 255);
-    private static readonly Color WeldedColour = Color.FromArgb(255, 255, 170, 60);
+    private static readonly Color ContactColour = Color.FromArgb(255, 20, 150, 95);
+    private static readonly Color PinColour = Color.FromArgb(255, 35, 110, 215);
+    private static readonly Color WeldedColour = Color.FromArgb(255, 200, 105, 0);
 
+    // The panel the readout sits on, and the text on it. A colour that reads on every
+    // background does not exist - white vanished into the default viewport and black would
+    // vanish into a dark one - so the readout brings its own background and stops depending
+    // on the viewport's.
     /// <summary>
-    /// The exactly measured bearing, drawn over the sampled one.
+    /// An overlap measured but not solved on, drawn as an outline and nothing more.
     /// </summary>
     /// <remarks>
-    /// Deliberately not a joint-type colour. The two rectangles answer the same question by
-    /// two methods and the point of drawing both is to see where they disagree, so the exact
-    /// one has to read as a measurement rather than as another joint. Outline only, no fill,
-    /// so the sampled patch underneath stays visible through it.
-    ///
-    /// Magenta because white was tried first and is invisible: Rhino's default viewport
-    /// background is white, so both the rectangles and the legend line explaining them
-    /// vanished into it. Magenta is distinct from all three joint-type colours and readable
-    /// on a light background and a dark one.
+    /// Deliberately not a joint-type colour: it is not a joint the solver will build. Buried
+    /// bearings are gated behind <c>bearing_source="buried"</c> because their area grows with
+    /// how far the drawing goes through itself, so by default the solver rejects them and
+    /// falls back to the sampled region. A grey outline says the overlap was seen and is not
+    /// being used, which is a different statement from either drawing it as a bearing or
+    /// leaving it out.
     /// </remarks>
-    private static readonly Color ExactColour = Color.FromArgb(255, 235, 40, 200);
+    private static readonly Color BuriedColour = Color.FromArgb(190, 130, 130, 140);
+
+    private static readonly Color PanelColour = Color.FromArgb(224, 20, 22, 26);
+    private static readonly Color PanelEdgeColour = Color.FromArgb(255, 90, 96, 105);
+    private static readonly Color TextColour = Color.FromArgb(255, 232, 235, 240);
+    private static readonly Color HeadingColour = Color.FromArgb(255, 150, 160, 175);
 
     private static Color ColourFor(Functions.StabilityRigidBodies.JointType type)
     {
@@ -87,12 +94,11 @@ internal sealed class MCPConnectivityGraphConduit : DisplayConduit
 
         if (graph.Nodes.Count == 0)
         {
-            e.Display.Draw2dText(
-                $"MCP Graph ON | scope: {scopeLabel} | nothing in scope",
-                Color.White,
-                new Point2d(20, 40),
-                false,
-                14);
+            DrawPanel(e, new List<HudRow>
+            {
+                HudRow.Heading("MCP GRAPH"),
+                HudRow.Line($"nothing in scope: {scopeLabel}")
+            });
             return;
         }
 
@@ -154,76 +160,70 @@ internal sealed class MCPConnectivityGraphConduit : DisplayConduit
                 e.Display.DrawLine(a, contact, _edgeColor, 2);
                 e.Display.DrawLine(contact, b, _edgeColor, 2);
 
-                // The joint marker takes the type's colour whenever types are being shown, so
-                // a joint with no measured region - the ones a bearing colour cannot reach -
-                // still says what it will be solved as.
+                // The joint marker in the type's colour, so a contact with no measurable
+                // region - the ones a bearing outline cannot reach - still says what it will
+                // be solved as.
                 var typeColour = ColourFor(jointType);
-                e.Display.DrawPoint(
-                    contact,
-                    PointStyle.X,
-                    5,
-                    MCPConnectivityGraphController.ShowContactExtent
-                        ? (byRule ? typeColour : Dimmed(typeColour, 255))
-                        : _contactColor);
+                var outline = byRule ? typeColour : Dimmed(typeColour, 255);
+                e.Display.DrawPoint(contact, PointStyle.X, 5, outline);
 
-                // The bearing region the contact was reduced from. Off by default because it
-                // is for checking the reduction rather than for reading the graph: a wall
-                // should draw a rectangle the length of its bearing, a column a small square,
-                // and a diagonal member one that lies along the member rather than square to
-                // the world. Anything else is the reduction being wrong, which is easier to
-                // see than to infer from a number.
-                if (MCPConnectivityGraphController.ShowContactExtent && edge.Extent.IsValid)
+                // The bearing the solver actually builds joints over: the measured polygon
+                // where two flat faces meet, reduced to the rectangle the bearing points are
+                // spread across, and the sampled patch only where there was no flat face to
+                // intersect. One region per contact, in the joint's own colour.
+                //
+                // It used to be two - the exact measurement drawn in magenta over the sampled
+                // one - because the two answered the same question by different methods and
+                // the disagreement was the thing worth seeing. The solver has run on the
+                // exact one since; there is no longer a comparison to draw, only a bearing.
+                var fill = byRule ? Color.FromArgb(70, typeColour) : Dimmed(typeColour, 35);
+
+                // A buried bearing is measured but not solved on unless it is asked for by
+                // name, so it is drawn as what it is - a detected overlap - and the region
+                // the solver will actually fall back to is drawn as the bearing. Drawing it
+                // as a bearing would repeat the defect this overlay exists to catch: the
+                // picture saying one thing while the solver does another.
+                var buriedOnly = edge.Exact.IsValid && edge.Exact.IsBuried;
+                if (buriedOnly)
                 {
-                    var corners = edge.Extent.Corners();
-                    var outline = byRule ? typeColour : Dimmed(typeColour, 255);
-                    var fill = byRule
-                        ? Color.FromArgb(60, typeColour)
-                        : Dimmed(typeColour, 30);
-                    e.Display.DrawPolygon(corners, fill, true);
-                    e.Display.DrawPolygon(corners, outline, false);
-
-                    // The normal, at a tenth of the rectangle's own size, so a patch fitted to
-                    // the wrong plane shows up as a spike pointing the wrong way.
-                    var size = Math.Max(edge.Extent.HalfU, edge.Extent.HalfV);
-                    e.Display.DrawLine(
-                        edge.Extent.Frame.Origin,
-                        edge.Extent.Frame.Origin + edge.Extent.Frame.ZAxis * size * 0.4,
-                        outline,
-                        1);
+                    e.Display.DrawPolygon(edge.Exact.Corners(), BuriedColour, false);
                 }
 
-                // The same bearing measured by intersecting the two bodies' flat faces,
-                // drawn over the sampled one rather than instead of it. Nothing solves on
-                // this yet; it is here so the disagreement between the two can be looked at
-                // in the model instead of read out of a table.
-                //
-                // Drawn outside the block above on purpose: a joint whose faces overlap has
-                // no sampled region at all, so the cases this was built for are exactly the
-                // ones that would otherwise still draw nothing.
-                if (MCPConnectivityGraphController.ShowContactExtent && edge.Exact.IsValid)
+                if (edge.Exact.IsValid && !buriedOnly)
                 {
-                    // A line bearing draws as the line it is. Corners() would give four
-                    // collinear points and the same picture, but drawn thicker it reads as a
-                    // measurement rather than as a rectangle seen edge-on.
+                    // A line contact has no width and so no polygon to fill. Drawn thick, as
+                    // the measurement it is rather than as a rectangle seen edge-on.
                     if (edge.Exact.IsLine)
                     {
                         e.Display.DrawLine(
                             edge.Exact.Frame.PointAt(-edge.Exact.HalfU, 0.0),
                             edge.Exact.Frame.PointAt(edge.Exact.HalfU, 0.0),
-                            ExactColour,
+                            outline,
                             3);
                     }
                     else
                     {
-                        e.Display.DrawPolygon(edge.Exact.Corners(), ExactColour, false);
+                        var corners = edge.Exact.Corners();
+                        e.Display.DrawPolygon(corners, fill, true);
+                        e.Display.DrawPolygon(corners, outline, false);
                     }
 
-                    var exactSize = Math.Max(edge.Exact.HalfU, edge.Exact.HalfV);
-                    e.Display.DrawLine(
-                        edge.Exact.Frame.Origin,
-                        edge.Exact.Frame.Origin + edge.Exact.Frame.ZAxis * exactSize * 0.4,
-                        ExactColour,
-                        1);
+                    DrawNormal(
+                        e,
+                        edge.Exact.Frame,
+                        Math.Max(edge.Exact.HalfU, edge.Exact.HalfV),
+                        outline);
+                }
+                else if (edge.Extent.IsValid)
+                {
+                    var corners = edge.Extent.Corners();
+                    e.Display.DrawPolygon(corners, fill, true);
+                    e.Display.DrawPolygon(corners, outline, false);
+                    DrawNormal(
+                        e,
+                        edge.Extent.Frame,
+                        Math.Max(edge.Extent.HalfU, edge.Extent.HalfV),
+                        outline);
                 }
             }
             else
@@ -248,112 +248,211 @@ internal sealed class MCPConnectivityGraphConduit : DisplayConduit
                 connected ? _nodeColor : _isolatedColor);
         }
 
-        var measured = graph.Edges.Count(edge => edge.Extent.IsValid);
-        var measuredExactly = graph.Edges.Count(edge => edge.Exact.IsValid);
-        var onlyExact = graph.Edges.Count(edge => edge.Exact.IsValid && !edge.Extent.IsValid);
-        var buried = graph.Edges.Count(edge => edge.Exact.PenetrationDepth > 0.0);
+        // Counted the way the solver reads them, not the way they were measured: a buried
+        // bearing is rejected by default, so it counts as an overlap and whatever the solver
+        // falls back to counts as the bearing.
+        var solvedExactly = graph.Edges.Count(
+            edge => edge.Exact.IsValid && !edge.Exact.IsBuried);
+        var socketed = graph.Edges.Count(edge => edge.Exact.IsBuried);
+        var sampledOnly = graph.Edges.Count(
+            edge => !(edge.Exact.IsValid && !edge.Exact.IsBuried) && edge.Extent.IsValid);
+        var unmeasured = graph.Edges.Count(
+            edge => !(edge.Exact.IsValid && !edge.Exact.IsBuried) && !edge.Extent.IsValid);
         var lines = graph.Edges.Count(edge => edge.Exact.IsLine);
-        var extentLabel = MCPConnectivityGraphController.ShowContactExtent
-            ? $" | extent {measured}/{graph.Edges.Count} measured"
-            : string.Empty;
 
-        e.Display.Draw2dText(
-            $"MCP Graph | scope: {scopeLabel} | nodes {graph.Nodes.Count} " +
-            $"edges {graph.Edges.Count} isolated {isolated}{extentLabel}",
-            Color.White,
-            new Point2d(20, 40),
-            false,
-            14);
-
-        var line = graph.Truncated ? 80.0 : 60.0;
-
-        // The legend, one line per type that actually occurs. Colour alone is not a legend:
-        // green means bearing to whoever wrote it and nothing to anyone reading it.
-        if (MCPConnectivityGraphController.ShowContactExtent)
+        var rows = new List<HudRow>
         {
-            foreach (var entry in typeCounts.OrderBy(pair => (int)pair.Key))
-            {
-                e.Display.Draw2dText(
-                    $"{Functions.RhinoMCPModFunctions.TypeName(entry.Key)}: {entry.Value}",
-                    ColourFor(entry.Key),
-                    new Point2d(20, line),
-                    false,
-                    14);
-                line += 20.0;
-            }
-
-            // Stated against assumed. A joint drawn dim will be solved exactly like a bright
-            // one of the same colour; what differs is whether anyone said so, which is what
-            // this overlay is for checking.
-            if (ruled < graph.Edges.Count)
-            {
-                e.Display.Draw2dText(
-                    $"{graph.Edges.Count - ruled} of {graph.Edges.Count} joints drawn dim: " +
-                    "no rule names them, so they take evaluate_stability's default",
-                    Color.FromArgb(255, 190, 190, 190),
-                    new Point2d(20, line),
-                    false,
-                    14);
-                line += 20.0;
-            }
-        }
-
-        // Contacts found by intersection or proximity carry no region, and a count that is
-        // not the edge count says so plainly rather than leaving a silently empty screen.
-        if (MCPConnectivityGraphController.ShowContactExtent && measured < graph.Edges.Count)
-        {
-            e.Display.Draw2dText(
-                $"{graph.Edges.Count - measured} contacts have no measured extent " +
-                "(found by intersection or proximity, not by sampling)",
-                _contactColor,
-                new Point2d(20, line),
-                false,
-                14);
-            line += 20.0;
-        }
-
-        // What the white rectangles are, and where the two methods part company. A count on
-        // its own would not say that: the interesting number is not how many were measured
-        // exactly but how many the sampler could not reach at all.
-        if (MCPConnectivityGraphController.ShowContactExtent)
-        {
-            var note = $"magenta outline: exact bearing, {measuredExactly}/{graph.Edges.Count} " +
-                "measured by face intersection (not solved on yet)";
-            if (onlyExact > 0)
-            {
-                note += $"; {onlyExact} of them have no sampled region";
-            }
-
-            if (buried > 0)
-            {
-                note += $"; {buried} joints interpenetrate";
-            }
-
-            if (lines > 0)
-            {
-                note += $"; {lines} are lines, where the faces cross rather than bear";
-            }
-
-            var socketed = graph.Edges.Count(edge => edge.Exact.IsBuried);
-            if (socketed > 0)
-            {
-                note += $"; {socketed} are the surface inside an overlap, not a bearing " +
-                    "between faces that meet";
-            }
-
-            e.Display.Draw2dText(note, ExactColour, new Point2d(20, line), false, 14);
-            line += 20.0;
-        }
+            HudRow.Heading("MCP GRAPH"),
+            HudRow.Line(
+                $"{graph.Nodes.Count} elements, {graph.Edges.Count} contacts, " +
+                $"{solvedExactly} on a measured bearing" +
+                (isolated > 0 ? $"; {isolated} touching nothing" : string.Empty)),
+            HudRow.Line($"scope: {scopeLabel}")
+        };
 
         if (graph.Truncated)
         {
-            e.Display.Draw2dText(
-                $"TRUNCATED: {graph.ExaminedCount} of {graph.CandidateCount} examined - " +
-                "select a sub-assembly to see the rest",
+            rows.Add(HudRow.Swatched(
                 _isolatedColor,
-                new Point2d(20, 60),
+                $"TRUNCATED - {graph.ExaminedCount} of {graph.CandidateCount} examined; " +
+                "select a sub-assembly to see the rest"));
+        }
+
+        // The legend earns its space by naming what is on screen. Colour alone is not a
+        // legend: green means bearing to whoever chose it and nothing to anyone reading it.
+        rows.Add(HudRow.Heading("BEARING SURFACES - the rectangle joints are built over"));
+        foreach (var entry in typeCounts.OrderBy(pair => (int)pair.Key))
+        {
+            rows.Add(HudRow.Swatched(
+                ColourFor(entry.Key),
+                $"{Functions.RhinoMCPModFunctions.TypeName(entry.Key)}  {entry.Value}  " +
+                DescriptionOf(entry.Key)));
+        }
+
+        // Stated against assumed. A joint drawn dim is solved exactly like a bright one of
+        // the same colour; what differs is whether anyone said so, which is the question this
+        // overlay exists to answer.
+        if (ruled < graph.Edges.Count)
+        {
+            rows.Add(HudRow.Swatched(
+                Dimmed(ColourFor(Functions.RhinoMCPModFunctions.DefaultJointType), 255),
+                $"dim: {graph.Edges.Count - ruled} named by no rule, so they take the " +
+                $"default, {Functions.RhinoMCPModFunctions.TypeName(Functions.RhinoMCPModFunctions.DefaultJointType)}"));
+        }
+
+        // How each bearing was arrived at. Only the readings that are not the ordinary one
+        // get a line, so a clean model shows a short panel and an odd one explains itself.
+        if (lines > 0)
+        {
+            rows.Add(HudRow.Line(
+                $"{lines} drawn as a line - the faces cross rather than bear, so the joint " +
+                "rocks about it"));
+        }
+
+        if (socketed > 0)
+        {
+            rows.Add(HudRow.Swatched(
+                BuriedColour,
+                $"{socketed} bodies interpenetrate - grey outline is the buried surface, not " +
+                "solved on unless bearing_source=\"buried\""));
+        }
+
+        if (sampledOnly > 0)
+        {
+            rows.Add(HudRow.Line(
+                $"{sampledOnly} sampled rather than measured - a curved or buried face has no " +
+                "flat region to intersect"));
+        }
+
+        if (unmeasured > 0)
+        {
+            rows.Add(HudRow.Line(
+                $"{unmeasured} with no region at all - found by proximity, so a point and no " +
+                "extent, which carries no moment"));
+        }
+
+        rows.Add(HudRow.Heading("ELEMENTS AND CONTACTS"));
+        rows.Add(HudRow.Swatched(_nodeColor, "element centre"));
+        if (isolated > 0)
+        {
+            rows.Add(HudRow.Swatched(_isolatedColor, "element touching nothing in scope"));
+        }
+
+        rows.Add(HudRow.Swatched(
+            _edgeColor, "contact: centre to where they touch, and on to the other centre"));
+
+        DrawPanel(e, rows);
+    }
+
+    /// <summary>
+    /// The bearing's own normal, at a fraction of its size.
+    /// </summary>
+    /// <remarks>
+    /// A bearing fitted to the wrong plane draws a spike pointing the wrong way, which is
+    /// visible at a glance where the numbers behind it are not.
+    /// </remarks>
+    private static void DrawNormal(DrawEventArgs e, Plane frame, double size, Color colour)
+    {
+        e.Display.DrawLine(frame.Origin, frame.Origin + frame.ZAxis * size * 0.4, colour, 1);
+    }
+
+    private static string DescriptionOf(Functions.StabilityRigidBodies.JointType type)
+    {
+        return type switch
+        {
+            Functions.StabilityRigidBodies.JointType.Contact =>
+                "pushes, never pulls; slides past friction",
+            Functions.StabilityRigidBodies.JointType.Pin =>
+                "force through one point, no moment",
+            _ => "force and moment, both ways, always"
+        };
+    }
+
+    /// <summary>
+    /// One line of the readout: a heading, a plain line, or a line with a colour swatch.
+    /// </summary>
+    private readonly struct HudRow
+    {
+        private HudRow(string text, Color colour, bool swatch, bool heading)
+        {
+            Text = text;
+            Colour = colour;
+            Swatch = swatch;
+            IsHeading = heading;
+        }
+
+        public string Text { get; }
+        public Color Colour { get; }
+        public bool Swatch { get; }
+        public bool IsHeading { get; }
+
+        public static HudRow Heading(string text) => new(text, HeadingColour, false, true);
+
+        public static HudRow Line(string text) => new(text, TextColour, false, false);
+
+        public static HudRow Swatched(Color colour, string text) => new(text, colour, true, false);
+    }
+
+    /// <summary>
+    /// Draws the readout on its own panel.
+    /// </summary>
+    /// <remarks>
+    /// The readout used to be white text drawn straight onto the viewport, which is
+    /// unreadable on Rhino's default white background - the whole legend was there and
+    /// invisible. No single text colour fixes that, because the viewport can be white, dark,
+    /// a gradient or a rendered environment, and the overlay cannot know which. So it brings
+    /// its own background: a dark translucent panel, light text on it, legible over anything
+    /// drawn behind.
+    ///
+    /// Width is estimated from the character count rather than measured, since the display
+    /// pipeline offers no text metrics. The estimate is generous, so a row overruns the panel
+    /// only if it is far longer than any written here.
+    /// </remarks>
+    private static void DrawPanel(DrawEventArgs e, List<HudRow> rows)
+    {
+        if (rows.Count == 0)
+        {
+            return;
+        }
+
+        const int textHeight = 13;
+        const int rowHeight = 20;
+        const int pad = 12;
+        const int swatchSize = 10;
+        const int swatchColumn = 20;
+        const int left = 16;
+        const int top = 16;
+
+        var longest = rows.Max(row => row.Text.Length);
+        var width = pad * 2 + swatchColumn + (int)(longest * textHeight * 0.56);
+        var height = pad * 2 + rows.Count * rowHeight;
+
+        e.Display.Draw2dRectangle(
+            new Rectangle(left, top, width, height), PanelEdgeColour, 1, PanelColour);
+
+        for (var i = 0; i < rows.Count; i++)
+        {
+            var row = rows[i];
+            var y = top + pad + i * rowHeight;
+
+            if (row.Swatch)
+            {
+                e.Display.Draw2dRectangle(
+                    new Rectangle(left + pad, y + (rowHeight - swatchSize) / 2, swatchSize, swatchSize),
+                    row.Colour,
+                    1,
+                    row.Colour);
+            }
+
+            // A swatch already carries the colour, so its text is drawn in the panel's own
+            // text colour: a dim joint type has to stay readable while still reading as dim,
+            // and that is what the swatch is for.
+            e.Display.Draw2dText(
+                row.Text,
+                row.IsHeading ? HeadingColour : TextColour,
+                new Point2d(left + pad + (row.Swatch ? swatchColumn : 0), y + rowHeight / 2.0),
                 false,
-                14);
+                textHeight);
         }
     }
 }
@@ -1768,16 +1867,6 @@ internal static class MCPConnectivityGraphController
     /// select, run the command, then deselect and keep looking at the same graph.
     /// </summary>
     public static GraphScope PinnedScope { get; set; }
-
-    /// <summary>
-    /// Draw the bearing region behind each contact, not just its centre point.
-    /// </summary>
-    /// <remarks>
-    /// Opt-in, and off by default: it is an instrument for checking that the reduction from
-    /// sampled points to a plane and a rectangle is right, before anything is built on top of
-    /// it. Toggled by the Extent option on mcpmodgraph.
-    /// </remarks>
-    public static bool ShowContactExtent { get; set; }
 
     /// <summary>Where the graph currently held in memory came from.</summary>
     public static GraphCacheSource LastSource => _cachedSource;

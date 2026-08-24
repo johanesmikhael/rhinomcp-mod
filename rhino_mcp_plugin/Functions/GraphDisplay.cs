@@ -20,9 +20,9 @@ public partial class RhinoMCPModFunctions
     /// resolved are the ones it meant.
     ///
     /// This is that command's state, set directly and returned, with no prompting: what is
-    /// visible, what it is scoped to, and whether the bearing regions are drawn. It is a
-    /// display switch and nothing more - it computes no graph of its own and changes no
-    /// geometry, so the picture it turns on is the same one the command turns on.
+    /// visible and what it is scoped to. It is a display switch and nothing more - it
+    /// computes no graph of its own and changes no geometry, so the picture it turns on is
+    /// the same one the command turns on.
     /// </remarks>
     public JObject GraphDisplay(JObject parameters)
     {
@@ -41,20 +41,6 @@ public partial class RhinoMCPModFunctions
                 MCPConnectivityGraphController.SetEnabled(parameters["enabled"].Value<bool>());
             }
 
-            if (parameters?["contact_extent"]?.Type == JTokenType.Boolean)
-            {
-                var wanted = parameters["contact_extent"].Value<bool>();
-                MCPConnectivityGraphController.ShowContactExtent = wanted;
-
-                // Drawing the bearing regions with the graph switched off shows nothing, so
-                // asking for them asks for it. Turning them off leaves the graph alone, which
-                // is what the command does and what the caller expects from a sub-switch.
-                if (wanted && !MCPConnectivityGraphController.IsEnabled)
-                {
-                    MCPConnectivityGraphController.SetEnabled(true);
-                }
-            }
-
             if (TryReadGraphScope(doc, parameters, out var scope))
             {
                 MCPConnectivityGraphController.PinnedScope = scope;
@@ -68,7 +54,6 @@ public partial class RhinoMCPModFunctions
             {
                 ["success"] = true,
                 ["enabled"] = MCPConnectivityGraphController.IsEnabled,
-                ["contact_extent"] = MCPConnectivityGraphController.ShowContactExtent,
                 ["scope"] = pinned == null || pinned.IsWholeDocument
                     ? "whole document"
                     : pinned.Key,

@@ -483,7 +483,6 @@ async def assign_joint_type(
 @mcp.tool()
 async def graph_display(
     enabled: bool | None = None,
-    contact_extent: bool | None = None,
     scope: str | None = None,
     ids: list[str] | None = None,
     layer: str | list[str] | None = None,
@@ -492,8 +491,8 @@ async def graph_display(
     """Show or hide the connectivity-graph overlay in Rhino's viewport.
 
     The overlay draws what the evaluator will actually see: which elements
-    touch, where they touch, the bearing region behind each contact, and
-    what joint type each one resolves to. It is the check that the model
+    touch, where they touch, the bearing surface each joint is built over,
+    and what joint type each one resolves to. It is the check that the model
     being solved is the model that was meant - a joint the graph never
     found cannot be assigned a type, and a bearing measured on the wrong
     plane restrains the wrong rotation.
@@ -508,9 +507,6 @@ async def graph_display(
 
     Args:
         enabled: Show or hide the overlay.
-        contact_extent: Draw the measured bearing region behind each
-            contact, and colour joints by type. Turning it on turns the
-            overlay on; turning it off leaves the overlay alone.
         scope: Pass "all" to graph the whole document. Large documents
             truncate, and the overlay says so when they do.
         ids: Graph only these objects.
@@ -520,15 +516,13 @@ async def graph_display(
     Omitting every scope argument leaves whatever scope is pinned alone,
     which is different from asking for the whole document.
 
-    Returns the resulting state: enabled, contact_extent and the scope.
+    Returns the resulting state: enabled and the scope.
     """
     from rhinomcp.server import get_rhino_connection
 
     params: dict[str, Any] = {}
     if enabled is not None:
         params["enabled"] = enabled
-    if contact_extent is not None:
-        params["contact_extent"] = contact_extent
     if scope is not None:
         params["scope"] = scope
     if ids:

@@ -38,3 +38,4 @@ dev_plan.md
 .mcp.json
 __pycache__/
 *.pyc
+*.rhl
