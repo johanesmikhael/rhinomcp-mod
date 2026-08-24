@@ -706,6 +706,10 @@ public partial class RhinoMCPModFunctions
                 continue;
             }
 
+            // Where the body's own middle is, which is what says whether two contacts are on
+            // the same face of it or on opposite ones.
+            var middle = box.Center;
+
             for (var i = 0; i < indices.Count; i++)
             {
                 for (var j = i + 1; j < indices.Count; j++)
@@ -719,7 +723,33 @@ public partial class RhinoMCPModFunctions
                         continue;
                     }
 
-                    if (links[indices[i]].Point.DistanceTo(links[indices[j]].Point) <= radius)
+                    var here = links[indices[i]].Point;
+                    var there = links[indices[j]].Point;
+
+                    // Two contacts with the body's own middle between them are on opposite
+                    // faces of it, and opposite faces are two joints however close together
+                    // they are.
+                    //
+                    // The radius above is the body's smallest dimension, chosen because
+                    // contact between two members spreads over the thickness of the thinner
+                    // one while two joints on the same member are a member length apart. That
+                    // separation of scales is a fact about slender members and not about
+                    // plates: a 200 mm spacer's smallest dimension IS the distance between its
+                    // two faces, so its top and bottom joints sat exactly one radius apart and
+                    // merged. The two storeys either side of it came back as three bodies
+                    // meeting at one point 100 mm from where either face is.
+                    //
+                    // Distance cannot separate those two cases, because in one of them the
+                    // right answer and the wrong answer are the same number. Which side of the
+                    // body each contact is on can.
+                    var axis = there - here;
+                    if (axis.Unitize() &&
+                        ((here - middle) * axis) * ((there - middle) * axis) < 0.0)
+                    {
+                        continue;
+                    }
+
+                    if (here.DistanceTo(there) <= radius)
                     {
                         Union(indices[i], indices[j]);
                     }

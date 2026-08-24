@@ -2278,28 +2278,30 @@ for _integrator in ("particles", "rigid_bodies"):
             f"two storeys in series, the lower also carrying the spacer: "
             f"{MICRO_TWO_STOREY_M * 1000.0:.3f} mm against the single storey's "
             f"{MICRO_ONE_STOREY_M * 1000.0:.3f}"),
-        # Committed failing on the rigid-body integrator, at 0.780 mm against 0.928, and the
-        # cause is worth more than the case.
+        # Was committed failing on the rigid-body integrator at 0.785 mm against 0.928, for
+        # about as long as the rigid path has existed. It reads 0.942 now, and the fix is the
+        # second of the two this comment used to name.
         #
-        # The spacer between the storeys is 200 mm thick, and the clustering radius is the
-        # body's own smallest dimension - so its top and bottom faces sit at exactly that
-        # radius and merge. The middle nodes come back as three bodies meeting at one point,
-        # 200 mm from where either face is, instead of two nodes with the spacer between
-        # them. Merging them is defensible: a 200 mm plate of 3.4e9 N/m contributes no
-        # compliance worth modelling.
+        # The spacer between the storeys is 200 mm thick, and the clustering radius was the
+        # body's own smallest dimension - so its top and bottom faces sat at exactly that
+        # radius and merged. The middle came back as three bodies meeting at one point 100 mm
+        # from where either face is, instead of two nodes with the spacer between them, and
+        # removing a joint from the load path removed a spring from the series and stiffened
+        # the whole stack.
         #
-        # What is not defensible is that it changes the answer, and only for one integrator.
-        # The particle path keeps a member's compliance in its body-to-frame springs, which do
-        # not care how many bodies share a node, and passes. The rigid path keeps all of it in
-        # the joint springs at 2k per end, so removing a joint from a load path removes a
-        # spring from the series and stiffens the whole stack by 16%. **A member's stiffness
-        # there depends on how many joints it happens to have**, which is a property of the
-        # mesh rather than of the member.
+        # No threshold could have separated those two cases, because for a plate the right
+        # answer and the wrong answer are the same number: its two faces are exactly its
+        # smallest dimension apart. The radius rule assumes slenderness - a truss member's
+        # ends are 2000 mm apart with a 150 mm section, which is decisive - and a plate has no
+        # such gap by construction. What separates them is not how far apart two contacts are
+        # but which side of the body each is on: with the body's own middle between them they
+        # are on opposite faces, and opposite faces are two joints however close together.
         #
-        # Two things to fix, in this order: the joint stiffness should be shared out along a
-        # member's load path rather than fixed at 2k per end, and the clustering radius should
-        # come from the contact patch rather than the body's smallest dimension, where opposite
-        # faces of any plate land exactly on the threshold and merge on a tie.
+        # The first fix that comment named is still open and still worth doing: joint
+        # stiffness is fixed at 2k per end rather than shared along a member's load path, so a
+        # member's stiffness depends on how many joints it happens to have, which is a
+        # property of the mesh rather than of the member. That no longer shows up here, but it
+        # has not gone away.
         build=micro_stack_build(2),
         expect=micro_expect(MICRO_TWO_STOREY_M),
         params=dict(MICRO_PARAMS, **MICRO_DAMPING[_integrator], integrator=_integrator),
