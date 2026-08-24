@@ -193,7 +193,7 @@ Keep only one server enabled at a time (`rhino` or `rhino-dev`) to avoid duplica
 An assembly is evaluated as separate rigid bodies resting on one another, joined where the
 geometry says they touch, under gravity. The question it answers is whether the thing stands
 up: whether it is a mechanism, whether an element rotates off its support, whether a stack
-topples. It is a first check on a configuration, not a structural analysis.
+topples. Use it as a first check on a configuration.
 
 Try it on the models in [`RhinoAndGHFiles/`](RhinoAndGHFiles/README.md), whose answers are
 known independently of the solver.
@@ -202,11 +202,11 @@ Requires Rhino 8 with Grasshopper/Kangaroo. The plugin loads Rhino's installed
 `KangarooSolver.dll` at runtime; developers can override its location with
 `KangarooSolverPath` and `RHINOMCP_KANGAROO_PATH`. The Yak package ships no private copy.
 
-### Joints have a type
+### Joint types
 
 Geometry cannot tell a screwed panel from a dry-stacked one - they look identical to an
-intersection test - so the connection is stated rather than guessed. Three types, and the
-type decides how the measured bearing is used:
+intersection test - so the connection is stated. Three types, and the type decides how the
+measured bearing is used:
 
 | type | carries | what it is |
 | --- | --- | --- |
@@ -214,14 +214,14 @@ type decides how the measured bearing is used:
 | `pin` | force in three directions, no moment | truss to truss, a single bolt |
 | `welded` | force and moment, both ways, always | a moment connection: beam to column, a rigid plate |
 
-The moment comes from the *spread* of the bearing, not from the type: a joint reduced to a
-point has no lever arm and resists no rotation, so `pin` collapses the bearing to its centre
-and the other two keep its extent.
+The moment comes from the *spread* of the bearing. A joint reduced to a point has no lever
+arm and resists no rotation, so `pin` collapses the bearing to its centre and the other two
+keep its extent.
 
-A joint nobody names is a `contact`. It is the only one of the three that describes two
-things merely found touching - `welded` is the strongest assumption available applied where
-the least is known, and `pin` hangs in tension and discards the bearing, which turns a stack
-into a mechanism hinged at points that exist nowhere in the drawing.
+A joint nobody names is a `contact`, the only one of the three that describes two things
+found touching. `welded` is the strongest assumption available applied where the least is
+known; `pin` hangs in tension and discards the bearing, so a stack becomes a mechanism hinged
+at points that exist nowhere in the drawing.
 
 State the rules by element class, not joint by joint:
 
@@ -232,17 +232,17 @@ assign_joint_type(joint_type="welded", layer="Beams", with_layer="Columns", capa
 ```
 
 A pair rule beats an element rule beats the default, and where two elements disagree the
-weaker governs - a hinge assumed where a moment connection exists reports the structure
-softer than it is, which fails safe. The result reports each joint's resolved type and the
-rule that decided it, so a verdict that changed because a rule matched more than intended can
-be diagnosed without re-deriving the rules by hand.
+weaker governs: a hinge assumed where a moment connection exists reports the structure softer
+than it is, which fails safe. The result carries each joint's resolved type and the rule that
+decided it, so a verdict that changed because a rule matched too much can be diagnosed
+without re-deriving the rules by hand.
 
-`capacity_kn` is optional and limits **tension**, per bearing point, which is what gives a
-joint a moment capacity as well as an axial one. It yields rather than breaking. Read
+`capacity_kn` is optional and limits **tension**, per bearing point, which gives a joint a
+moment capacity as well as an axial one. It yields; it does not break. Read
 `peak_point_tension_n` and never the net: a cantilever's connection can sit in net
 compression at -7.1 kN while one of its bearing points is pulled at 24.5.
 
-### Bearings are measured, not assumed
+### Bearings
 
 A joint is built over the polygon two flat faces actually share, on the mean plane between
 them. One rule covers all three states two solids can be drawn in - nearly touching,
@@ -254,15 +254,15 @@ touching, and overlapping:
 | crossing, no overlap | the line they cross along - a hinge about itself |
 | crossing and overlapping | the surface inside the shared volume, **off by default** |
 
-The last is gated behind `bearing_source="buried"` because its area grows with how far the
-drawing goes through itself, which would hand a joint capacity in proportion to a modelling
-artefact. Left off, such a contact falls back to a point, which carries no moment. Curved
-faces have no flat region to intersect and are sampled instead.
+The last is gated behind `bearing_source="buried"`: its area grows with how far the drawing
+goes through itself, so it would give a joint capacity in proportion to a modelling artefact.
+Left off, such a contact falls back to a point and carries no moment. Curved faces have no
+flat region to intersect and are sampled instead.
 
-Run `mcpmodgraph` to see all of this drawn on the model: what the evaluator found, where it
-found it, and what each joint resolved to. A joint the graph never found cannot be given a
-type, and a bearing measured on the wrong plane restrains the wrong rotation - both are
-visible there and neither is visible in a number.
+Run `mcpmodgraph` to see this drawn on the model: what the evaluator found, where it found
+it, and what each joint resolved to. A joint the graph never found cannot be given a type,
+and a bearing measured on the wrong plane restrains the wrong rotation. Both show up there;
+neither shows up in a number.
 
 ### The workflow
 
@@ -274,12 +274,12 @@ rebuild it automatically, and it is stored in the document under
 `mcpmodassignmissingmass` only for those without one, and `mcpmodassignlayerdensity` +
 `mcpmodmassfromlayerdensity` derive mass from each object's own volume. Over MCP, `assign_mass`
 does it without prompting - scoped by `ids`, `names`, `layer` or `selected` - taking either a
-`density` in kg/m³ or one `mass` in kg. Objects with no computable volume are reported under
-`skipped` rather than guessed at.
+`density` in kg/m³ or one `mass` in kg. Objects with no computable volume are listed under
+`skipped`.
 
 Metric documents take `kg` and `kg/m³`, imperial take pound-mass (`lbm`, never pound-force)
 and `lbm/ft³`. Mass is converted and stored as tagged canonical `kg`. Documents with `None`,
-`Unset` or custom units are rejected rather than normalised unreliably.
+`Unset` or custom units cannot be normalised reliably and are rejected.
 
 **3. Evaluate.** `mcpmodevaluatestability`, or:
 
@@ -289,8 +289,8 @@ evaluate_stability(mode="pinned")
 
 Geometry, tolerances and mass are normalised internally to metres and kilograms; gravity
 defaults to 9.80665 m/s². Returned lengths are in the document's units. Invalid graph nodes,
-missing or non-positive mass, and non-finite values fail explicitly rather than being
-reported as instability.
+missing or non-positive mass, and non-finite values fail explicitly instead of being reported
+as instability.
 
 `mode="welded"` remains as a cheap independent upper bound: it treats the whole scope as one
 rigid body and asks only whether it tips. It supplies every moment connection the real
@@ -300,33 +300,33 @@ assembly lacks, so it passes structures a dry stack would not hold.
 over the original geometry, which it does not modify. `mcpmodclearcache` - or
 `-mcpmodclearcache` from a script - clears it along with the stored graph.
 
-### What it reports
+### Reported values
 
-Beyond the verdict: each joint's type and the rule that resolved it, the force across it, its
-sense, its shear, the peak tension at any single bearing point, whether it reached its
-capacity, and which elements it joins. `joints_at_capacity` says whether anything yielded.
+Besides the verdict: each joint's type and the rule that resolved it, the force across it,
+its sense, its shear, the peak tension at any single bearing point, whether it reached its
+capacity, and which elements it joins. `joints_at_capacity` counts what yielded.
 
 ### Limitations
 
-Measured against hand-computed statics, not estimated:
+Measured against hand-computed statics:
 
 - **Self-weight only.** No lateral load, no strength or crushing limit, so a design can pass
   on stability while its bearing stress is absurd.
-- **A verdict depends on a budget.** Relaxation converges toward equilibrium rather than
-  falling, so a mechanism creeps instead of collapsing. `inconclusive` is not `unstable`.
+- **A verdict depends on a budget.** Relaxation converges toward equilibrium instead of
+  falling, so a mechanism creeps where it should collapse. `inconclusive` is not `unstable`.
 - **Contact absorbs marginal eccentricity.** A joint whose resultant falls well outside its
   bearing topples correctly; one only marginally outside settles into a tilted equilibrium and
   reads as stable. On three-block stairs, 112 mm past the bearing edge topples and 75 mm does
   not.
 - **A body that leaves its support falls through the ground.** Ground bearing is built only
-  for points that start at floor level. The verdict is unaffected; the trajectory afterwards
-  is meaningless.
-- **Joint stiffness is per end,** not shared along a member's load path.
+  for points that start at floor level. The verdict holds; the trajectory afterwards is
+  meaningless.
+- **Joint stiffness is per end,** and is not shared along a member's load path.
 - **Overlapping bodies double-count mass** when mass comes from `assign_mass(density=...)`,
   since each element's own volume includes the overlap - about 4% for a centreline truss, and
   it largely cancels.
 
-None of this turns the result into a certified structural analysis.
+None of this makes the result a certified structural analysis.
 
 ## Credits
 
