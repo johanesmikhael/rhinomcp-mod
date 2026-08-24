@@ -12,7 +12,18 @@ namespace RhinoMCPModPlugin;
 
 internal sealed class MCPStabilityConduit : DisplayConduit
 {
-    private readonly DisplayMaterial _meshMaterial = new(Color.FromArgb(90, 120, 255, 120), 0.65);
+    /// <summary>
+    /// Where the bodies ended up, in a colour that classifies nothing.
+    /// </summary>
+    /// <remarks>
+    /// This was the same green the graph overlay uses for a contact joint, drawn as a
+    /// translucent shell over the very bearings it collided with - two different statements in
+    /// one colour, on top of each other. The settled shape is not a kind of joint and has no
+    /// place in that vocabulary, so it is grey: visible against a white viewport and a dark
+    /// one, and impossible to mistake for contact green, pin blue or welded amber.
+    /// </remarks>
+    private readonly DisplayMaterial _meshMaterial =
+        new(Color.FromArgb(110, 125, 130, 140), 0.55);
     private const int MaxObjects = 240;
 
     protected override void DrawForeground(DrawEventArgs e)

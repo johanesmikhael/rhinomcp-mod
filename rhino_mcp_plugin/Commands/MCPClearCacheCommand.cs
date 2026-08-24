@@ -13,6 +13,16 @@ namespace RhinoMCPModPlugin.Commands
         private const string PoseModeStorageKey = "rhinomcp.pose.mode.v1";
         private const string ObbStorageKey = "rhinomcp.obb.v1";
 
+        /// <summary>
+        /// The settled shape the stability preview draws from.
+        /// </summary>
+        /// <remarks>
+        /// Cleared here because it is a cache like the others and lives in the same place, on
+        /// the objects. Leaving it out meant the command reported the cache cleared while the
+        /// preview carried on drawing the result of an evaluation that no longer existed.
+        /// </remarks>
+        private const string AfterEvaluationKey = Functions.RhinoMCPModFunctions.AfterEvaluationKey;
+
         public MCPClearCacheCommand()
         {
             Instance = this;
@@ -24,6 +34,20 @@ namespace RhinoMCPModPlugin.Commands
 
         protected override Result RunCommand(RhinoDoc doc, RunMode mode)
         {
+            // Run from a script the command must not ask anything: a prompt has nobody to
+            // answer it, so the handler never returns and the commands sent afterwards are
+            // swallowed by the prompt still waiting - the caller is told the clear succeeded,
+            // nothing is cleared, and the next few commands vanish into the same prompt.
+            //
+            // Over MCP this needs the dash form, "-mcpmodclearcache": RhinoApp.RunScript runs
+            // a command interactively unless the name is dashed, so the undashed name prompts
+            // even though nobody is there. Clearing everything is the only sensible scripted
+            // reading anyway - "which objects" is a question, and there is no one to ask.
+            if (mode == RunMode.Scripted)
+            {
+                return Clear(doc, selectedOnly: false);
+            }
+
             var getOption = new GetOption();
             getOption.SetCommandPrompt("Clear RhinoMCP cached user strings");
 
@@ -52,6 +76,11 @@ namespace RhinoMCPModPlugin.Commands
                 }
             }
 
+            return Clear(doc, selectedOnly);
+        }
+
+        private static Result Clear(RhinoDoc doc, bool selectedOnly)
+        {
             IEnumerable<RhinoObject> targets = selectedOnly
                 ? doc.Objects.GetSelectedObjects(false, false)
                 : doc.Objects.GetObjectList(new ObjectEnumeratorSettings
@@ -79,7 +108,8 @@ namespace RhinoMCPModPlugin.Commands
                 bool hadPose = !string.IsNullOrWhiteSpace(obj.Attributes.GetUserString(PoseStorageKey));
                 bool hadPoseMode = !string.IsNullOrWhiteSpace(obj.Attributes.GetUserString(PoseModeStorageKey));
                 bool hadObb = !string.IsNullOrWhiteSpace(obj.Attributes.GetUserString(ObbStorageKey));
-                if (!hadPose && !hadPoseMode && !hadObb)
+                bool hadEva = !string.IsNullOrWhiteSpace(obj.Attributes.GetUserString(AfterEvaluationKey));
+                if (!hadPose && !hadPoseMode && !hadObb && !hadEva)
                 {
                     continue;
                 }
@@ -87,6 +117,7 @@ namespace RhinoMCPModPlugin.Commands
                 obj.Attributes.DeleteUserString(PoseStorageKey);
                 obj.Attributes.DeleteUserString(PoseModeStorageKey);
                 obj.Attributes.DeleteUserString(ObbStorageKey);
+                obj.Attributes.DeleteUserString(AfterEvaluationKey);
                 obj.CommitChanges();
 
                 // CommitChanges returns false for a successful attribute write whenever
@@ -96,7 +127,8 @@ namespace RhinoMCPModPlugin.Commands
                 var stillCached = after == null ||
                     !string.IsNullOrWhiteSpace(after.GetUserString(PoseStorageKey)) ||
                     !string.IsNullOrWhiteSpace(after.GetUserString(PoseModeStorageKey)) ||
-                    !string.IsNullOrWhiteSpace(after.GetUserString(ObbStorageKey));
+                    !string.IsNullOrWhiteSpace(after.GetUserString(ObbStorageKey)) ||
+                    !string.IsNullOrWhiteSpace(after.GetUserString(AfterEvaluationKey));
                 if (stillCached)
                 {
                     failed++;
