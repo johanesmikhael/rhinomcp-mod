@@ -33,19 +33,6 @@ internal sealed class MCPConnectivityGraphConduit : DisplayConduit
     // background does not exist - white text vanished into the default viewport and black
     // would vanish into a dark one - so the readout brings its own background and stops
     // depending on the viewport's. Which way round it is opaque is then only taste.
-    /// <summary>
-    /// An overlap measured but not solved on, drawn as an outline and nothing more.
-    /// </summary>
-    /// <remarks>
-    /// Deliberately not a joint-type colour: it is not a joint the solver will build. Buried
-    /// bearings are gated behind <c>bearing_source="buried"</c> because their area grows with
-    /// how far the drawing goes through itself, so by default the solver rejects them and
-    /// falls back to the sampled region. A grey outline says the overlap was seen and is not
-    /// being used, which is a different statement from either drawing it as a bearing or
-    /// leaving it out.
-    /// </remarks>
-    private static readonly Color BuriedColour = Color.FromArgb(190, 130, 130, 140);
-
     private static readonly Color PanelColour = Color.FromArgb(235, 255, 255, 255);
     private static readonly Color TextColour = Color.FromArgb(255, 30, 33, 38);
     private static readonly Color HeadingColour = Color.FromArgb(255, 105, 112, 125);
@@ -177,17 +164,12 @@ internal sealed class MCPConnectivityGraphConduit : DisplayConduit
                 // exact one since; there is no longer a comparison to draw, only a bearing.
                 var fill = byRule ? Color.FromArgb(70, typeColour) : Dimmed(typeColour, 35);
 
-                // A buried bearing is measured but not solved on unless it is asked for by
-                // name, so it is drawn as what it is - a detected overlap - and the region
-                // the solver will actually fall back to is drawn as the bearing. Drawing it
-                // as a bearing would repeat the defect this overlay exists to catch: the
-                // picture saying one thing while the solver does another.
+                // A buried bearing is not solved on unless it is asked for by name, so it is
+                // not drawn either: the overlay draws the joints the solver will build. It
+                // was drawn once, as a grey outline, and that was two pictures of the same
+                // contact - the rejected surface and the point it actually falls back to -
+                // for a count the readout already carries.
                 var buriedOnly = edge.Exact.IsValid && edge.Exact.IsBuried;
-                if (buriedOnly)
-                {
-                    e.Display.DrawPolygon(edge.Exact.Corners(), BuriedColour, false);
-                }
-
                 if (edge.Exact.IsValid && !buriedOnly)
                 {
                     // A line contact has no width and so no polygon to fill. Drawn thick, as
@@ -303,13 +285,6 @@ internal sealed class MCPConnectivityGraphConduit : DisplayConduit
             rows.Add(HudRow.Line($"{lines} lines"));
         }
 
-        if (socketed > 0)
-        {
-            rows.Add(HudRow.Swatched(
-                BuriedColour,
-                $"{socketed} overlaps, not solved on"));
-        }
-
         if (sampledOnly > 0)
         {
             rows.Add(HudRow.Line($"{sampledOnly} sampled"));
@@ -317,7 +292,9 @@ internal sealed class MCPConnectivityGraphConduit : DisplayConduit
 
         if (unmeasured > 0)
         {
-            rows.Add(HudRow.Line($"{unmeasured} without a region, so no moment"));
+            rows.Add(HudRow.Line(
+                $"{unmeasured} without a region, so no moment" +
+                (socketed > 0 ? $"  ({socketed} overlap)" : string.Empty)));
         }
 
         rows.Add(HudRow.Heading("GRAPH"));
