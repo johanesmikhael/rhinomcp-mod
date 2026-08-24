@@ -90,7 +90,21 @@ public partial class RhinoMCPModFunctions
                     ["pairs"] = edge.Exact.Pairs,
                     ["pieces"] = edge.Exact.Pieces,
                     ["regions_a"] = edge.Exact.RegionsA,
-                    ["regions_b"] = edge.Exact.RegionsB
+                    ["regions_b"] = edge.Exact.RegionsB,
+                    // A line is a real contact with a real length, not a rectangle that came
+                    // out thin. Naming it says the joint carries no moment about that line
+                    // because it physically cannot, rather than because a fit collapsed.
+                    ["kind"] = edge.Exact.IsLine
+                        ? "line"
+                        : edge.Exact.IsBuried ? "buried" : "planar",
+                    // Kept beside a buried area: the line those faces would touch along if the
+                    // overlap were removed, which is the weaker reading of the same joint.
+                    ["line_length"] = Math.Round(edge.Exact.LineLength, 3),
+                    ["skew_deg"] = Math.Round(edge.Exact.SkewDegrees, 2),
+                    // What the other candidate rule would have given. The normal here comes
+                    // from the face being pressed into; the bisector of the two face normals
+                    // is the alternative, and this is the angle between them.
+                    ["bisector_deg"] = Math.Round(edge.Exact.BisectorDegrees, 2)
                 });
             }
 

@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using Rhino;
 using Rhino.Geometry;
+using Rhino.Geometry.Intersect;
 
 namespace RhinoMCPModPlugin;
 
@@ -60,6 +61,42 @@ internal struct PlanarBearingResult
 
     public int RegionsA;
     public int RegionsB;
+
+    /// <summary>
+    /// True when the two faces cross rather than bear, so what they share is a line.
+    /// </summary>
+    /// <remarks>
+    /// A line is a real contact and a real answer, not a degenerate rectangle. It carries
+    /// force and no moment about itself, which is what a slab resting on a wall's top edge
+    /// does: it rocks. <see cref="HalfV"/> is zero for exactly that reason.
+    /// </remarks>
+    public bool IsLine;
+
+    /// <summary>
+    /// True when the reported area is the two bodies' shared surface inside the volume they
+    /// overlap, rather than a bearing between faces that meet.
+    /// </summary>
+    /// <remarks>
+    /// This is an assumption, and a different one from the line: it reads a deliberate overlap
+    /// as a socket, so a member driven into another is treated as bearing over the region
+    /// buried rather than rocking on the edge it would touch if lifted out. It reports more
+    /// capacity than a line, so <see cref="PenetrationDepth"/> is the number to read beside it -
+    /// the area exists only in proportion to how far the drawing goes through itself.
+    /// </remarks>
+    public bool IsBuried;
+
+    /// <summary>Length of the line the two faces cross along, kept when an area is reported
+    /// for the buried region instead, so the weaker reading is never simply lost.</summary>
+    public double LineLength;
+
+    /// <summary>How far from parallel the two faces are, in degrees. Zero for a flat bearing;
+    /// reported for a line so the reading can be judged rather than taken.</summary>
+    public double SkewDegrees;
+
+    /// <summary>Angle between the normal reported and the bisector of the two face normals.
+    /// The bisector is the other candidate rule for a line contact and this is what choosing
+    /// between them is worth - measured rather than argued.</summary>
+    public double BisectorDegrees;
 
     public double RectangleArea => 4.0 * HalfU * HalfV;
 
@@ -483,6 +520,10 @@ internal static class PlanarBearing
         IReadOnlyList<PlanarRegion> b,
         BoundingBox boxA,
         BoundingBox boxB,
+        GeometryBase solidA,
+        Mesh proxyA,
+        GeometryBase solidB,
+        Mesh proxyB,
         double gap,
         double tolerance,
         out PlanarBearingResult result)
@@ -566,7 +607,405 @@ internal static class PlanarBearing
             }
         }
 
+        if (!result.IsValid)
+        {
+            TryLineBearing(a, b, solidA, proxyA, solidB, proxyB, gap, tolerance, ref result);
+        }
+
         return result.IsValid;
+    }
+
+    /// <summary>
+    /// The line two crossing faces share, when no pair of them is parallel enough to bear.
+    /// </summary>
+    /// <remarks>
+    /// Two flat faces meeting at an angle share a line, and that is not a failure to find an
+    /// area - it is the geometry. A slab tilted on a wall bears on the wall's top edge; the
+    /// area a deep overlap appears to offer exists only because the model was drawn through
+    /// itself, and pulling the two apart along the direction they settle leaves the edge
+    /// touching last.
+    ///
+    /// The normal is taken from the face the line runs <em>inside</em> - the surface being
+    /// pressed into - and not from the bisector of the two normals. The bisector was tried on
+    /// this project by fitting a plane to sampled points: on bridge diagonals landing on flat
+    /// pads it reported 45 degrees, a direction neither surface points in, and a one-sided
+    /// contact built on it pushed the truss 112 mm off supports with a 61 mm limit. Bisecting
+    /// is right only when the line lies on the boundary of both faces, which is edge against
+    /// edge, where neither body offers a surface to be pressed into.
+    /// </remarks>
+    private static void TryLineBearing(
+        IReadOnlyList<PlanarRegion> a,
+        IReadOnlyList<PlanarRegion> b,
+        GeometryBase solidA,
+        Mesh proxyA,
+        GeometryBase solidB,
+        Mesh proxyB,
+        double gap,
+        double tolerance,
+        ref PlanarBearingResult result)
+    {
+        // The governing pair is the one closest to parallel, and only then the longest. A
+        // wall's side face and a tilted slab's underside cross at 65 degrees over the wall's
+        // full width, which is a corner being cut rather than a joint bearing; the wall's top
+        // face crosses the same slab at 25 over the same width and is the contact. Ranking by
+        // length alone picked the corner.
+        var bestSkew = double.MaxValue;
+        var bestLength = 0.0;
+        foreach (var ra in a)
+        {
+            foreach (var rb in b)
+            {
+                var nA = ra.Plane.ZAxis;
+                var nB = rb.Plane.ZAxis;
+
+                // Anything the parallel pass would have taken is not a crossing.
+                var alignment = Math.Abs(nA * nB);
+                if (alignment > ParallelCosine)
+                {
+                    continue;
+                }
+
+                var skew = RhinoMath.ToDegrees(Math.Acos(Math.Min(1.0, alignment)));
+                if (skew > bestSkew + RhinoMath.ZeroTolerance)
+                {
+                    continue;
+                }
+
+                var near = ra.Box;
+                near.Inflate(gap + tolerance);
+                if (!BoundingBox.Intersection(near, rb.Box).IsValid)
+                {
+                    continue;
+                }
+
+                if (!Intersection.PlanePlane(ra.Plane, rb.Plane, out var axis))
+                {
+                    continue;
+                }
+
+                result.Pairs++;
+
+                var direction = axis.Direction;
+                if (!direction.Unitize())
+                {
+                    continue;
+                }
+
+                if (!TryClip(axis.From, direction, ra, tolerance, out var fromA, out var toA) ||
+                    !TryClip(axis.From, direction, rb, tolerance, out var fromB, out var toB))
+                {
+                    continue;
+                }
+
+                var from = Math.Max(fromA, fromB);
+                var to = Math.Min(toA, toB);
+                var length = to - from;
+                if (!(length > tolerance))
+                {
+                    continue;
+                }
+
+                var closer = skew < bestSkew - RhinoMath.ZeroTolerance;
+                if (!closer && !(length > bestLength))
+                {
+                    continue;
+                }
+
+                var start = axis.From + direction * from;
+                var end = axis.From + direction * to;
+                var middle = (start + end) * 0.5;
+
+                var normal = PressedInto(ra, rb, middle, tolerance);
+                var frame = new Plane(middle, direction, Vector3d.CrossProduct(normal, direction));
+                if (!frame.IsValid)
+                {
+                    continue;
+                }
+
+                var bisector = nA * nB < 0.0 ? nA - nB : nA + nB;
+                bisector.Unitize();
+
+                bestSkew = skew;
+                bestLength = length;
+                result.IsValid = true;
+                result.IsLine = true;
+                result.Frame = frame;
+                result.HalfU = length * 0.5;
+                result.HalfV = 0.0;
+                result.LineLength = length;
+                result.PolygonArea = 0.0;
+                var burial = Math.Max(Burial(ra, rb, tolerance), Burial(rb, ra, tolerance));
+                result.Offset = -burial;
+                result.Pieces = 1;
+                result.SkewDegrees = skew;
+                result.IsBuried = false;
+
+                // Where the two are drawn through one another there is a real surface inside
+                // the volume they share, and it is what an engineer means by the joint when
+                // the overlap is deliberate. Reported in place of the line, with the line's
+                // length and the burial kept beside it so the weaker reading stays visible.
+                if (burial > tolerance &&
+                    TryBuriedFace(ra, rb, solidA, proxyA, solidB, proxyB, tolerance, ref result))
+                {
+                    result.IsLine = false;
+                    result.IsBuried = true;
+                }
+
+                result.BisectorDegrees = RhinoMath.ToDegrees(Math.Acos(
+                    Math.Min(1.0, Math.Abs(frame.ZAxis * bisector))));
+            }
+        }
+    }
+
+    /// <summary>
+    /// The stretch of the line lying within a region's outline, as distances along the line
+    /// from <paramref name="origin"/>. Taken from the outermost crossings, so a face with a
+    /// notch in it is measured across the notch rather than in pieces.
+    /// </summary>
+    /// <remarks>
+    /// Measured from the intersection points rather than from curve parameters. A LineCurve's
+    /// domain is not the length its parameters were assumed to be, and reading them as such
+    /// gave a slab-on-wall contact 154 metres long.
+    /// </remarks>
+    /// <summary>
+    /// The part of one body's face that lies inside the other body: the contact surface within
+    /// the volume they share.
+    /// </summary>
+    /// <remarks>
+    /// Each face is cut by the other solid - section the solid with the face's plane, and keep
+    /// the part of the face inside that section. Both bodies offer one, and the smaller is
+    /// taken: a socket transmits load through whichever of the two surfaces is smaller, and
+    /// taking the larger would credit the joint with area the other side cannot match.
+    /// </remarks>
+    private static bool TryBuriedFace(
+        in PlanarRegion ra, in PlanarRegion rb,
+        GeometryBase solidA, Mesh proxyA, GeometryBase solidB, Mesh proxyB,
+        double tolerance, ref PlanarBearingResult result)
+    {
+        var onA = TryFaceInsideSolid(ra, solidB, proxyB, tolerance);
+        var onB = TryFaceInsideSolid(rb, solidA, proxyA, tolerance);
+
+        // The smaller of the two, and nothing at all if neither side produced one.
+        var chosen = onA;
+        var plane = ra.Plane;
+        if (onA == null || (onB != null && onB.Area < onA.Area))
+        {
+            chosen = onB;
+            plane = rb.Plane;
+        }
+
+        if (chosen == null || !(chosen.Area > 0.0))
+        {
+            return false;
+        }
+
+        var polygon = Discretise(chosen.Outline, tolerance);
+        if (polygon.Count < MinPolygonPoints)
+        {
+            return false;
+        }
+
+        var seat = new Plane(chosen.Centre, plane.ZAxis);
+        if (!seat.IsValid || !TryRectangle(polygon, seat, out var frame, out var halfU, out var halfV))
+        {
+            return false;
+        }
+
+        result.Frame = frame;
+        result.HalfU = halfU;
+        result.HalfV = halfV;
+        result.PolygonArea = chosen.Area;
+        return true;
+    }
+
+    private sealed class BuriedFace
+    {
+        public Curve Outline;
+        public double Area;
+        public Point3d Centre;
+    }
+
+    /// <summary>The part of a region that lies within another solid, as a closed curve on the
+    /// region's own plane.</summary>
+    private static BuriedFace TryFaceInsideSolid(
+        in PlanarRegion region, GeometryBase solid, Mesh proxy, double tolerance)
+    {
+        var sections = SectionCurves(solid, proxy, region.Plane, tolerance);
+        if (sections.Count == 0)
+        {
+            return null;
+        }
+
+        BuriedFace best = null;
+        foreach (var section in sections)
+        {
+            var shared = Curve.CreateBooleanIntersection(region.Outline, section, tolerance);
+            if (shared == null)
+            {
+                continue;
+            }
+
+            foreach (var piece in shared.Where(p => p != null && p.IsClosed))
+            {
+                var properties = AreaMassProperties.Compute(piece, tolerance);
+                var area = Math.Abs(properties?.Area ?? 0.0);
+                if (!(area > 0.0) || (best != null && area <= best.Area))
+                {
+                    continue;
+                }
+
+                best = new BuriedFace
+                {
+                    Outline = piece,
+                    Area = area,
+                    Centre = properties.Centroid
+                };
+            }
+        }
+
+        return best;
+    }
+
+    /// <summary>Where a solid crosses a plane, as closed curves on that plane.</summary>
+    private static List<Curve> SectionCurves(
+        GeometryBase solid, Mesh proxy, Plane plane, double tolerance)
+    {
+        var curves = new List<Curve>();
+        if (TryGetBrep(solid, out var brep) &&
+            Intersection.BrepPlane(brep, plane, tolerance, out var brepCurves, out _) &&
+            brepCurves != null)
+        {
+            curves.AddRange(brepCurves.Where(c => c != null && c.IsClosed));
+        }
+
+        if (curves.Count == 0 && proxy != null)
+        {
+            var polylines = Intersection.MeshPlane(proxy, plane);
+            if (polylines != null)
+            {
+                curves.AddRange(polylines
+                    .Where(p => p != null && p.Count > 2)
+                    .Select(p => (Curve)new PolylineCurve(p))
+                    .Where(c => c.IsClosed));
+            }
+        }
+
+        return curves;
+    }
+
+    /// <summary>
+    /// How far one face reaches past the other, where they cross.
+    /// </summary>
+    /// <remarks>
+    /// A line contact says the same thing whether the two bodies touch along an edge or one
+    /// has been drawn straight through the other, and those are not the same model. This is
+    /// the difference: zero for a column leaning on its own base edge, and the burial depth
+    /// for the same column rotated about its base centre, which drives it 141 mm into the pad
+    /// and produces an apparent bearing area that exists only because of the overlap.
+    ///
+    /// Only corners that actually lie over the other face are counted. A pad's far corner sits
+    /// deep inside the half-space under a leaning column's base plane while being nowhere near
+    /// the column, and measuring that would report a burial of metres.
+    /// </remarks>
+    private static double Burial(in PlanarRegion of, in PlanarRegion into, double tolerance)
+    {
+        var deepest = 0.0;
+        var plane = into.Plane;
+        foreach (var point in Discretise(of.Outline, tolerance))
+        {
+            var depth = (point - plane.Origin) * plane.ZAxis;
+            if (depth >= 0.0)
+            {
+                continue;
+            }
+
+            plane.ClosestParameter(point, out var u, out var v);
+            if (into.Outline.Contains(plane.PointAt(u, v), plane, tolerance) !=
+                PointContainment.Inside)
+            {
+                continue;
+            }
+
+            deepest = Math.Min(deepest, depth);
+        }
+
+        return -deepest;
+    }
+
+    private static bool TryClip(
+        Point3d origin, Vector3d direction, in PlanarRegion region, double tolerance,
+        out double from, out double to)
+    {
+        from = 0.0;
+        to = 0.0;
+
+        // The line as returned spans one unit of its own direction, which is nowhere near the
+        // size of a building. Stretch it well past the region before asking where it crosses.
+        var reach = region.Box.Diagonal.Length + 1.0;
+        var stretched = new LineCurve(origin - direction * reach, origin + direction * reach);
+
+        var events = Intersection.CurveCurve(
+            region.Outline, stretched, tolerance, tolerance);
+        if (events == null || events.Count == 0)
+        {
+            return false;
+        }
+
+        var low = double.MaxValue;
+        var high = double.MinValue;
+        foreach (var crossing in events)
+        {
+            // Both ends of every event, not only the first. Where the contact line runs along
+            // an edge of the face - a column resting on its own base edge, which is what
+            // landing at an angle looks like when nothing is drawn through anything - the
+            // intersection is a single overlap event rather than two crossings, and reading
+            // one point from it found no length and reported no contact at all.
+            foreach (var point in new[] { crossing.PointB, crossing.PointB2 })
+            {
+                var along = (point - origin) * direction;
+                low = Math.Min(low, along);
+                high = Math.Max(high, along);
+            }
+        }
+
+        from = low;
+        to = high;
+        return high > low;
+    }
+
+    /// <summary>
+    /// The normal of whichever face the contact line runs inside, which is the face being
+    /// pressed into. Falls back to the bisector when the line lies on the boundary of both,
+    /// which is edge against edge.
+    /// </summary>
+    private static Vector3d PressedInto(
+        in PlanarRegion ra, in PlanarRegion rb, Point3d middle, double tolerance)
+    {
+        var insideA = ra.Outline.Contains(middle, ra.Plane, tolerance) ==
+            PointContainment.Inside;
+        var insideB = rb.Outline.Contains(middle, rb.Plane, tolerance) ==
+            PointContainment.Inside;
+
+        if (insideA && !insideB)
+        {
+            return ra.Plane.ZAxis;
+        }
+
+        if (insideB && !insideA)
+        {
+            return rb.Plane.ZAxis;
+        }
+
+        if (insideA)
+        {
+            // Both: the larger face is the one that can be pressed into over the whole line.
+            return ra.Area >= rb.Area ? ra.Plane.ZAxis : rb.Plane.ZAxis;
+        }
+
+        var bisector = ra.Plane.ZAxis * rb.Plane.ZAxis < 0.0
+            ? ra.Plane.ZAxis - rb.Plane.ZAxis
+            : ra.Plane.ZAxis + rb.Plane.ZAxis;
+        return bisector.Unitize() ? bisector : ra.Plane.ZAxis;
     }
 
     /// <summary>

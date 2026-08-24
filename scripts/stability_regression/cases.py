@@ -1245,9 +1245,10 @@ def check_extent(send: Callable[[str, dict], Any], ids: list[str]) -> list[str]:
 # A slab tilted on a wall top, at angles either side of the 20-degree window inside which two
 # faces count as parallel enough to bear on one another.
 #
-# The window is the claim being tested, so the case has to fail on both sides of it: measured
-# up to 19 degrees, refused at 21 and 25. Two faces crossing at a steep angle share a line
-# rather than an area, and reporting a bearing there would be inventing one.
+# The window is the claim being tested, so the case has to fail on both sides of it: an area
+# up to 19 degrees, a line at 21 and 25. Two faces crossing at a steep angle share a line
+# rather than an area, and reporting a rectangle there would be inventing one - but refusing
+# to report anything would throw away a contact that is real and has a measurable length.
 #
 # It exists because a slab tilted 10 degrees - well inside the window - was being refused, and
 # not by the parallel test. Each region's plane carried its origin at a corner, so the offset
@@ -1255,6 +1256,108 @@ def check_extent(send: Callable[[str, dict], Any], ids: list[str]) -> list[str]:
 # deep. Origins are at region centroids now. Nothing about the angles below would have caught
 # that; the widths are what catch it, because a corner-origin measurement that happens to pass
 # still lands the bearing in the wrong place.
+# A column landing at 45 degrees on a pad, drawn twice: leaning on its own base edge, and the
+# same rotation taken about the base centre, which drives it through the pad's top face.
+#
+# The pair is the point. Both are the same joint at the same angle, and they differ only in
+# whether the drawing goes through itself - so they are what separates a contact from a
+# modelling error, and the report has to separate them too. The first touches along a 400 mm
+# line and shares no volume. The second buries half its base, and what it shares is a surface:
+# exactly half of a 400 x 400 base, because rotating about the centre sinks half of it.
+#
+# The buried reading is an assumption and the weaker one is kept beside it. A socket carries
+# load over the region buried; an edge landing on a pad rocks on the edge. Which is meant is
+# not in the geometry, so both numbers are reported and the penetration depth says which
+# drawing produced them.
+SKEW_COLUMN = 400.0
+SKEW_COLUMN_HEIGHT = 1000.0
+SKEW_ANGLE_DEG = 45.0
+
+
+def skew_socket_scene() -> str:
+    return f"""
+import math
+import Rhino
+
+
+def tilted_column(name, x, pivot_y, mass):
+    brep = Rhino.Geometry.Box(
+        Rhino.Geometry.Plane.WorldXY,
+        Rhino.Geometry.Interval(x, x + {SKEW_COLUMN!r}),
+        Rhino.Geometry.Interval(0.0, {SKEW_COLUMN!r}),
+        Rhino.Geometry.Interval(0.0, {SKEW_COLUMN_HEIGHT!r})).ToBrep()
+    brep.Transform(Rhino.Geometry.Transform.Rotation(
+        math.radians({SKEW_ANGLE_DEG!r}),
+        Rhino.Geometry.Vector3d.XAxis,
+        Rhino.Geometry.Point3d(x + {SKEW_COLUMN / 2.0!r}, pivot_y, 0.0)))
+    attrs = Rhino.DocObjects.ObjectAttributes()
+    attrs.Name = name
+    attrs.SetUserString('rhinomcp.stability.v1',
+                        '{{"mass": %r, "mass_unit": "kg"}}' % mass)
+    built.append(str(doc.Objects.AddBrep(brep, attrs)))
+
+
+# Rotated about the base edge: it leans and touches, nothing shared.
+world_box('RESTING_PAD', -400.0, -400.0, -200.0, {SKEW_COLUMN + 400.0!r}, {SKEW_COLUMN + 400.0!r}, 0.0, 2000.0)
+tilted_column('RESTING_COL', 0.0, 0.0, 400.0)
+
+# Rotated about the base centre: half the base swings below the pad's top face.
+world_box('SUNK_PAD', 2600.0, -400.0, -200.0, {3000.0 + SKEW_COLUMN + 400.0!r}, {SKEW_COLUMN + 400.0!r}, 0.0, 2000.0)
+tilted_column('SUNK_COL', 3000.0, {SKEW_COLUMN / 2.0!r}, 400.0)
+"""
+
+
+def check_skew_socket(send: Callable[[str, dict], Any], ids: list[str]) -> list[str]:
+    """A line where they touch, the shared surface where they overlap."""
+    graph = send("get_connectivity_graph", {"ids": ids})
+    names = {node["i"]: node.get("name", "") for node in graph.get("n", [])}
+    found = {}
+    for entry in graph.get("contact_extent_exact") or []:
+        pair = {names.get(entry["a"], ""), names.get(entry["b"], "")}
+        for tag in ("RESTING", "SUNK"):
+            if f"{tag}_COL" in pair:
+                found[tag] = entry
+
+    problems = []
+
+    resting = found.get("RESTING")
+    if resting is None:
+        problems.append("resting: no contact, and it touches along its base edge")
+    else:
+        if resting.get("kind") != "line":
+            problems.append(f"resting: reported as {resting.get('kind')}, not a line")
+        if abs(resting["line_length"] - SKEW_COLUMN) > 0.5:
+            problems.append(f"resting: line {resting['line_length']:.2f} against {SKEW_COLUMN:.1f}")
+        if resting["penetration_depth"] > 0.5:
+            problems.append(
+                f"resting: penetration {resting['penetration_depth']:.2f}, and it shares no volume")
+
+    sunk = found.get("SUNK")
+    if sunk is None:
+        problems.append("sunk: no contact, and half its base is inside the pad")
+        return problems
+
+    if sunk.get("kind") != "buried":
+        problems.append(f"sunk: reported as {sunk.get('kind')}, not a buried surface")
+
+    # Half the base, because the rotation was taken about the middle of it.
+    want_area = SKEW_COLUMN * SKEW_COLUMN / 2.0
+    if abs(sunk["polygon_area"] - want_area) > want_area * 0.01:
+        problems.append(f"sunk: shared surface {sunk['polygon_area']:.0f} against {want_area:.0f}")
+
+    # The base corner furthest from the pivot swings down by half the side times sin 45.
+    want_depth = SKEW_COLUMN / 2.0 * math.sin(math.radians(SKEW_ANGLE_DEG))
+    if abs(sunk["penetration_depth"] - want_depth) > 1.0:
+        problems.append(
+            f"sunk: penetration {sunk['penetration_depth']:.1f} against {want_depth:.1f}")
+
+    # The weaker reading is not thrown away by reporting the stronger one.
+    if abs(sunk["line_length"] - SKEW_COLUMN) > 0.5:
+        problems.append(f"sunk: line {sunk['line_length']:.2f} against {SKEW_COLUMN:.1f}")
+
+    return problems
+
+
 BEARING_TILT_WALL = (400.0, 300.0)
 BEARING_TILT_BURIAL = 20.0
 BEARING_TILT_MEASURED = (0.0, 10.0, 15.0, 19.0)
@@ -1327,12 +1430,42 @@ def check_bearing_tilt(send: Callable[[str, dict], Any], ids: list[str]) -> list
                 problems.append(
                     f"{tilt:.0f} deg: {axis} side {measure:.2f} against {expected:.2f}")
 
+    for tilt in BEARING_TILT_MEASURED:
+        entry = measured.get(tilt)
+        if entry is not None and entry.get("kind") != "planar":
+            problems.append(f"{tilt:.0f} deg: reported as {entry.get('kind')}, not an area")
+
     for tilt in BEARING_TILT_REFUSED:
-        if measured.get(tilt) is not None:
-            entry = measured[tilt]
+        entry = measured.get(tilt)
+        if entry is None:
+            problems.append(f"{tilt:.0f} deg: no contact at all, and the faces do cross")
+            continue
+
+        # Crossing faces that also overlap report the surface inside the volume they share;
+        # crossing faces that merely touch report the line. Both keep the line's length, and
+        # which one is reported follows from whether the drawing goes through itself.
+        expected_kind = "buried" if entry["penetration_depth"] > 0.0 else "line"
+        if entry.get("kind") != expected_kind:
             problems.append(
-                f"{tilt:.0f} deg: bearing reported at {entry['length_u']:.1f} x "
-                f"{entry['length_v']:.1f}, but the faces cross rather than bear")
+                f"{tilt:.0f} deg: reported as {entry.get('kind')}, expected {expected_kind} "
+                f"at penetration {entry['penetration_depth']:.1f}")
+            continue
+
+        # The line runs along the wall's own width, clipped by whichever face is narrower.
+        if abs(entry["line_length"] - dx) > BEARING_TILT_TOLERANCE_MM:
+            problems.append(
+                f"{tilt:.0f} deg: line {entry['line_length']:.2f} long against {dx:.1f}")
+
+        if abs(entry["skew_deg"] - tilt) > 0.1:
+            problems.append(f"{tilt:.0f} deg: skew reported as {entry['skew_deg']:.2f}")
+
+        # The normal comes from the face being pressed into - the slab's underside - and not
+        # from the bisector of the two face normals, which sits half the skew angle away and
+        # points in a direction neither surface faces.
+        if abs(entry["bisector_deg"] - tilt / 2.0) > 0.5:
+            problems.append(
+                f"{tilt:.0f} deg: normal sits {entry['bisector_deg']:.2f} from the bisector, "
+                f"expected {tilt / 2.0:.2f}")
 
     return problems
 
@@ -1498,6 +1631,18 @@ CASES: list[Case] = [
             "footprint foreshortened; at 21 and 25 the faces cross and no bearing is claimed"),
         build=bearing_tilt_scene,
         check=check_bearing_tilt,
+    ),
+    Case(
+        name="bearing_skew_socket",
+        mode="none",
+        tier=GEOMETRY,
+        stable=True,
+        reason=(
+            "a column at 45 degrees resting on its base edge touches along a line and shares "
+            "nothing; the same rotation about the base centre buries half of it, and half a "
+            "base is what the shared surface measures"),
+        build=skew_socket_scene,
+        check=check_skew_socket,
     ),
     Case(
         name="stair3_step100",

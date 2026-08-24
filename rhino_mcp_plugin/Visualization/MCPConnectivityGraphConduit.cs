@@ -202,8 +202,21 @@ internal sealed class MCPConnectivityGraphConduit : DisplayConduit
                 // ones that would otherwise still draw nothing.
                 if (MCPConnectivityGraphController.ShowContactExtent && edge.Exact.IsValid)
                 {
-                    var exactCorners = edge.Exact.Corners();
-                    e.Display.DrawPolygon(exactCorners, ExactColour, false);
+                    // A line bearing draws as the line it is. Corners() would give four
+                    // collinear points and the same picture, but drawn thicker it reads as a
+                    // measurement rather than as a rectangle seen edge-on.
+                    if (edge.Exact.IsLine)
+                    {
+                        e.Display.DrawLine(
+                            edge.Exact.Frame.PointAt(-edge.Exact.HalfU, 0.0),
+                            edge.Exact.Frame.PointAt(edge.Exact.HalfU, 0.0),
+                            ExactColour,
+                            3);
+                    }
+                    else
+                    {
+                        e.Display.DrawPolygon(edge.Exact.Corners(), ExactColour, false);
+                    }
 
                     var exactSize = Math.Max(edge.Exact.HalfU, edge.Exact.HalfV);
                     e.Display.DrawLine(
@@ -239,6 +252,7 @@ internal sealed class MCPConnectivityGraphConduit : DisplayConduit
         var measuredExactly = graph.Edges.Count(edge => edge.Exact.IsValid);
         var onlyExact = graph.Edges.Count(edge => edge.Exact.IsValid && !edge.Extent.IsValid);
         var buried = graph.Edges.Count(edge => edge.Exact.PenetrationDepth > 0.0);
+        var lines = graph.Edges.Count(edge => edge.Exact.IsLine);
         var extentLabel = MCPConnectivityGraphController.ShowContactExtent
             ? $" | extent {measured}/{graph.Edges.Count} measured"
             : string.Empty;
@@ -313,6 +327,18 @@ internal sealed class MCPConnectivityGraphConduit : DisplayConduit
             if (buried > 0)
             {
                 note += $"; {buried} joints interpenetrate";
+            }
+
+            if (lines > 0)
+            {
+                note += $"; {lines} are lines, where the faces cross rather than bear";
+            }
+
+            var socketed = graph.Edges.Count(edge => edge.Exact.IsBuried);
+            if (socketed > 0)
+            {
+                note += $"; {socketed} are the surface inside an overlap, not a bearing " +
+                    "between faces that meet";
             }
 
             e.Display.Draw2dText(note, ExactColour, new Point2d(20, line), false, 14);
@@ -546,6 +572,8 @@ internal static class MCPConnectivityGraphBuilder
                 PlanarBearing.TryMeasure(
                     nodes[i].Regions, nodes[j].Regions,
                     nodes[i].BoundingBox, nodes[j].BoundingBox,
+                    nodes[i].Geometry, nodes[i].ProxyMesh,
+                    nodes[j].Geometry, nodes[j].ProxyMesh,
                     ContactGap(tolerance), tolerance, out var exact);
 
                 edges.Add(new Edge
