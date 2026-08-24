@@ -708,8 +708,12 @@ internal static class MCPConnectivityGraphBuilder
         var tolerance = doc.ModelAbsoluteTolerance * 5.0;
         var quantum = Math.Max(tolerance * 0.1, 1e-9);
 
+        // The version prefix stands for how the graph is measured, not only for what is in
+        // the document. A cached graph outlives a rebuild, so a change to the measurement has
+        // to invalidate it too - a bearing fix once looked like it had done nothing at all,
+        // because the answer being read back had been computed by the code it replaced.
         var builder = new StringBuilder();
-        builder.Append("v3|").Append(tolerance.ToString("R", CultureInfo.InvariantCulture))
+        builder.Append("v4|").Append(tolerance.ToString("R", CultureInfo.InvariantCulture))
             .Append("|").Append(scope.Key);
 
         // Covers every candidate, not just the first MaxNodes: a change beyond the cap

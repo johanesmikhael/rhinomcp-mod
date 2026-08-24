@@ -551,8 +551,18 @@ internal static class PlanarBearing
                     continue;
                 }
 
+                // The burial limit is a body's own thickness, so a face pairing with the far
+                // face of the other body sits exactly on it. Exactly on it is where floating
+                // point decides, and it decided differently for the same detail at different
+                // places: two diagonals meeting at a truss apex measured as a 9743 mm2 planar
+                // bearing at three nodes and as a line at two others, from geometry that is an
+                // exact translation of itself. Pulling the limit in by the tolerance makes the
+                // full-thickness pairing reject everywhere rather than by luck - and it is the
+                // pairing least worth keeping, since it spans the whole member and describes
+                // where two bodies cross inside one layer rather than where they bear.
                 var offset = (rb.Plane.Origin - ra.Plane.Origin) * nA;
-                if (offset > gap || offset < -BurialAllowance(a, ra, boxA, b, rb, boxB))
+                var burial = BurialAllowance(a, ra, boxA, b, rb, boxB) - tolerance;
+                if (offset > gap || offset < -burial)
                 {
                     continue;
                 }
