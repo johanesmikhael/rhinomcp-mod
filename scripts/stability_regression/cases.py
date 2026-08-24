@@ -1029,7 +1029,21 @@ def micro_splay_build() -> str:
 
 # Isolate the axial question: no notional load, no built-in imperfection, nothing to settle
 # but the weight itself.
-MICRO_PARAMS = {"lateral_load_fraction": 0.0, "imperfection_fraction": 0.0}
+# Welded, stated rather than inherited. These cases measure a *member's* axial stiffness
+# against a closed form - W/3k for three columns - which assumes the joints between them add
+# no compliance of their own. That is a welded idealisation, and it used to arrive by way of
+# the evaluator's default. The default is contact now, and contact is not the same thing
+# here: the two-storey stack reads 1.519 mm under it against 0.786 welded and 0.790 pinned,
+# because the merged spacer node gives it a joint that can open. Which of those numbers is
+# right is a question about the solver; what the case is asking is a question about EA/L, so
+# it says which joint it means and asks its own question.
+#
+# The particle path cannot express a joint type at all, so this is inert there.
+MICRO_PARAMS = {
+    "lateral_load_fraction": 0.0,
+    "imperfection_fraction": 0.0,
+    "joint_type": "welded",
+}
 
 
 # These cases measure a settled deflection, so they are run with enough damping to reach one
@@ -1951,6 +1965,13 @@ CASES: list[Case] = [
         reason="rank test finds 0 mechanisms; hand midspan sag about 1.8 mm",
         build=bridge_build(braced=True),
         expect={"max_pin_displacement_m": (0.0, 0.005)},
+        # A truss is bolted at its nodes, so it says so. It used to rely on the evaluator's
+        # default, which was welded; the default is contact now, and a truss whose members
+        # merely touch is not a truss - its diagonals cannot pull, so the deck hangs off
+        # nothing and sags 41.6 mm against a hand figure of 1.8. Stating the joint is not a
+        # workaround for that: the members really are connected, and the hand figure this is
+        # measured against is pinned-truss statics.
+        params={"joint_type": "pin"},
     ),
     # The unbraced bridge's four modes are INFINITESIMAL mechanisms, and the distinction
     # decides the answer. Under the mode a tie's ends separate as 2*sqrt(1 + (0.71t)^2), so
@@ -2104,11 +2125,25 @@ CASES: list[Case] = [
         name="bridge_unbraced_pinned_alias",
         mode="pinned",
         tier=FAST,
+        # Committed failing, and the reason is the point of keeping it.
+        #
+        # The case is about a pinned truss whose four mechanisms are infinitesimal, so it
+        # stands by stiffening at second order. It passed for years on the evaluator's welded
+        # default - which removes the mechanisms altogether, so the thing the case exists to
+        # test was never being tested. Changing the default to contact exposed that, and
+        # stating the joint the case is actually about, pin, gives 3.0 mm of drift and an
+        # unstable verdict.
+        #
+        # So the hand answer and the solver now disagree, in the open. Either second-order
+        # stiffening is beyond a relaxation solver that has no geometric stiffness, or the
+        # hand answer is wrong. Neither is settled by re-baselining this to unstable, and
+        # neither is settled by putting welded back.
         stable=True,
         reason=(
             "infinitesimal mechanisms stiffen at second order, so it stands; and \"pinned\" "
             "must now answer identically to \"pinned_dynamic\""),
         build=bridge_build(braced=False),
+        params={"joint_type": "pin"},
     ),
 ]
 

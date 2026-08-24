@@ -488,10 +488,25 @@ public partial class RhinoMCPModFunctions
                     // test, so this is domain knowledge and cannot come from the model. One
                     // value for the whole assembly for now; per-element and pairwise rules
                     // follow, and this stays as the default they fall back to.
+                    // Contact, because it is the only one of the three that is a defensible
+                    // description of any two things merely found touching. It keeps the
+                    // measured bearing, so a stack of blocks resists overturning the way it
+                    // physically does; it is one-sided, so nothing hangs from a joint that
+                    // only ever pushed; and it carries friction, so lateral load has
+                    // something to resist it.
+                    //
+                    // Welded was the default and is the strongest assumption available,
+                    // applied where the least is known. Measured against the hand-statics
+                    // cases it gets stair3_step300, pedestal_eccentric and both failing
+                    // cantilevers wrong, and wrong in the one direction a stability verdict
+                    // must not fail in: it reports them standing.
+                    //
+                    // Pin is not the safe end either, despite carrying no moment. It is
+                    // two-sided, so it hangs; and it discards the bearing, so three blocks
+                    // stacked on 500 x 600 of contact become a mechanism hinged at points
+                    // that exist nowhere in the drawing.
                     var jointTypeText = parameters?["joint_type"]?.ToString();
-                    var defaultJointType = contactMode
-                        ? StabilityRigidBodies.JointType.Contact
-                        : StabilityRigidBodies.JointType.Welded;
+                    var defaultJointType = StabilityRigidBodies.JointType.Contact;
                     if (!string.IsNullOrWhiteSpace(jointTypeText) &&
                         !StabilityRigidBodies.TryParseJointType(jointTypeText, out defaultJointType))
                     {

@@ -217,9 +217,11 @@ namespace RhinoMCPModPlugin.Commands
                     ruleCount > 0
                         ? $"Joint type where no rule names one ({ruleCount} rules will override it)"
                         : "Joint type where no rule names one (no rules are set)");
-                var weldedJointOption = getDefaultJoint.AddOption("Welded");
-                var pinJointOption = getDefaultJoint.AddOption("Pin");
+                // Contact first, because it is the default and the prompt should say so by
+                // its order as well as by what it does when nothing is chosen.
                 var contactJointOption = getDefaultJoint.AddOption("Contact");
+                var pinJointOption = getDefaultJoint.AddOption("Pin");
+                var weldedJointOption = getDefaultJoint.AddOption("Welded");
                 getDefaultJoint.AcceptNothing(true);
 
                 if (getDefaultJoint.Get() == GetResult.Cancel)
@@ -228,14 +230,14 @@ namespace RhinoMCPModPlugin.Commands
                 }
 
                 var jointIndex = getDefaultJoint.Option()?.Index ?? -1;
-                var defaultJoint = "welded";
+                var defaultJoint = "contact";
                 if (jointIndex == pinJointOption)
                 {
                     defaultJoint = "pin";
                 }
-                else if (jointIndex == contactJointOption)
+                else if (jointIndex == weldedJointOption)
                 {
-                    defaultJoint = "contact";
+                    defaultJoint = "welded";
                 }
 
                 parameters["joint_type"] = defaultJoint;
