@@ -232,8 +232,6 @@ internal sealed class MCPConnectivityGraphConduit : DisplayConduit
         // Counted the way the solver reads them, not the way they were measured: a buried
         // bearing is rejected by default, so it counts as an overlap and whatever the solver
         // falls back to counts as the bearing.
-        var solvedExactly = graph.Edges.Count(
-            edge => edge.Exact.IsValid && !edge.Exact.IsBuried);
         var socketed = graph.Edges.Count(edge => edge.Exact.IsBuried);
         var sampledOnly = graph.Edges.Count(
             edge => !(edge.Exact.IsValid && !edge.Exact.IsBuried) && edge.Extent.IsValid);
@@ -245,10 +243,7 @@ internal sealed class MCPConnectivityGraphConduit : DisplayConduit
         {
             HudRow.Heading("MCP GRAPH"),
             HudRow.Line(
-                $"{graph.Nodes.Count} elements  {graph.Edges.Count} contacts  " +
-                $"{solvedExactly} measured" +
-                (isolated > 0 ? $"  {isolated} loose" : string.Empty)),
-            HudRow.Line(scopeLabel)
+                $"{graph.Nodes.Count} elements  {graph.Edges.Count} contacts")
         };
 
         if (graph.Truncated)
@@ -275,26 +270,25 @@ internal sealed class MCPConnectivityGraphConduit : DisplayConduit
         {
             rows.Add(HudRow.Swatched(
                 Dimmed(ColourFor(Functions.RhinoMCPModFunctions.DefaultJointType), 255),
-                $"{graph.Edges.Count - ruled} dim - no rule"));
+                $"no rule  {graph.Edges.Count - ruled}"));
         }
 
-        // How each bearing was arrived at. Only the readings that are not the ordinary one
-        // get a line, so a clean model shows a short panel and an odd one explains itself.
+        // How each bearing was arrived at, as legend entries rather than as sentences. Only
+        // the readings that are not the ordinary one appear, so a clean model shows a short
+        // panel and an odd one still says what is odd about it.
         if (lines > 0)
         {
-            rows.Add(HudRow.Line($"{lines} lines"));
+            rows.Add(HudRow.Line($"line  {lines}"));
         }
 
         if (sampledOnly > 0)
         {
-            rows.Add(HudRow.Line($"{sampledOnly} sampled"));
+            rows.Add(HudRow.Line($"sampled  {sampledOnly}"));
         }
 
         if (unmeasured > 0)
         {
-            rows.Add(HudRow.Line(
-                $"{unmeasured} without a region, so no moment" +
-                (socketed > 0 ? $"  ({socketed} overlap)" : string.Empty)));
+            rows.Add(HudRow.Line($"no region  {unmeasured}"));
         }
 
         rows.Add(HudRow.Heading("GRAPH"));
@@ -453,7 +447,9 @@ internal sealed class MCPConnectivityGraphConduit : DisplayConduit
                 row.IsHeading ? HeadingColour : TextColour,
                 new Point2d(
                     left + pad + (row.Swatch == SwatchShape.None ? 0 : swatchColumn),
-                    y + rowHeight / 2.0),
+                    // Draw2dText anchors the text's top edge, not its middle, so a row drawn
+                    // at its own centre sits half a line below the swatch beside it.
+                    y + (rowHeight - textHeight) / 2.0),
                 false,
                 textHeight);
         }
