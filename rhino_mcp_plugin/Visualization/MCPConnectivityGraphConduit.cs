@@ -30,9 +30,9 @@ internal sealed class MCPConnectivityGraphConduit : DisplayConduit
     private static readonly Color WeldedColour = Color.FromArgb(255, 200, 105, 0);
 
     // The panel the readout sits on, and the text on it. A colour that reads on every
-    // background does not exist - white vanished into the default viewport and black would
-    // vanish into a dark one - so the readout brings its own background and stops depending
-    // on the viewport's.
+    // background does not exist - white text vanished into the default viewport and black
+    // would vanish into a dark one - so the readout brings its own background and stops
+    // depending on the viewport's. Which way round it is opaque is then only taste.
     /// <summary>
     /// An overlap measured but not solved on, drawn as an outline and nothing more.
     /// </summary>
@@ -46,10 +46,9 @@ internal sealed class MCPConnectivityGraphConduit : DisplayConduit
     /// </remarks>
     private static readonly Color BuriedColour = Color.FromArgb(190, 130, 130, 140);
 
-    private static readonly Color PanelColour = Color.FromArgb(224, 20, 22, 26);
-    private static readonly Color PanelEdgeColour = Color.FromArgb(255, 90, 96, 105);
-    private static readonly Color TextColour = Color.FromArgb(255, 232, 235, 240);
-    private static readonly Color HeadingColour = Color.FromArgb(255, 150, 160, 175);
+    private static readonly Color PanelColour = Color.FromArgb(235, 255, 255, 255);
+    private static readonly Color TextColour = Color.FromArgb(255, 30, 33, 38);
+    private static readonly Color HeadingColour = Color.FromArgb(255, 105, 112, 125);
 
     private static Color ColourFor(Functions.StabilityRigidBodies.JointType type)
     {
@@ -243,7 +242,7 @@ internal sealed class MCPConnectivityGraphConduit : DisplayConduit
 
             e.Display.DrawPoint(
                 graph.Nodes[i].Center,
-                connected ? PointStyle.RoundSimple : PointStyle.RoundControlPoint,
+                connected ? PointStyle.Asterisk : PointStyle.RoundControlPoint,
                 connected ? 3 : 6,
                 connected ? _nodeColor : _isolatedColor);
         }
@@ -264,29 +263,27 @@ internal sealed class MCPConnectivityGraphConduit : DisplayConduit
         {
             HudRow.Heading("MCP GRAPH"),
             HudRow.Line(
-                $"{graph.Nodes.Count} elements, {graph.Edges.Count} contacts, " +
-                $"{solvedExactly} on a measured bearing" +
-                (isolated > 0 ? $"; {isolated} touching nothing" : string.Empty)),
-            HudRow.Line($"scope: {scopeLabel}")
+                $"{graph.Nodes.Count} elements  {graph.Edges.Count} contacts  " +
+                $"{solvedExactly} measured" +
+                (isolated > 0 ? $"  {isolated} loose" : string.Empty)),
+            HudRow.Line(scopeLabel)
         };
 
         if (graph.Truncated)
         {
             rows.Add(HudRow.Swatched(
                 _isolatedColor,
-                $"TRUNCATED - {graph.ExaminedCount} of {graph.CandidateCount} examined; " +
-                "select a sub-assembly to see the rest"));
+                $"TRUNCATED - {graph.ExaminedCount} of {graph.CandidateCount} examined"));
         }
 
         // The legend earns its space by naming what is on screen. Colour alone is not a
         // legend: green means bearing to whoever chose it and nothing to anyone reading it.
-        rows.Add(HudRow.Heading("BEARING SURFACES - the rectangle joints are built over"));
+        rows.Add(HudRow.Heading("BEARINGS"));
         foreach (var entry in typeCounts.OrderBy(pair => (int)pair.Key))
         {
             rows.Add(HudRow.Swatched(
                 ColourFor(entry.Key),
-                $"{Functions.RhinoMCPModFunctions.TypeName(entry.Key)}  {entry.Value}  " +
-                DescriptionOf(entry.Key)));
+                $"{Functions.RhinoMCPModFunctions.TypeName(entry.Key)}  {entry.Value}"));
         }
 
         // Stated against assumed. A joint drawn dim is solved exactly like a bright one of
@@ -296,50 +293,41 @@ internal sealed class MCPConnectivityGraphConduit : DisplayConduit
         {
             rows.Add(HudRow.Swatched(
                 Dimmed(ColourFor(Functions.RhinoMCPModFunctions.DefaultJointType), 255),
-                $"dim: {graph.Edges.Count - ruled} named by no rule, so they take the " +
-                $"default, {Functions.RhinoMCPModFunctions.TypeName(Functions.RhinoMCPModFunctions.DefaultJointType)}"));
+                $"{graph.Edges.Count - ruled} dim - no rule"));
         }
 
         // How each bearing was arrived at. Only the readings that are not the ordinary one
         // get a line, so a clean model shows a short panel and an odd one explains itself.
         if (lines > 0)
         {
-            rows.Add(HudRow.Line(
-                $"{lines} drawn as a line - the faces cross rather than bear, so the joint " +
-                "rocks about it"));
+            rows.Add(HudRow.Line($"{lines} lines"));
         }
 
         if (socketed > 0)
         {
             rows.Add(HudRow.Swatched(
                 BuriedColour,
-                $"{socketed} bodies interpenetrate - grey outline is the buried surface, not " +
-                "solved on unless bearing_source=\"buried\""));
+                $"{socketed} overlaps, not solved on"));
         }
 
         if (sampledOnly > 0)
         {
-            rows.Add(HudRow.Line(
-                $"{sampledOnly} sampled rather than measured - a curved or buried face has no " +
-                "flat region to intersect"));
+            rows.Add(HudRow.Line($"{sampledOnly} sampled"));
         }
 
         if (unmeasured > 0)
         {
-            rows.Add(HudRow.Line(
-                $"{unmeasured} with no region at all - found by proximity, so a point and no " +
-                "extent, which carries no moment"));
+            rows.Add(HudRow.Line($"{unmeasured} without a region, so no moment"));
         }
 
-        rows.Add(HudRow.Heading("ELEMENTS AND CONTACTS"));
-        rows.Add(HudRow.Swatched(_nodeColor, "element centre"));
+        rows.Add(HudRow.Heading("GRAPH"));
+        rows.Add(HudRow.Marked(_nodeColor, "element"));
         if (isolated > 0)
         {
-            rows.Add(HudRow.Swatched(_isolatedColor, "element touching nothing in scope"));
+            rows.Add(HudRow.Marked(_isolatedColor, "loose"));
         }
 
-        rows.Add(HudRow.Swatched(
-            _edgeColor, "contact: centre to where they touch, and on to the other centre"));
+        rows.Add(HudRow.Stroked(_edgeColor, "contact"));
 
         DrawPanel(e, rows);
     }
@@ -356,16 +344,15 @@ internal sealed class MCPConnectivityGraphConduit : DisplayConduit
         e.Display.DrawLine(frame.Origin, frame.Origin + frame.ZAxis * size * 0.4, colour, 1);
     }
 
-    private static string DescriptionOf(Functions.StabilityRigidBodies.JointType type)
+    /// <summary>
+    /// What a row's swatch is drawn as, matching how the thing it names is drawn on screen.
+    /// </summary>
+    private enum SwatchShape
     {
-        return type switch
-        {
-            Functions.StabilityRigidBodies.JointType.Contact =>
-                "pushes, never pulls; slides past friction",
-            Functions.StabilityRigidBodies.JointType.Pin =>
-                "force through one point, no moment",
-            _ => "force and moment, both ways, always"
-        };
+        None,
+        Patch,
+        Cross,
+        Stroke
     }
 
     /// <summary>
@@ -373,7 +360,7 @@ internal sealed class MCPConnectivityGraphConduit : DisplayConduit
     /// </summary>
     private readonly struct HudRow
     {
-        private HudRow(string text, Color colour, bool swatch, bool heading)
+        private HudRow(string text, Color colour, SwatchShape swatch, bool heading)
         {
             Text = text;
             Colour = colour;
@@ -383,14 +370,24 @@ internal sealed class MCPConnectivityGraphConduit : DisplayConduit
 
         public string Text { get; }
         public Color Colour { get; }
-        public bool Swatch { get; }
+        public SwatchShape Swatch { get; }
         public bool IsHeading { get; }
 
-        public static HudRow Heading(string text) => new(text, HeadingColour, false, true);
+        public static HudRow Heading(string text) => new(text, HeadingColour, SwatchShape.None, true);
 
-        public static HudRow Line(string text) => new(text, TextColour, false, false);
+        public static HudRow Line(string text) => new(text, TextColour, SwatchShape.None, false);
 
-        public static HudRow Swatched(Color colour, string text) => new(text, colour, true, false);
+        /// <summary>A filled patch, for the things drawn as filled patches.</summary>
+        public static HudRow Swatched(Color colour, string text) =>
+            new(text, colour, SwatchShape.Patch, false);
+
+        /// <summary>A cross, for the element markers, drawn as the markers are.</summary>
+        public static HudRow Marked(Color colour, string text) =>
+            new(text, colour, SwatchShape.Cross, false);
+
+        /// <summary>A stroke, for the contact lines, drawn as the lines are.</summary>
+        public static HudRow Stroked(Color colour, string text) =>
+            new(text, colour, SwatchShape.Stroke, false);
     }
 
     /// <summary>
@@ -428,20 +425,47 @@ internal sealed class MCPConnectivityGraphConduit : DisplayConduit
         var height = pad * 2 + rows.Count * rowHeight;
 
         e.Display.Draw2dRectangle(
-            new Rectangle(left, top, width, height), PanelEdgeColour, 1, PanelColour);
+            new Rectangle(left, top, width, height), Color.Transparent, 0, PanelColour);
 
         for (var i = 0; i < rows.Count; i++)
         {
             var row = rows[i];
             var y = top + pad + i * rowHeight;
 
-            if (row.Swatch)
+            // The swatch is drawn as the thing itself: a patch for a bearing, a cross for an
+            // element marker, a stroke for a contact line. A row of identical squares says
+            // only which colour, and the shape is half of what is on screen.
+            var midY = y + rowHeight / 2;
+            var swatchLeft = left + pad;
+            switch (row.Swatch)
             {
-                e.Display.Draw2dRectangle(
-                    new Rectangle(left + pad, y + (rowHeight - swatchSize) / 2, swatchSize, swatchSize),
-                    row.Colour,
-                    1,
-                    row.Colour);
+                case SwatchShape.Patch:
+                    e.Display.Draw2dRectangle(
+                        new Rectangle(
+                            swatchLeft, y + (rowHeight - swatchSize) / 2, swatchSize, swatchSize),
+                        row.Colour,
+                        1,
+                        row.Colour);
+                    break;
+
+                case SwatchShape.Cross:
+                    var arm = swatchSize / 2;
+                    var centre = swatchLeft + arm;
+                    e.Display.Draw2dLine(
+                        new System.Drawing.Point(centre - arm, midY), new System.Drawing.Point(centre + arm, midY),
+                        row.Colour, 2);
+                    e.Display.Draw2dLine(
+                        new System.Drawing.Point(centre, midY - arm), new System.Drawing.Point(centre, midY + arm),
+                        row.Colour, 2);
+                    break;
+
+                case SwatchShape.Stroke:
+                    e.Display.Draw2dLine(
+                        new System.Drawing.Point(swatchLeft, midY),
+                        new System.Drawing.Point(swatchLeft + swatchSize, midY),
+                        row.Colour,
+                        2);
+                    break;
             }
 
             // A swatch already carries the colour, so its text is drawn in the panel's own
@@ -450,7 +474,9 @@ internal sealed class MCPConnectivityGraphConduit : DisplayConduit
             e.Display.Draw2dText(
                 row.Text,
                 row.IsHeading ? HeadingColour : TextColour,
-                new Point2d(left + pad + (row.Swatch ? swatchColumn : 0), y + rowHeight / 2.0),
+                new Point2d(
+                    left + pad + (row.Swatch == SwatchShape.None ? 0 : swatchColumn),
+                    y + rowHeight / 2.0),
                 false,
                 textHeight);
         }
