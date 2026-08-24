@@ -153,7 +153,12 @@ internal static class MCPConnectivityGraphStore
                         Pieces = e[13].Value<int>(),
                         Pairs = e.Count > 14 ? e[14].Value<int>() : 0,
                         RegionsA = e.Count > 15 ? e[15].Value<int>() : 0,
-                        RegionsB = e.Count > 16 ? e[16].Value<int>() : 0
+                        RegionsB = e.Count > 16 ? e[16].Value<int>() : 0,
+                        IsLine = e.Count > 17 && e[17].Value<double>() != 0.0,
+                        SkewDegrees = e.Count > 18 ? e[18].Value<double>() : 0.0,
+                        BisectorDegrees = e.Count > 19 ? e[19].Value<double>() : 0.0,
+                        IsBuried = e.Count > 20 && e[20].Value<double>() != 0.0,
+                        LineLength = e.Count > 21 ? e[21].Value<double>() : 0.0
                     };
                     edges[i] = restoredEdge;
                 }
@@ -264,7 +269,14 @@ internal static class MCPConnectivityGraphStore
                 edge.Exact.HalfU, edge.Exact.HalfV,
                 edge.Exact.PolygonArea, edge.Exact.Offset,
                 edge.Exact.Pieces, edge.Exact.Pairs,
-                edge.Exact.RegionsA, edge.Exact.RegionsB));
+                edge.Exact.RegionsA, edge.Exact.RegionsB,
+                // What kind of contact it is, which the solver needs and not only the report:
+                // a line has to reach it as a line, or its zero half-width is read as a
+                // rectangle that happens to be thin.
+                edge.Exact.IsLine ? 1.0 : 0.0,
+                edge.Exact.SkewDegrees, edge.Exact.BisectorDegrees,
+                edge.Exact.IsBuried ? 1.0 : 0.0,
+                edge.Exact.LineLength));
         }
 
         return new JObject

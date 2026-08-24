@@ -17,6 +17,7 @@ async def evaluate_stability(
     damping_ratio: float | None = None,
     integrator: str | None = None,
     joint_type: str | None = None,
+    bearing_source: str | None = None,
     lateral_load_fraction: float | None = None,
     joint_stiffness_n_per_m: float | None = None,
     stability_threshold: float | None = None,
@@ -138,15 +139,35 @@ async def evaluate_stability(
             damps each joint against relative motion there, which barely touches a mode
             where both ends of a joint move together. The rigid path typically needs
             0.2 to settle inside a half-second run.
+        bearing_source: pinned_dynamic + integrator="rigid_bodies" only. Which
+            measurement of a bearing the solver builds joints over. A joint's moment
+            capacity is its bearing's size and nothing else, so this is not a
+            reporting choice.
+
+            "sampled" (default) - a grid walked across both surfaces, keeping points
+            that come within a millimetre of the other. Approximate, and the extent it
+            reports depends on where the grid happened to land: four identical
+            400 x 400 joints measured 453, 536, 542 and 544. Two members meeting end to
+            end give a rectangle of zero width, so a full bearing is solved as a hinge.
+            Two bodies drawn overlapping give nothing at all.
+            "exact" - the polygon the two bodies' flat faces actually share, on the mean
+            plane between them. Covers touching, nearly touching and overlapping alike.
+            Faces that cross rather than bear report the line they cross along, which
+            carries force and no moment about itself - a body resting on an edge rocks.
+            "buried" - as "exact", and additionally admits the surface inside the volume
+            two bodies share. That area grows with how far the drawing goes through
+            itself, so it credits a joint with moment capacity in proportion to a
+            modelling artefact. Right where an overlap is a deliberate socket; wrong for
+            truss members that merely interpenetrate at their nodes.
         joint_type: pinned_dynamic + integrator="rigid_bodies" only. What every joint
             in the assembly is, since geometry cannot tell you: a screwed panel and a
             dry-stacked one look identical to an intersection test.
 
-            "welded" (default) - the bearing carries force and moment, always. A moment
+            "welded" - the bearing carries force and moment, always. A moment
             connection: beam to column, a plate welded or bolted rigid.
             "pin" - the bearing collapses to its centre, so it carries force in three
             directions and no moment. A hinge: truss to truss, a bolted single fastener.
-            "contact" - the bearing pushes and does not pull, with friction across it,
+            "contact" (default) - the bearing pushes and does not pull, with friction across it,
             so it opens as load leaves it. Dry masonry, a beam sitting on a corbel, a
             precast panel bearing on a pad.
 
@@ -233,6 +254,8 @@ async def evaluate_stability(
         params["integrator"] = integrator
     if joint_type is not None:
         params["joint_type"] = joint_type
+    if bearing_source is not None:
+        params["bearing_source"] = bearing_source
     if lateral_load_fraction is not None:
         params["lateral_load_fraction"] = lateral_load_fraction
     if joint_stiffness_n_per_m is not None:

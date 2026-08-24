@@ -153,6 +153,62 @@ public partial class RhinoMCPModFunctions
     /// Reads the graph's edges as joints. The welded mode ignores them entirely; here each
     /// edge is a pin shared by the two bodies it connects.
     /// </summary>
+    /// <summary>
+    /// One exactly measured bearing, as the solver's <see cref="ContactExtent"/>.
+    /// </summary>
+    /// <remarks>
+    /// The stored form is positional: frame origin, both in-plane axes, the two half-lengths,
+    /// then polygon area, offset, piece and pair counts, region counts, and finally the flags
+    /// that say what kind of contact it is. A line carries a zero half-width on purpose - a
+    /// line contact has no width, and <c>BearingPoints</c> collapses that axis to a single
+    /// position, which is what makes such a joint a hinge about the line rather than a plate.
+    /// </remarks>
+    private static bool TryReadExactBearing(
+        JArray stored, double lengthToMeters, bool allowBuried, out ContactExtent extent)
+    {
+        extent = default;
+        if (stored == null || stored.Count < 14)
+        {
+            return false;
+        }
+
+        var isLine = stored.Count > 17 && stored[17].Value<double>() != 0.0;
+        var isBuried = stored.Count > 20 && stored[20].Value<double>() != 0.0;
+        if (isBuried && !allowBuried)
+        {
+            return false;
+        }
+
+        var frame = new Plane(
+            new Point3d(
+                stored[0].Value<double>() * lengthToMeters,
+                stored[1].Value<double>() * lengthToMeters,
+                stored[2].Value<double>() * lengthToMeters),
+            new Vector3d(stored[3].Value<double>(), stored[4].Value<double>(), stored[5].Value<double>()),
+            new Vector3d(stored[6].Value<double>(), stored[7].Value<double>(), stored[8].Value<double>()));
+        if (!frame.IsValid)
+        {
+            return false;
+        }
+
+        var halfU = stored[9].Value<double>() * lengthToMeters;
+        var halfV = stored[10].Value<double>() * lengthToMeters;
+        if (!(halfU > 0.0))
+        {
+            return false;
+        }
+
+        extent = new ContactExtent
+        {
+            IsValid = true,
+            Frame = frame,
+            HalfU = halfU,
+            HalfV = isLine ? 0.0 : halfV,
+            Samples = 0
+        };
+        return true;
+    }
+
     private static List<PinnedBody> BuildPinnedBodies(
         JObject graph,
         List<StabilityNode> nodes,
@@ -161,7 +217,9 @@ public partial class RhinoMCPModFunctions
         double groundToleranceMeters,
         bool sharePins = true,
         JArray clusterReport = null,
-        JointTypeRules jointTypeRules = null)
+        JointTypeRules jointTypeRules = null,
+        bool preferExactBearings = false,
+        bool allowBuriedBearings = false)
     {
         var bodies = new List<PinnedBody>(nodes.Count);
         foreach (var node in nodes)
@@ -224,11 +282,15 @@ public partial class RhinoMCPModFunctions
         }
 
         var links = new List<JointLink>();
+        // Bearings measured by intersecting the two bodies' flat faces, parallel to the edge
+        // array by index. They ride separately because the edge payload is read by position
+        // and would be awkward to extend a second time.
+        var exactBearings = graph["ex"] as JArray;
         if (graph["e"] is JArray edges)
         {
-            foreach (var edgeToken in edges)
+            for (var edgeIndex = 0; edgeIndex < edges.Count; edgeIndex++)
             {
-                if (edgeToken is not JArray edge || edge.Count < 5)
+                if (edges[edgeIndex] is not JArray edge || edge.Count < 5)
                 {
                     continue;
                 }
@@ -275,6 +337,23 @@ public partial class RhinoMCPModFunctions
                             Samples = edge.Count > 16 ? edge[16].Value<int>() : 0
                         };
                     }
+                }
+
+                // The exact measurement, where it exists and was asked for. It replaces the
+                // sampled rectangle rather than supplementing it: they describe the same
+                // bearing and the sampled one is the approximation.
+                //
+                // A buried bearing is the surface inside the volume two bodies share, and it
+                // is gated separately. Its area grows with how far the drawing goes through
+                // itself, so it hands a joint moment capacity in proportion to a modelling
+                // artefact - fine where an overlap is a deliberate socket, and not something
+                // to switch on for every truss node that happens to interpenetrate.
+                if (preferExactBearings && exactBearings != null && edgeIndex < exactBearings.Count &&
+                    TryReadExactBearing(
+                        exactBearings[edgeIndex] as JArray, lengthToMeters, allowBuriedBearings,
+                        out var exact))
+                {
+                    extent = exact;
                 }
 
                 links.Add(new JointLink { A = a, B = b, Point = contact, Extent = extent });

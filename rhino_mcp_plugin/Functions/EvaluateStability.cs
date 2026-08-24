@@ -518,6 +518,45 @@ public partial class RhinoMCPModFunctions
                     // element says about its own joints, then this. See AssignJointType.
                     var jointTypeRules = new JointTypeRules(ReadPairRules(doc), defaultJointType);
 
+                    // Which measurement of a bearing the solver builds joints over.
+                    //
+                    // "sampled" walks a grid across both surfaces and keeps the points that
+                    // come within a millimetre of the other; "exact" intersects the bodies'
+                    // flat faces. Exact is right where the two disagree - four identical
+                    // 400 x 400 joints sampled at 453, 536, 542 and 544, and every butt joint
+                    // collapsed to a rectangle of zero width - but it is a change to every
+                    // joint in every model, so it is a switch and the default is stated here
+                    // rather than assumed.
+                    //
+                    // "buried" additionally admits the surface inside a volume two bodies
+                    // share. That is a separate decision from exactness: its area grows with
+                    // how far the drawing goes through itself, so it hands moment capacity in
+                    // proportion to a modelling artefact.
+                    var bearingSource = parameters?["bearing_source"]?.ToString()?.Trim()
+                        ?.ToLowerInvariant();
+                    if (!string.IsNullOrEmpty(bearingSource) &&
+                        bearingSource != "sampled" && bearingSource != "exact" &&
+                        bearingSource != "buried")
+                    {
+                        throw new InvalidOperationException(
+                            $"Unknown bearing_source '{bearingSource}'. Expected sampled, exact or buried.");
+                    }
+
+                    // Exact by default, measured rather than assumed: across every fast and
+                    // systems case it changes no verdict, and on the micro tier's closed
+                    // forms it moves nothing beyond the third decimal of a millimetre - while
+                    // reading a 400 x 400 bearing as 400 x 400 rather than 453, 536, 542 or
+                    // 544, and a butt joint as a bearing rather than as a hinge.
+                    //
+                    // Buried is not the default, and the splayed-leg case is why: all six of
+                    // its joints are bodies drawn through one another, and admitting the
+                    // shared surface takes a deflection with a closed-form answer of 0.603 mm
+                    // from 0.661 to 1.097. An overlap that is a deliberate socket is worth
+                    // asking for; an overlap that is how the model happened to be drawn is
+                    // not.
+                    var preferExactBearings = bearingSource != "sampled";
+                    var allowBuriedBearings = bearingSource == "buried";
+
                     if (rigidPath)
                     {
                         var rigidStable = SolvePinnedRigidFromGraph(
@@ -538,7 +577,9 @@ public partial class RhinoMCPModFunctions
                                 StabilityRigidBodies.TimestepSafety, 0.0, inclusiveMinimum: false),
                             jointTypeRules,
                             unitContext.LengthToMeters,
-                            WantsDisplay(parameters) ? doc : null);
+                            WantsDisplay(parameters) ? doc : null,
+                            preferExactBearings,
+                            allowBuriedBearings);
 
                         var rigidResult = BuildPinnedResult(graph, doc, unitContext, rigidStable,
                             gravity, floorZ, floorZIsAuto, rigidStrength, totalMassKilograms,
@@ -556,6 +597,7 @@ public partial class RhinoMCPModFunctions
                             "verdict", "conclusive", "converged", "decay_ratio_per_swing",
                             "projected_displacement_m", "lateral_load_fraction", "sway",
                             "joint_count", "joint_type_default", "joint_type_counts",
+                            "bearing_source",
                             "contact_joints_sided", "contact_joints_open", "joint_type_pair_rules",
                             "bounded_response", "motion_reversals",
                             "mechanism_threshold_m", "verdict_metric",

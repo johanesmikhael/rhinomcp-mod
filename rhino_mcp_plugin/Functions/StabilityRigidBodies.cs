@@ -984,12 +984,16 @@ public partial class RhinoMCPModFunctions
         double timestepSafety,
         JointTypeRules jointTypeRules,
         double lengthToMeters,
-        RhinoDoc displayDoc)
+        RhinoDoc displayDoc,
+        bool preferExactBearings = false,
+        bool allowBuriedBearings = false)
     {
         var clusterReport = new JArray();
         var pinned = BuildPinnedBodies(
             graph, nodes, lengthToMeters, floorZMeters, GroundContactToleranceMeters,
-            sharePins: true, clusterReport: clusterReport, jointTypeRules: jointTypeRules);
+            sharePins: true, clusterReport: clusterReport, jointTypeRules: jointTypeRules,
+            preferExactBearings: preferExactBearings,
+            allowBuriedBearings: allowBuriedBearings);
         if (pinned.Count == 0)
         {
             throw new InvalidOperationException("No bodies were built for the rigid-body solver.");
@@ -1341,6 +1345,9 @@ public partial class RhinoMCPModFunctions
         // to be diagnosable without re-deriving the rules by hand - and a contact that fell
         // back to welded for want of a measured bearing plane is a silent stiffening
         // otherwise.
+        graph["bearing_source"] = allowBuriedBearings
+            ? "buried"
+            : preferExactBearings ? "exact" : "sampled";
         graph["joint_type_default"] = TypeName(jointTypeRules.Default);
         graph["joint_type_pair_rules"] = jointTypeRules.PairCount;
         graph["joint_type_counts"] = new JObject
