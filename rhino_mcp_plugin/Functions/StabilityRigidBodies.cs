@@ -564,7 +564,8 @@ internal static class StabilityRigidBodies
         bool kineticDamping,
         int sampleCount,
         Func<double> measure,
-        Func<double, bool> stopEarly)
+        Func<double, bool> stopEarly,
+        Vector3d[][] siteForces = null)
     {
         var steps = Math.Max(1, (int)Math.Ceiling(durationSeconds / timestep));
         var result = new StabilityDynamics.Result
@@ -788,6 +789,14 @@ internal static class StabilityRigidBodies
                         pull += damping;
                     }
 
+                    // What this joint is carrying, overwritten every step so the last one
+                    // survives. At the end of a run that settled, that is the reaction at
+                    // rest - the force the joint has to be able to hold.
+                    if (siteForces != null)
+                    {
+                        siteForces[s][i] = pull;
+                    }
+
                     body.Force += pull;
                     body.Torque += Vector3d.CrossProduct(arm, pull);
                 }
@@ -972,6 +981,142 @@ internal static class StabilityRigidBodies
 public partial class RhinoMCPModFunctions
 {
     /// <summary>
+    /// What every joint of the model is carrying, once it has settled.
+    /// </summary>
+    /// <remarks>
+    /// "Is it stable" is a yes or no, and the next question an engineer asks is which parts
+    /// are working and how hard. Nothing here is new physics: the force at each bearing point
+    /// is what the solver already applies every step, kept from the last one.
+    ///
+    /// The up-to-four Gauss points of one bearing are summed back into the single force that
+    /// joint carries, and the force is reported as the lowest-numbered body at the joint
+    /// receives it, so a pair reads once rather than twice with opposite signs.
+    ///
+    /// Tension is positive, following the sign the contact branch already uses: a force along
+    /// the outward normal of a body is one pulling it away from the joint, which is what a dry
+    /// bearing cannot supply and a bolt can.
+    ///
+    /// That is tension <em>across the bearing plane</em>, and not a member's axial force. For
+    /// a column standing on a pad the two coincide; for a diagonal pinned at a node they do
+    /// not, and reading one as the other would be wrong by the cosine between them. What is
+    /// reported is what the joint carries, which is the question a fastener is chosen to
+    /// answer.
+    /// </remarks>
+    private static JArray JointForceReport(
+        List<PinnedBody> pinned,
+        List<StabilityRigidBodies.Site> sites,
+        Vector3d[][] siteForces,
+        List<int[]> slotJoints)
+    {
+        var report = new JArray();
+        if (siteForces == null)
+        {
+            return report;
+        }
+
+        // Keyed by the joint rather than by the site: one bearing is up to four sites.
+        var totals = new Dictionary<(int Body, int Joint), (Vector3d Force, Vector3d Normal,
+            Point3d Point, StabilityRigidBodies.JointType Type, List<int> Bodies,
+            double PeakTension, int Points)>();
+
+        for (var s = 0; s < sites.Count; s++)
+        {
+            var site = sites[s];
+            if (site.Grounded || site.Bodies.Count == 0)
+            {
+                continue;
+            }
+
+            // The lowest-numbered body at the site, so all four Gauss points of one bearing
+            // agree on whose force is being reported.
+            var pick = 0;
+            for (var i = 1; i < site.Bodies.Count; i++)
+            {
+                if (site.Bodies[i] < site.Bodies[pick])
+                {
+                    pick = i;
+                }
+            }
+
+            var body = site.Bodies[pick];
+            var slot = site.Slots[pick];
+            if (body >= slotJoints.Count || slot >= slotJoints[body].Length)
+            {
+                continue;
+            }
+
+            var joint = slotJoints[body][slot];
+            if (joint < 0)
+            {
+                continue;
+            }
+
+            var normal = site.Normal.IsValid && site.Outward.Count == site.Bodies.Count
+                ? site.Normal * site.Outward[pick]
+                : Vector3d.Unset;
+
+            var key = (body, joint);
+            if (!totals.TryGetValue(key, out var entry))
+            {
+                entry = (Vector3d.Zero, normal, site.Anchor, site.Type,
+                    new List<int>(site.Bodies), double.NegativeInfinity, 0);
+            }
+
+            var force = siteForces[s][pick];
+            entry.Force += force;
+            entry.Points++;
+
+            // The most any single bearing point is being pulled outward. Summing the four
+            // points of a bearing gives the force the joint carries, and hides the one thing
+            // a fastener is sized for: an eccentric bearing can be in net compression while
+            // its far edge is in tension, which is what lifts and what a bolt has to hold.
+            if (normal.IsValid)
+            {
+                entry.PeakTension = Math.Max(entry.PeakTension, force * normal);
+            }
+
+            totals[key] = entry;
+        }
+
+        foreach (var pair in totals)
+        {
+            var entry = pair.Value;
+            var magnitude = entry.Force.Length;
+            var record = new JObject
+            {
+                ["body"] = pair.Key.Body,
+                ["with"] = new JArray(entry.Bodies.Where(b => b != pair.Key.Body)
+                    .Select(b => (object)b).ToArray()),
+                ["joint_type"] = TypeName(entry.Type),
+                ["force_n"] = Math.Round(magnitude, 3)
+            };
+
+            var guid = pinned[pair.Key.Body].Node?.Node?["g"]?.ToString();
+            if (!string.IsNullOrEmpty(guid))
+            {
+                record["guid"] = guid;
+            }
+
+            record["bearing_points"] = entry.Points;
+            if (entry.Normal.IsValid)
+            {
+                var tension = entry.Force * entry.Normal;
+                var shear = (entry.Force - tension * entry.Normal).Length;
+                record["tension_n"] = Math.Round(tension, 3);
+                record["shear_n"] = Math.Round(shear, 3);
+                if (entry.Points > 1 && !double.IsNegativeInfinity(entry.PeakTension))
+                {
+                    record["peak_point_tension_n"] = Math.Round(entry.PeakTension, 3);
+                }
+            }
+
+            report.Add(record);
+        }
+
+        return report;
+    }
+
+    /// <summary>
     /// The pinned assembly as rigid bodies obeying Newton's and Euler's equations.
     /// </summary>
     /// <remarks>
@@ -1049,12 +1194,17 @@ public partial class RhinoMCPModFunctions
         var jointShare = new List<double[]>(pinned.Count);
         var slotTypes = new List<StabilityRigidBodies.JointType[]>(pinned.Count);
         var slotNormals = new List<Vector3d[]>(pinned.Count);
+        // Which joint each attachment belongs to, so the up-to-four Gauss points of one
+        // bearing can be summed back into the one force that joint carries. Reporting them
+        // separately would quarter every number and describe a bearing nobody built.
+        var slotJoints = new List<int[]>(pinned.Count);
         for (var i = 0; i < pinned.Count; i++)
         {
             var attachments = new List<Point3d>();
             var share = new List<double>();
             var types = new List<StabilityRigidBodies.JointType>();
             var normals = new List<Vector3d>();
+            var joints = new List<int>();
             for (var j = 0; j < pinned[i].JointPoints.Count; j++)
             {
                 var extent = j < pinned[i].JointExtents.Count
@@ -1077,6 +1227,7 @@ public partial class RhinoMCPModFunctions
                     share.Add(1.0 / spread.Count);
                     types.Add(type);
                     normals.Add(normal);
+                    joints.Add(j);
                 }
             }
 
@@ -1090,6 +1241,13 @@ public partial class RhinoMCPModFunctions
 
             groundSlots.Add(grounded);
             jointShare.Add(share.ToArray());
+            while (joints.Count < attachments.Count)
+            {
+                // Ground attachments belong to no joint of the model's own.
+                joints.Add(-1);
+            }
+
+            slotJoints.Add(joints.ToArray());
             while (types.Count < attachments.Count)
             {
                 // Ground attachments: the earth holds what stands on it, both ways.
@@ -1192,7 +1350,12 @@ public partial class RhinoMCPModFunctions
         // forces that are not equal and opposite.
         foreach (var site in sites)
         {
-            if (site.Type != StabilityRigidBodies.JointType.Contact || !site.Normal.IsValid)
+            // Sided for every type, not only for contact. Only a contact joint acts on it -
+            // the force loop still checks the type before using it - but which side of a
+            // bearing a body sits on is a fact about the geometry, and it is what turns a
+            // reported force into a tension or a compression. Restricting it to contact left
+            // every welded and pinned joint reporting a magnitude with no sense to it.
+            if (!site.Normal.IsValid)
             {
                 continue;
             }
@@ -1233,6 +1396,16 @@ public partial class RhinoMCPModFunctions
             return worst;
         }
 
+        // What each joint carries, captured on the last step of the settling run and so, for
+        // a run that settled, the reaction at rest. Only this run records them: the sway runs
+        // below re-run the model under a lateral load and would overwrite the answer with the
+        // forces of a differently loaded structure.
+        var siteForces = new Vector3d[sites.Count][];
+        for (var i = 0; i < sites.Count; i++)
+        {
+            siteForces[i] = new Vector3d[sites[i].Bodies.Count];
+        }
+
         var collapsed = false;
         var run = StabilityRigidBodies.Run(
             bodies, sites, new Vector3d(0.0, 0.0, -gravity), durationSeconds, timestep,
@@ -1245,7 +1418,8 @@ public partial class RhinoMCPModFunctions
                 }
 
                 return collapsed;
-            });
+            },
+            siteForces);
 
         var worstPin = run.DisplacementSamples.Count > 0 ? run.DisplacementSamples.Max() : 0.0;
         var isMechanism = worstPin > threshold;
@@ -1361,6 +1535,7 @@ public partial class RhinoMCPModFunctions
         // to be diagnosable without re-deriving the rules by hand - and a contact that fell
         // back to welded for want of a measured bearing plane is a silent stiffening
         // otherwise.
+        graph["joint_forces"] = JointForceReport(pinned, sites, siteForces, slotJoints);
         graph["bearing_source"] = allowBuriedBearings
             ? "buried"
             : preferExactBearings ? "exact" : "sampled";

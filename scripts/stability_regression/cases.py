@@ -517,6 +517,84 @@ SHOW_WORK = False
 
 
 # --------------------------------------------------------------------------------------
+# What the joints carry, against statics done by hand
+# --------------------------------------------------------------------------------------
+#
+# The three micro columns stand at (-500,-300), (500,-300) and (0,500) under a block centred
+# on the origin, so the block's weight does not divide equally between them. Equilibrium about
+# the block's centre gives it exactly:
+#
+#     2a + b = W          the three reactions carry the weight
+#     -600a + 500b = 0    and put no moment into the block
+#     -> a = W/3.2,  b = 1.2a
+#
+# That is a closed form, so it says whether a reported force is right rather than whether two
+# runs agree. It also pins the sign convention: a column under a block is in compression, so
+# its tension reads negative.
+MICRO_REACTION_TOLERANCE = 0.02
+
+
+def check_joint_forces(send: Callable[[str, dict], Any], ids: list[str]) -> list[str]:
+    """Reported joint forces against the reactions statics requires."""
+    result = send("evaluate_stability", {
+        "mode": "pinned_dynamic",
+        "integrator": "rigid_bodies",
+        "ids": ids,
+        "gravity": GRAVITY,
+        "solver_substeps": 1,
+        "display": SHOW_WORK,
+        "joint_type": "welded",
+        "damping_ratio": MICRO_DAMPING["rigid_bodies"]["damping_ratio"],
+        **MICRO_PARAMS,
+    })
+
+    forces = result.get("joint_forces") or []
+    if not forces:
+        return ["no joint forces reported"]
+
+    weight = MICRO_BLOCK_KG * GRAVITY
+    near = weight / 3.2
+    far = 1.2 * near
+
+    problems = []
+
+    # Six joints: three columns to the block above and three to the pad below. The two sides
+    # differ only by the columns' own weight, so their magnitudes interleave and cannot be
+    # told apart by sorting - which is what a first version of this check tried to do.
+    #
+    # Two things pin the answer without needing to separate them. The ratio between the
+    # largest and the smallest is the ratio statics demands, 1.2, and it is a pure statement
+    # about the distribution. The sum over all six is the block's weight counted twice, once
+    # into the columns and once out of them, plus the columns' own.
+    if len(forces) != 6:
+        problems.append(f"{len(forces)} joints reported, expected 6")
+
+    magnitudes = sorted(f["force_n"] for f in forces)
+    if magnitudes[0] > 0.0:
+        ratio = magnitudes[-1] / magnitudes[0]
+        if abs(ratio - far / near) > MICRO_REACTION_TOLERANCE * (far / near):
+            problems.append(
+                f"largest reaction is {ratio:.3f} times the smallest, expected "
+                f"{far / near:.3f}")
+
+    columns = 3.0 * MICRO_COLUMN_KG * GRAVITY
+    want_total = 2.0 * weight + columns
+    total = sum(magnitudes)
+    if abs(total - want_total) > MICRO_REACTION_TOLERANCE * want_total:
+        problems.append(f"reactions sum to {total:.0f} N against {want_total:.0f} N")
+
+    # A column under a block is in compression, whatever else is true.
+    for f in forces:
+        tension = f.get("tension_n")
+        if tension is None:
+            problems.append("a joint reported no sense, so it had no measured bearing plane")
+        elif tension > 0.0:
+            problems.append(f"a joint reads {tension:.0f} N of tension under a block resting on it")
+
+    return problems
+
+
+# --------------------------------------------------------------------------------------
 # A truss set down on its pads, rather than bolted to them
 # --------------------------------------------------------------------------------------
 #
@@ -2201,6 +2279,17 @@ CASES: list[Case] = [
     #
     # It passes now because "pinned" is an alias for the dynamic solver and the relaxed one
     # is deleted. The defect is gone rather than tolerated, and the assertion never moved.
+    Case(
+        name="joint_forces_reactions",
+        mode="pinned_dynamic",
+        tier=SYSTEMS,
+        stable=True,
+        reason=(
+            "three columns under an off-centre block carry W/3.2, W/3.2 and 1.2 W/3.2 by "
+            "statics, and every one of them is in compression"),
+        build=micro_stack_build(1),
+        check=check_joint_forces,
+    ),
     Case(
         name="bridge_on_pads",
         mode="pinned_dynamic",

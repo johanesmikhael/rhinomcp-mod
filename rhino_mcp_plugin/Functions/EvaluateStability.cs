@@ -606,7 +606,7 @@ public partial class RhinoMCPModFunctions
                             "verdict", "conclusive", "converged", "decay_ratio_per_swing",
                             "projected_displacement_m", "lateral_load_fraction", "sway",
                             "joint_count", "joint_type_default", "joint_type_counts",
-                            "bearing_source",
+                            "bearing_source", "joint_forces",
                             "contact_joints_sided", "contact_joints_open", "joint_type_pair_rules",
                             "bounded_response", "motion_reversals",
                             "mechanism_threshold_m", "verdict_metric",
