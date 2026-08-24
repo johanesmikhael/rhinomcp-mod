@@ -1,8 +1,109 @@
 # Stability evaluator — state of the work
 
-Branch `MultiBodyStability`, current as of 2026-08-21. Written to survive a context
-reset: what the modes do, what is trustworthy, what is not, and the cases whose
-answers are known independently of the solver.
+Branch `JointTypes`. **The section below supersedes the rest of this file where they
+disagree** - everything after it was written on 2026-08-21 against branch
+`MultiBodyStability` and parts of it are now wrong rather than merely old. Written to
+survive a context reset: what the modes do, what is trustworthy, what is not, and the
+cases whose answers are known independently of the solver.
+
+---
+
+# Since 2026-08-24
+
+Suite: **fast 17/17, systems 11/11, geometry 4/4, micro 7/8** - micro's one red is
+`free_fall_two_members_particles`, committed failing on purpose.
+
+## Bearings are measured, not sampled
+
+The solver builds joints over the polygon two flat faces actually share, on the mean plane
+between them. `PlanarBearing.cs`. One condition, `-burial <= d <= gap`, covers all three
+states two solids can be drawn in - nearly touching, touching, overlapping - and Brep, mesh
+and mixed pairs all reduce to one `PlanarRegion` intermediate.
+
+Three kinds of contact, from one rule about the two faces:
+
+| faces | kind | what the solver gets |
+| --- | --- | --- |
+| near parallel | `planar` | the shared polygon on the mean plane |
+| crossing, no overlap | `line` | the line they cross along - **a hinge about itself**, since a zero half-width collapses that axis to one bearing point |
+| crossing and overlapping | `buried` | the surface inside the shared volume |
+
+`bearing_source` = `sampled` | `exact` (default) | `buried`. Sampling remains for curved
+faces, which have no flat region to intersect. **Buried is opt-in**: its area grows with how
+far the drawing goes through itself, and it takes the splayed-leg case from 0.661 mm to 1.097
+against a closed form of 0.603.
+
+Never bisect two face normals for a skew contact - 12.5 degrees of error at 25 degrees of
+skew, and historically it walked a truss 112 mm off its supports. The normal comes from the
+face the line runs *inside*.
+
+## A joint nobody named is a `contact`
+
+Was `welded`, which is the strongest assumption available applied where the least is known -
+it reports toppling structures as standing. `pin` is not the safe end either: it hangs, and it
+discards the bearing, so a stack becomes a mechanism hinged at points that exist nowhere in
+the drawing. Contact is the only one of the three that describes any two things merely found
+touching.
+
+## Joints have a capacity
+
+`assign_joint_type(joint_type="pin", capacity_kn=12, layer="Truss")`. Absent means unlimited,
+which is what every joint was before. **Tension only**, **per bearing point** - which is what
+gives it a moment capacity, by the mechanism contact already uses. It yields rather than
+breaking. `joints_with_capacity`, `joints_at_capacity`, and `capacity_n` / `reached_capacity`
+per joint.
+
+**Read `peak_point_tension_n`, never the net.** A cantilever's connection sits in net
+compression at -7.1 kN while one of its bearing points is pulled at 24.5.
+
+## Joint forces are reported
+
+`joint_forces` on the rigid path: `force_n`, `tension_n` (tension positive, measured *across
+the bearing plane* and not along a member), `shear_n`, `bearing_points`,
+`peak_point_tension_n`, `capacity_n`, `reached_capacity`. Captured on the last step of the
+verdict run - not the sway runs, which reload the structure laterally.
+
+Verified against statics: three columns under an off-centre block read 15420 / 15420 / 18424
+where equilibrium demands 15323 / 15323 / 18387.
+
+## Two clustering defects, both fixed
+
+1. **Joint type is resolved per link, before merging**, and links that answer differently are
+   never merged. A link is a fact about the model; a node is something the clustering
+   invented. Previously a truss support merged four bolted connections with a bearing on a
+   pad and made them all contact, and the truss came apart at 0.6 m/s.
+2. **Two contacts with the body's own middle between them are on opposite faces**, so two
+   joints, whatever the distance. The radius rule assumes slenderness; a plate's smallest
+   dimension *is* the gap between its faces. This fixed `axial_two_storeys_rigid_bodies`,
+   red since the rigid path existed: 0.785 mm against a closed-form 0.928, now 0.942.
+
+Both can only **split** nodes that were wrongly merged, which is why nothing else moved.
+
+## The verdict no longer depends on how long you watched
+
+Motion is sampled at a fixed cadence in simulated time, not a fixed count of 32 however long
+the run. The old behaviour was not even monotonic - one bridge read 3.0 mm inconclusive over
+half a second, 10.8 stable over two, 5.1 inconclusive over five, 5.1 stable over ten.
+
+**`inconclusive` reports as not stable**, so a structure soft in the direction its mechanisms
+move - and therefore slow - can be judged before it has swung once. Duration is a cap, not a
+price: the run stops as soon as it can conclude.
+
+## Open, in the order I would take them
+
+1. **Coverage.** ~35 cases, mostly bridges and stacks plus a pavilion and a hybrid. Every
+   defect found on 2026-08-24 came from varying something previously held fixed.
+2. **Joint stiffness is fixed at 2k per end** rather than shared along a member's load path,
+   so a member's stiffness depends on how many joints it happens to have - a property of the
+   mesh, not the member.
+3. **Force visualisation.** All the data now exists in `joint_forces`; this is a drawing job,
+   not a physics one. Colour by sense, scale by magnitude against the model's own maximum,
+   draw through `WriteMultiBodyDisplay` / `MCPStabilityConduit`.
+4. **Mass is double-counted in overlaps** when it comes from `assign_mass(density=...)`.
+   Roughly 4% for a centreline-drawn truss, and it mostly cancels.
+
+---
+
 
 ## The modes
 

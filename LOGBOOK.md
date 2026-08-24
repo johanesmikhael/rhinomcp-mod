@@ -310,6 +310,65 @@ abutting explicit and the error impossible to write. **A model that fails in a d
 physics forbids is a modelling error until proven otherwise**, and it is worth checking the
 geometry before the solver.
 
+## On measuring before mechanising
+
+**Emit the new measurement beside the old one and compare, before switching anything to it.**
+Exact bearing measurement was built to replace a sampler, and the comparison across every
+suite model was made the deliverable of the step *before* the switch. It found two defects in
+the new code that no amount of reading it would have: a plan prefilter comparing boxes in 3D,
+so it rejected exactly the offset the offset test had just accepted, and a burial bound taken
+from a bounding box, which let two braces three metres apart pair up because a diagonal
+member's box measures 2978 mm along its own 150 mm section.
+
+**A limit that nothing reaches must change nothing, to the micrometre.** That is the test that
+separates a capacity from an accidental change in stiffness. A cantilever needing 24.5 kN at a
+bearing point behaved identically at 50 kN a point and yielded at 2.5.
+
+**Verify against a closed form, never against the previous run.** Three columns under an
+off-centre block must carry W/3.2, W/3.2 and 1.2W/3.2, because they take the weight and put no
+moment into the block. Measured 15420, 15420, 18424 against 15323, 15323, 18387. A test that
+compares two runs only proves the code is consistent with itself.
+
+## On granularity
+
+**Ask the question about the thing that exists.** A link - these two elements meet - is a fact
+about the model. A node is something the clustering invented. Resolving the joint type per
+node asked the rules about the invention, and at a truss support the invention merged four
+bolted connections with a bearing on a pad. Weakest-governs then applied contact to the bolted
+joints, they inherited the pad's normal, and the truss came apart at 0.6 m/s.
+
+**When the right answer and the wrong answer are the same number, no threshold can help.** The
+clustering radius was a body's smallest dimension, which works because a member's ends are
+2000 mm apart with a 150 mm section. A plate has no such gap: its smallest dimension *is* the
+distance between its two faces, so a 200 mm spacer's joints merged on a tie. What separates
+them is not how far apart two contacts are but which side of the body each is on.
+
+**Net force is the wrong thing to check on a joint.** A cantilever's connection sits in net
+compression at -7.1 kN while one of its bearing points is pulled at 24.5. Capacity is per
+bearing point for the same reason, which is also what gives it a moment capacity for free.
+
+## On verdicts
+
+**A verdict that changes with how long you watched is not a verdict.** Everything the answer
+rested on - largest displacement, the reversals that say a motion is bounded, the check that
+fires on crossing the collapse threshold - was read from 32 samples however long the run was.
+One bridge gave 3.0 mm inconclusive over half a second, 10.8 stable over two, 5.1 inconclusive
+over five, 5.1 stable over ten. **Non-monotonic is the tell** that a defect is in the
+measurement and not the physics.
+
+**`inconclusive` reports as not stable, so the tool is biased against soft structures.** A
+structure soft in the direction its mechanisms move is a slow one, and the bounded test needs
+the motion to reverse twice. Over the default half second a very soft mode has not completed
+one swing. Duration is a cap and not a price - the run stops as soon as it can conclude - so
+asking for longer costs nothing for anything that settles.
+
+**The strongest assumption applied where the least is known is the wrong default.** The
+default joint type was welded, which reports toppling structures as standing. Pin is not the
+safe end either: it hangs, so an overhanging cap never falls, and it discards the bearing, so
+three blocks stacked on 500 x 600 of measured contact become a mechanism hinged at points that
+exist nowhere in the drawing. Contact is the only one of the three that describes any two
+things merely found touching.
+
 ## On numerics
 
 **A test model's cost is set by its heaviest, stubbiest body, not by the physics under test.**
@@ -350,6 +409,13 @@ next MCP call fails with "Bad IL range." Ignoring this cost several restarts.
 **`RigidMesh.PIndex[0]` is the body particle**, not the first listed point. An off-by-one
 there had the motion metric reading 2.807 m while the real per-body pin displacement was
 0.026 m.
+
+**A string replace that misses is silent.** Editing C# through a Python heredoc, an anchor
+shifted by an earlier edit in the same region made `s.replace` a no-op. The build succeeded
+and every downstream signal looked right - capacities resolved, `joints_with_capacity` counted,
+`capacity_n` reported per joint - with the one line that did the work absent. What caught it
+was a number that could not be true: a 2 kN limit, 4106 N of tension, nothing at capacity.
+`assert old in s` before every replace.
 
 **A client timeout leaves Rhino's handler wedged** - process alive, socket accepting, never
 responding. It needs a restart. Worth fixing before running long evaluations routinely.
