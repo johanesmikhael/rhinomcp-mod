@@ -640,7 +640,23 @@ internal static class StabilityRigidBodies
         // the one whose motion sets the fastest mode the damping has to stay stable against.
         var siteDamping = SiteDamping(bodies, sites, dampingRatio);
 
-        var sampleEvery = Math.Max(1, steps / Math.Max(1, sampleCount));
+        // How often the motion is looked at, in simulated time rather than as a fixed count.
+        //
+        // Dividing the step count by a sample count means a longer run is sampled more
+        // coarsely, so the answer depends on how long the run was asked to be - and not
+        // monotonically. This bridge reported 3.0 mm and inconclusive over half a second,
+        // 10.8 mm and stable over two, 5.1 mm and inconclusive over five, 5.1 mm and stable
+        // over ten. It is one trajectory; what changed is how much of it anyone looked at.
+        //
+        // Everything the verdict rests on is read from these samples: the largest
+        // displacement, the reversals that say a motion is bounded, the check that fires when
+        // the collapse threshold is crossed. A peak between two samples is a peak that never
+        // happened. So the cadence is a property of the physics - the default run, divided
+        // into the same number of samples it always was - and a run ten times as long gets ten
+        // times as many samples rather than ten times the gap between them.
+        var sampleInterval = StabilityDynamics.DefaultDurationSeconds /
+            Math.Max(1, sampleCount);
+        var sampleEvery = Math.Max(1, (int)Math.Round(sampleInterval / timestep));
         var previousKinetic = 0.0;
         var lastSampled = -1.0;
         var recentDeltas = new List<double>(StabilityDynamics.ConvergenceWindow);

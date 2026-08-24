@@ -2216,25 +2216,34 @@ CASES: list[Case] = [
         name="bridge_unbraced_pinned_alias",
         mode="pinned",
         tier=FAST,
-        # Committed failing, and the reason is the point of keeping it.
+        # It stands, and it takes a second to say so.
         #
-        # The case is about a pinned truss whose four mechanisms are infinitesimal, so it
-        # stands by stiffening at second order. It passed for years on the evaluator's welded
-        # default - which removes the mechanisms altogether, so the thing the case exists to
-        # test was never being tested. Changing the default to contact exposed that, and
-        # stating the joint the case is actually about, pin, gives 3.0 mm of drift and an
-        # unstable verdict.
+        # Four infinitesimal mechanisms stiffen at second order, so the structure is soft in
+        # the direction the modes move and arrests rather than collapsing: 6.4 mm against a
+        # collapse threshold of 60.8. But soft means slow. Over the default half second this
+        # mode has not completed a single swing, and the test that says a motion is bounded
+        # needs it to reverse twice - so the run ends inconclusive, and inconclusive reports
+        # as not stable.
         #
-        # So the hand answer and the solver now disagree, in the open. Either second-order
-        # stiffening is beyond a relaxation solver that has no geometric stiffness, or the
-        # hand answer is wrong. Neither is settled by re-baselining this to unstable, and
-        # neither is settled by putting welded back.
+        # A second is enough, and asking for one costs nothing: the run stops as soon as it
+        # can conclude, so 1, 2 and 4 seconds all end at the same 42 samples with the same
+        # 6.362 mm. Duration is a cap, not a price.
+        #
+        # It read unstable for a second reason too, now fixed in the solver: the verdict was
+        # computed from 32 samples however long the run was, so the answer was not even
+        # monotonic in duration - 3.0 mm and inconclusive over half a second, 10.8 and stable
+        # over two, 5.1 and inconclusive over five, 5.1 and stable over ten. One trajectory,
+        # four answers, differing only in how much of it anyone looked at.
+        # It also passed for years on the evaluator's welded default, which removes the
+        # mechanisms altogether - so the thing the case exists to test was never being tested.
+        # Changing the default to contact is what exposed that, and stating the joint it is
+        # actually about, pin, is what let the question be asked at all.
         stable=True,
         reason=(
             "infinitesimal mechanisms stiffen at second order, so it stands; and \"pinned\" "
             "must now answer identically to \"pinned_dynamic\""),
         build=bridge_build(braced=False),
-        params={"joint_type": "pin"},
+        params={"joint_type": "pin", "duration_seconds": 1.0},
     ),
 ]
 
