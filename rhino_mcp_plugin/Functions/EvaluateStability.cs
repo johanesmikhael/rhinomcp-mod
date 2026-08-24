@@ -13,6 +13,15 @@ namespace RhinoMCPModPlugin.Functions;
 
 public partial class RhinoMCPModFunctions
 {
+    /// <summary>
+    /// What a joint nobody named is taken to be. Named once, because the graph overlay has to
+    /// draw the same answer the solver will compute - it was a literal in two places, and when
+    /// it changed in one of them a bridge whose joints would be solved as contact was drawn as
+    /// 207 welded ones.
+    /// </summary>
+    internal const StabilityRigidBodies.JointType DefaultJointType =
+        StabilityRigidBodies.JointType.Contact;
+
     public const string GraphKey = "rhinomcp-mod:connectivity-graph";
     public const string EvaluationGraphKey = "rhinomcp-mod:connectivity-graph-eva";
     public const string StabilityKey = "rhinomcp.stability.v1";
@@ -506,7 +515,7 @@ public partial class RhinoMCPModFunctions
                     // stacked on 500 x 600 of contact become a mechanism hinged at points
                     // that exist nowhere in the drawing.
                     var jointTypeText = parameters?["joint_type"]?.ToString();
-                    var defaultJointType = StabilityRigidBodies.JointType.Contact;
+                    var defaultJointType = DefaultJointType;
                     if (!string.IsNullOrWhiteSpace(jointTypeText) &&
                         !StabilityRigidBodies.TryParseJointType(jointTypeText, out defaultJointType))
                     {

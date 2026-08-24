@@ -104,13 +104,13 @@ internal sealed class MCPConnectivityGraphConduit : DisplayConduit
         }
 
         // What each joint will be, resolved from the same rules the evaluator reads, per
-        // node so the lookup happens once rather than per edge. The default here is welded,
-        // which is what evaluate_stability defaults to for every mode but contact - the
-        // overlay cannot know which mode will be run, so it shows the rules and marks
-        // anything not covered by one as assumed.
+        // node so the lookup happens once rather than per edge. The default has to be the
+        // evaluator's own, or the overlay says one thing and the solver does another: when
+        // the default moved from welded to contact this was left behind, and a bridge whose
+        // joints would all be solved as contact was drawn as 207 welded ones.
         var rules = new Functions.RhinoMCPModFunctions.JointTypeRules(
             Functions.RhinoMCPModFunctions.ReadPairRules(doc),
-            Functions.StabilityRigidBodies.JointType.Welded);
+            Functions.RhinoMCPModFunctions.DefaultJointType);
         var layers = new string[graph.Nodes.Count];
         var stated = new Functions.StabilityRigidBodies.JointType?[graph.Nodes.Count];
         for (var i = 0; i < graph.Nodes.Count; i++)

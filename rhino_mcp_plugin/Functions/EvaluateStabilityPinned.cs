@@ -653,7 +653,7 @@ public partial class RhinoMCPModFunctions
         // rules are asked about that, and the clustering below is told not to merge links
         // that answered differently.
         var rules = jointTypeRules ??
-            new JointTypeRules(null, StabilityRigidBodies.JointType.Welded);
+            new JointTypeRules(null, DefaultJointType);
         var linkTypes = new StabilityRigidBodies.JointType[links.Count];
         var linkRules = new string[links.Count];
         for (var i = 0; i < links.Count; i++)
