@@ -516,6 +516,86 @@ HYBRID_SHORT_PANEL = 3800.0
 SHOW_WORK = False
 
 
+# --------------------------------------------------------------------------------------
+# A truss set down on its pads, rather than bolted to them
+# --------------------------------------------------------------------------------------
+#
+# The same braced bridge, with one thing stated that no other case states: its members are
+# bolted to one another, and the whole truss merely rests on its two pads. Every bridge case
+# before this one declared a single joint type for the entire model, so the supports - the
+# part of a real bridge most likely to move - were assumed to be as rigid as the truss.
+#
+# It should stand. A statically determinate truss under vertical load puts vertical reactions
+# into its supports and nothing else; there is no thrust to spread, which is an arch's
+# problem and not a truss's. Friction at 0.6 has almost nothing to resist.
+#
+# COMMITTED FAILING, and the reason is worth more than the case. Clustering merges every
+# contact within a body's own smallest dimension into one node, so at each support the bottom
+# chord, a vertical, a diagonal, a brace and the pad all become a single node of five bodies:
+#
+#     contact (element:one)  bodies 5  z=+0.010  ['BR_0','M_00','M_10','M_16','PAD_0']
+#
+# Weakest-governs then makes that whole node contact, including the truss's own bolted
+# connections - which are in tension there - and every pair at the site shares the node's one
+# bearing normal. So the member-to-member joints open under a downward pull, 32 joints
+# separate, and the truss comes apart at 0.6 m/s.
+#
+# Two physically different joints are being merged because they are at the same point: "these
+# members are bolted to each other" and "this assembly rests on that pad". Resolving it needs
+# a joint type per pair within a node rather than per node, which is a change to how sites are
+# built and not something to slip in behind a test.
+BRIDGE_PAD_NAMES = ("PAD_0", "PAD_1")
+
+
+def check_bridge_on_pads(send: Callable[[str, dict], Any], ids: list[str]) -> list[str]:
+    """Truss bolted to itself, resting on its pads."""
+    inventory = send("get_document_info", {"limit": 200})
+    pads = [
+        obj["id"] for obj in inventory.get("objects", [])
+        if obj.get("name") in BRIDGE_PAD_NAMES
+    ]
+    if len(pads) != len(BRIDGE_PAD_NAMES):
+        return [f"expected {len(BRIDGE_PAD_NAMES)} pads, found {len(pads)}"]
+
+    # Rules outlive a case, so this states its own from a clean table.
+    send("assign_joint_type", {"prune": True})
+    send("assign_joint_type", {"clear": True, "ids": pads})
+
+    # An element rule, not a pair rule: every joint a pad has is a bearing, whichever member
+    # is on the other side of it. Weakest-governs does the rest, contact being weaker than
+    # the pin the truss is declared with.
+    send("assign_joint_type", {"joint_type": "contact", "ids": pads})
+
+    if SHOW_WORK:
+        send("graph_display", {"enabled": True, "contact_extent": True, "ids": ids})
+
+    result = send("evaluate_stability", {
+        "mode": "pinned_dynamic",
+        "integrator": "rigid_bodies",
+        "ids": ids,
+        "gravity": GRAVITY,
+        "display": SHOW_WORK,
+        "solver_substeps": 1,
+        "lateral_load_fraction": 0.0,
+        "damping_ratio": 0.2,
+        "joint_type": "pin",
+    })
+    send("assign_joint_type", {"clear": True, "ids": pads})
+
+    problems = []
+    counts = result.get("joint_type_counts") or {}
+    if not counts.get("contact"):
+        problems.append("the pad rule reached no joint at all")
+
+    if not result.get("stable"):
+        problems.append(
+            f"unstable at {1000 * (result.get('max_pin_displacement_m') or 0.0):.1f} mm with "
+            f"{result.get('contact_joints_open')} of {counts.get('contact')} contact joints "
+            "open - a determinate truss puts only vertical reactions into its supports")
+
+    return problems
+
+
 def timber_mass(dx_mm: float, dy_mm: float, dz_mm: float, density: float) -> float:
     return density * (dx_mm / 1000.0) * (dy_mm / 1000.0) * (dz_mm / 1000.0)
 
@@ -2121,6 +2201,17 @@ CASES: list[Case] = [
     #
     # It passes now because "pinned" is an alias for the dynamic solver and the relaxed one
     # is deleted. The defect is gone rather than tolerated, and the assertion never moved.
+    Case(
+        name="bridge_on_pads",
+        mode="pinned_dynamic",
+        tier=SYSTEMS,
+        stable=True,
+        reason=(
+            "a determinate truss puts vertical reactions into its supports and no thrust, so "
+            "bolted to itself and set down on its pads it stands"),
+        build=bridge_build(braced=True),
+        check=check_bridge_on_pads,
+    ),
     Case(
         name="bridge_unbraced_pinned_alias",
         mode="pinned",
