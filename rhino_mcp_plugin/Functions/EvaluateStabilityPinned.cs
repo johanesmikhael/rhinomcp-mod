@@ -638,6 +638,34 @@ public partial class RhinoMCPModFunctions
             }
         }
 
+        // What each link is, resolved from its own two elements before anything is merged.
+        //
+        // The order matters and used to be the other way round. Resolving per cluster asks
+        // "what is this node", but a node is a thing the clustering invented: at a truss
+        // support the bottom chord, a vertical, a diagonal, a brace and the pad all sit
+        // within one cross-section of each other, so the members' bolted connections and the
+        // assembly's bearing on the pad arrive as one node. Weakest-governs then applied
+        // contact to the bolted connections too, and since a site has one bearing normal for
+        // every body at it, those joints opened under a downward pull and the truss came
+        // apart at 0.6 m/s.
+        //
+        // A link, unlike a node, is a fact about the model: these two elements meet. So the
+        // rules are asked about that, and the clustering below is told not to merge links
+        // that answered differently.
+        var rules = jointTypeRules ??
+            new JointTypeRules(null, StabilityRigidBodies.JointType.Welded);
+        var linkTypes = new StabilityRigidBodies.JointType[links.Count];
+        var linkRules = new string[links.Count];
+        for (var i = 0; i < links.Count; i++)
+        {
+            var elementA = bodies[links[i].A].Node;
+            var elementB = bodies[links[i].B].Node;
+            linkTypes[i] = rules.Resolve(
+                elementA?.Node?["g"]?.ToString(), elementA?.LayerName, elementA?.ElementJointType,
+                elementB?.Node?["g"]?.ToString(), elementB?.LayerName, elementB?.ElementJointType,
+                out linkRules[i]);
+        }
+
         var byBody = new List<int>[bodies.Count];
         for (var i = 0; i < links.Count; i++)
         {
@@ -682,6 +710,15 @@ public partial class RhinoMCPModFunctions
             {
                 for (var j = i + 1; j < indices.Count; j++)
                 {
+                    // Two joints that are near each other and are not the same joint stay
+                    // apart. Where every link agrees - which is every model given one joint
+                    // type, and nearly all of the suite - this never fires and the clustering
+                    // is exactly what it was.
+                    if (linkTypes[indices[i]] != linkTypes[indices[j]])
+                    {
+                        continue;
+                    }
+
                     if (links[indices[i]].Point.DistanceTo(links[indices[j]].Point) <= radius)
                     {
                         Union(indices[i], indices[j]);
@@ -723,30 +760,19 @@ public partial class RhinoMCPModFunctions
             }
         }
 
-        // What each node is, resolved once per cluster from the rules.
-        //
-        // Per cluster rather than per link, because a cluster is one node and one node has one
-        // type: two contacts that merged are the same joint seen twice. Where the links inside
-        // it disagree - a beam-to-column rule and a beam-to-beam rule landing in the same
-        // cluster - the weakest governs, the same way it does where two elements disagree.
-        var rules = jointTypeRules ??
-            new JointTypeRules(null, StabilityRigidBodies.JointType.Welded);
+        // What each node is. Its links agree by construction now - the clustering above
+        // refused to merge any that did not - so this reads the answer rather than reducing
+        // to it. The weakest is still taken, which costs nothing when they are all equal and
+        // keeps the rule honest if that ever stops being true.
         var nodeTypes = new Dictionary<int, StabilityRigidBodies.JointType>();
         var nodeRules = new Dictionary<int, string>();
         foreach (var index in Enumerable.Range(0, links.Count))
         {
-            var a = bodies[links[index].A].Node;
-            var b = bodies[links[index].B].Node;
-            var type = rules.Resolve(
-                a?.Node?["g"]?.ToString(), a?.LayerName, a?.ElementJointType,
-                b?.Node?["g"]?.ToString(), b?.LayerName, b?.ElementJointType,
-                out var which);
-
             var root = Find(index);
-            if (!nodeTypes.TryGetValue(root, out var best) || type < best)
+            if (!nodeTypes.TryGetValue(root, out var best) || linkTypes[index] < best)
             {
-                nodeTypes[root] = type;
-                nodeRules[root] = which;
+                nodeTypes[root] = linkTypes[index];
+                nodeRules[root] = linkRules[index];
             }
         }
 
