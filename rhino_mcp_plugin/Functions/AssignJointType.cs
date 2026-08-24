@@ -75,6 +75,22 @@ public partial class RhinoMCPModFunctions
                 };
             }
 
+            // How much this joint can hold, stated with what it is. Absent means unlimited,
+            // which is what every joint was before anyone could say otherwise.
+            double? capacityNewtons = null;
+            if (parameters?["capacity_kn"] != null &&
+                parameters["capacity_kn"].Type != JTokenType.Null)
+            {
+                var kilonewtons = parameters["capacity_kn"].Value<double>();
+                if (!(kilonewtons > 0.0) || double.IsInfinity(kilonewtons))
+                {
+                    throw new InvalidOperationException(
+                        "capacity_kn must be a positive number of kilonewtons.");
+                }
+
+                capacityNewtons = kilonewtons * 1000.0;
+            }
+
             var type = StabilityRigidBodies.JointType.Welded;
             if (!clear && !pruning && !StabilityRigidBodies.TryParseJointType(typeText, out type))
             {
@@ -105,6 +121,9 @@ public partial class RhinoMCPModFunctions
                         ["a"] = entry.Value.A,
                         ["b"] = entry.Value.B,
                         ["joint_type"] = TypeName(entry.Value.Type),
+                        ["capacity_kn"] = entry.Value.CapacityNewtons.HasValue
+                            ? entry.Value.CapacityNewtons.Value / 1000.0
+                            : (double?)null,
                         ["stale"] = why
                     });
                     all.Remove(entry.Key);
@@ -159,14 +178,19 @@ public partial class RhinoMCPModFunctions
                         }
                         else
                         {
-                            rules[key] = MakePairRule(a, b, type);
+                            var made = MakePairRule(a, b, type);
+                            made.CapacityNewtons = capacityNewtons;
+                            rules[key] = made;
                         }
 
                         written.Add(new JObject
                         {
                             ["a"] = a,
                             ["b"] = b,
-                            ["joint_type"] = clear ? null : TypeName(type)
+                            ["joint_type"] = clear ? null : TypeName(type),
+                            ["capacity_kn"] = clear || !capacityNewtons.HasValue
+                                ? null
+                                : capacityNewtons.Value / 1000.0
                         });
                     }
                 }
@@ -211,10 +235,19 @@ public partial class RhinoMCPModFunctions
                 if (clear)
                 {
                     payload.Remove("joint_type");
+                    payload.Remove("joint_capacity_kn");
                 }
                 else
                 {
                     payload["joint_type"] = TypeName(type);
+                    if (capacityNewtons.HasValue)
+                    {
+                        payload["joint_capacity_kn"] = capacityNewtons.Value / 1000.0;
+                    }
+                    else
+                    {
+                        payload.Remove("joint_capacity_kn");
+                    }
                 }
 
                 rhinoObject.Attributes.SetUserString(StabilityKey, payload.ToString(Formatting.None));
@@ -225,7 +258,10 @@ public partial class RhinoMCPModFunctions
                     ["guid"] = rhinoObject.Id.ToString(),
                     ["name"] = rhinoObject.Name,
                     ["layer"] = doc.Layers.FindIndex(rhinoObject.Attributes.LayerIndex)?.Name,
-                    ["joint_type"] = clear ? null : TypeName(type)
+                    ["joint_type"] = clear ? null : TypeName(type),
+                    ["capacity_kn"] = clear || !capacityNewtons.HasValue
+                        ? null
+                        : capacityNewtons.Value / 1000.0
                 });
             }
 
@@ -260,7 +296,15 @@ public partial class RhinoMCPModFunctions
     internal static bool TryGetElementJointType(
         Rhino.DocObjects.RhinoObject rhinoObject, out StabilityRigidBodies.JointType type)
     {
+        return TryGetElementJointType(rhinoObject, out type, out _);
+    }
+
+    internal static bool TryGetElementJointType(
+        Rhino.DocObjects.RhinoObject rhinoObject, out StabilityRigidBodies.JointType type,
+        out double? capacityNewtons)
+    {
         type = StabilityRigidBodies.JointType.Welded;
+        capacityNewtons = null;
         var stored = rhinoObject?.Attributes?.GetUserString(StabilityKey);
         if (string.IsNullOrWhiteSpace(stored))
         {
@@ -269,8 +313,15 @@ public partial class RhinoMCPModFunctions
 
         try
         {
+            var payload = JObject.Parse(stored);
+            var kilonewtons = payload.Value<double?>("joint_capacity_kn");
+            if (kilonewtons.HasValue && kilonewtons.Value > 0.0)
+            {
+                capacityNewtons = kilonewtons.Value * 1000.0;
+            }
+
             return StabilityRigidBodies.TryParseJointType(
-                JObject.Parse(stored)["joint_type"]?.ToString(), out type);
+                payload["joint_type"]?.ToString(), out type);
         }
         catch (Exception)
         {
@@ -320,6 +371,17 @@ public partial class RhinoMCPModFunctions
         public string A;
         public string B;
         public StabilityRigidBodies.JointType Type;
+
+        /// <summary>
+        /// The most tension this joint can hold, in newtons, or null for unlimited.
+        /// </summary>
+        /// <remarks>
+        /// Tension only. Compression is limited by the material of the things meeting, not by
+        /// whatever holds them together, and a contact joint already refuses tension outright -
+        /// so this binds exactly on the joints someone declared strong, which is where the
+        /// model is otherwise unboundedly optimistic.
+        /// </remarks>
+        public double? CapacityNewtons;
 
         /// <summary>How specific this rule is: two named objects beat an object and a layer.</summary>
         public int Rank => TokenRank(A) + TokenRank(B);
@@ -445,7 +507,14 @@ public partial class RhinoMCPModFunctions
 
                 if (StabilityRigidBodies.TryParseJointType(entry["joint_type"]?.ToString(), out var type))
                 {
-                    rules[PairKey(a, b)] = MakePairRule(a, b, type);
+                    var rule = MakePairRule(a, b, type);
+                    var capacity = entry.Value<double?>("capacity_kn");
+                    if (capacity.HasValue && capacity.Value > 0.0)
+                    {
+                        rule.CapacityNewtons = capacity.Value * 1000.0;
+                    }
+
+                    rules[PairKey(a, b)] = rule;
                 }
             }
         }
@@ -480,7 +549,10 @@ public partial class RhinoMCPModFunctions
             {
                 ["a"] = rule.A,
                 ["b"] = rule.B,
-                ["joint_type"] = TypeName(rule.Type)
+                ["joint_type"] = TypeName(rule.Type),
+                ["capacity_kn"] = rule.CapacityNewtons.HasValue
+                    ? rule.CapacityNewtons.Value / 1000.0
+                    : (double?)null
             });
         }
 
@@ -588,6 +660,26 @@ public partial class RhinoMCPModFunctions
             string guidB, string layerB, StabilityRigidBodies.JointType? elementB,
             out string rule)
         {
+            return Resolve(
+                guidA, layerA, elementA, guidB, layerB, elementB, null, null, out rule, out _);
+        }
+
+        /// <summary>
+        /// The same resolution, also answering how much this joint can hold.
+        /// </summary>
+        /// <remarks>
+        /// Capacity travels with the rule that set the type, so one statement about a joint
+        /// says both what it is and what it can take. Where two element rules meet, the
+        /// smaller capacity governs for the same reason the weaker type does: a joint is no
+        /// stronger than the weaker of the two things it connects.
+        /// </remarks>
+        public StabilityRigidBodies.JointType Resolve(
+            string guidA, string layerA, StabilityRigidBodies.JointType? elementA,
+            string guidB, string layerB, StabilityRigidBodies.JointType? elementB,
+            double? capacityA, double? capacityB,
+            out string rule, out double? capacity)
+        {
+            capacity = null;
             PairRule best = null;
             foreach (var tokenA in Tokens(guidA, layerA))
             {
@@ -606,6 +698,7 @@ public partial class RhinoMCPModFunctions
                 // The rule's own name for itself, not one built from the order these two
                 // bodies happened to arrive in.
                 rule = best.Label;
+                capacity = best.CapacityNewtons;
                 return best.Type;
             }
 
@@ -613,6 +706,8 @@ public partial class RhinoMCPModFunctions
             // answer depend on the order the rules were given in, and on which body the graph
             // happened to list first at this joint. "one" and "both" for the same reason - "a"
             // and "b" would report the graph's edge direction, which means nothing to a reader.
+            capacity = Weaker(capacityA, capacityB);
+
             if (elementA.HasValue && elementB.HasValue)
             {
                 rule = "element:both";
@@ -633,6 +728,17 @@ public partial class RhinoMCPModFunctions
 
             rule = "default";
             return Default;
+        }
+
+        /// <summary>The smaller of two capacities, treating "unstated" as unlimited.</summary>
+        private static double? Weaker(double? a, double? b)
+        {
+            if (!a.HasValue)
+            {
+                return b;
+            }
+
+            return !b.HasValue ? a : Math.Min(a.Value, b.Value);
         }
 
         private static IEnumerable<string> Tokens(string guid, string layer)

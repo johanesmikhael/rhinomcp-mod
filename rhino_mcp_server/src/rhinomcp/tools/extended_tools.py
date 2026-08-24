@@ -349,6 +349,7 @@ async def assign_joint_type(
     selected: bool = False,
     clear: bool = False,
     prune: bool = False,
+    capacity_kn: float | None = None,
 ) -> dict[str, Any]:
     """State what the connections in a model are, as rules rather than per joint.
 
@@ -427,12 +428,35 @@ async def assign_joint_type(
         assign_joint_type(joint_type="contact", ids=[...])
         assign_joint_type(joint_type="pin", ids=[beam],
                           with_ids=[column])          # this joint only
+
+    capacity_kn: How much tension the joint can hold, in kilonewtons. Absent means
+        unlimited, which is what every joint is until someone says otherwise - so a
+        model without capacities behaves exactly as it did before.
+
+        Tension only. Compression is limited by the material of the things meeting,
+        not by whatever holds them together, and a "contact" joint refuses tension
+        outright - so this binds on the joints you declared strong, which is where
+        the model is otherwise unboundedly optimistic.
+
+        The limit is shared among the joint's bearing points, so it gives a moment
+        capacity as well as a force one: load an eccentric bearing hard enough and
+        its far point reaches the limit first and stops holding, so the joint sheds
+        its edge and rotates rather than failing everywhere at once.
+
+        A joint at its limit yields rather than breaking - the force holds there and
+        the structure redistributes, and if it cannot it moves, which the verdict is
+        already watching for. evaluate_stability reports joints_with_capacity and
+        joints_at_capacity, so a verdict that changed because a joint yielded says so.
+
+        assign_joint_type(joint_type="pin", capacity_kn=12, layer="Truss")
     """
     from rhinomcp.server import get_rhino_connection
 
     params: dict[str, Any] = {}
     if joint_type is not None:
         params["joint_type"] = joint_type
+    if capacity_kn is not None:
+        params["capacity_kn"] = capacity_kn
     if layer is not None:
         params["layer"] = layer
     if with_layer is not None:

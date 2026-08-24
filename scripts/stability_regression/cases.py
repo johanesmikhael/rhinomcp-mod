@@ -517,6 +517,96 @@ SHOW_WORK = False
 
 
 # --------------------------------------------------------------------------------------
+# A joint that can only hold so much
+# --------------------------------------------------------------------------------------
+#
+# A post, a 2 m arm cantilevered off it, and a weight hung under the arm's tip. The arm's
+# joint to the post carries the whole cantilever moment, so it is the joint a capacity has to
+# bind on - and it binds on the *moment*, which is the case a net force cannot see: the joint
+# is in net compression at -7.1 kN while one of its bearing points is pulled at 24.5 kN.
+#
+# The three states are the point of the case. No capacity behaves exactly as the model always
+# did. A capacity larger than the demand changes nothing at all, which is what says the limit
+# is a limit and not a stiffness. A capacity smaller than the demand yields, the arm rotates,
+# and the verdict says so.
+SKEW_POST = (300.0, 300.0, 3000.0)
+SKEW_ARM_REACH = 2000.0
+SKEW_HANGER_KG = 400.0
+
+# Measured, and asserted so it cannot drift unnoticed: the most any one bearing point of the
+# arm's joint is pulled, with nothing limiting it.
+SKEW_PEAK_POINT_N = 24472.0
+SKEW_PEAK_TOLERANCE = 0.05
+
+
+def capacity_scene() -> str:
+    return f"""
+world_box('POST', 0.0, 0.0, 0.0, {SKEW_POST[0]!r}, {SKEW_POST[1]!r}, {SKEW_POST[2]!r}, 500.0)
+world_box('ARM', 0.0, 0.0, {SKEW_POST[2]!r}, {SKEW_ARM_REACH!r}, {SKEW_POST[1]!r},
+          {SKEW_POST[2] + 300.0!r}, 300.0)
+world_box('HANGER', {SKEW_ARM_REACH - 400.0!r}, 0.0, {SKEW_POST[2] - 600.0!r},
+          {SKEW_ARM_REACH - 100.0!r}, {SKEW_POST[1]!r}, {SKEW_POST[2]!r}, {SKEW_HANGER_KG!r})
+"""
+
+
+def check_capacity(send: Callable[[str, dict], Any], ids: list[str]) -> list[str]:
+    """Unlimited, generous, and too small - and only the last of them changes anything."""
+
+    def run(capacity_kn):
+        send("assign_joint_type", {"clear": True, "ids": ids})
+        if capacity_kn is not None:
+            send("assign_joint_type",
+                 {"joint_type": "welded", "capacity_kn": capacity_kn, "ids": ids})
+        return send("evaluate_stability", {
+            "mode": "pinned_dynamic",
+            "integrator": "rigid_bodies",
+            "ids": ids,
+            "gravity": GRAVITY,
+            "solver_substeps": 1,
+            "display": SHOW_WORK,
+            "joint_type": "welded",
+            "damping_ratio": 0.2,
+            "lateral_load_fraction": 0.0,
+        })
+
+    send("assign_joint_type", {"prune": True})
+    problems = []
+
+    unlimited = run(None)
+    if not unlimited.get("stable"):
+        problems.append("the model does not stand before any capacity is stated")
+
+    peak = max(
+        (j.get("peak_point_tension_n") or 0.0) for j in (unlimited.get("joint_forces") or [{}]))
+    if abs(peak - SKEW_PEAK_POINT_N) > SKEW_PEAK_TOLERANCE * SKEW_PEAK_POINT_N:
+        problems.append(f"peak bearing-point tension {peak:.0f} N against {SKEW_PEAK_POINT_N:.0f}")
+
+    # Generous: four points share 200 kN, so 50 kN each against a demand of 24.5. Nothing
+    # should change, and "nothing" includes the deflection to the millimetre.
+    generous = run(200.0)
+    if generous.get("joints_at_capacity"):
+        problems.append(
+            f"{generous['joints_at_capacity']} joints reached a limit twice their demand")
+
+    before = unlimited.get("max_pin_displacement_m") or 0.0
+    after = generous.get("max_pin_displacement_m") or 0.0
+    if abs(after - before) > 1e-6:
+        problems.append(
+            f"a capacity nothing reaches moved the answer, {1000*before:.3f} to {1000*after:.3f} mm")
+
+    # Too small: 2.5 kN a point against 24.5 of demand. The joint yields and the arm goes.
+    small = run(10.0)
+    if not small.get("joints_at_capacity"):
+        problems.append("no joint reached a limit an order of magnitude under its demand")
+
+    if small.get("stable"):
+        problems.append("the arm stands on a joint that cannot hold its moment")
+
+    send("assign_joint_type", {"clear": True, "ids": ids})
+    return problems
+
+
+# --------------------------------------------------------------------------------------
 # What the joints carry, against statics done by hand
 # --------------------------------------------------------------------------------------
 #
@@ -2279,6 +2369,17 @@ CASES: list[Case] = [
     #
     # It passes now because "pinned" is an alias for the dynamic solver and the relaxed one
     # is deleted. The defect is gone rather than tolerated, and the assertion never moved.
+    Case(
+        name="joint_capacity_binds",
+        mode="pinned_dynamic",
+        tier=SYSTEMS,
+        stable=True,
+        reason=(
+            "a cantilever arm needs 24.5 kN at one bearing point; 50 kN a point changes "
+            "nothing and 2.5 kN a point lets the joint go"),
+        build=capacity_scene,
+        check=check_capacity,
+    ),
     Case(
         name="joint_forces_reactions",
         mode="pinned_dynamic",

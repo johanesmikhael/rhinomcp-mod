@@ -229,6 +229,34 @@ internal static class StabilityRigidBodies
         public double Friction = RhinoMCPModFunctions.DefaultContactFriction;
 
         /// <summary>
+        /// The most tension this bearing point may carry, in newtons. Infinity where nobody
+        /// said, which is every joint until someone does.
+        /// </summary>
+        /// <remarks>
+        /// Per bearing point rather than per joint, holding the joint's capacity divided by
+        /// the points it was spread over. That is what gives a capacity a moment as well as a
+        /// force, and by the mechanism a contact joint already uses: load an eccentric bearing
+        /// hard enough and its far point reaches the limit first and stops holding, so the
+        /// joint sheds its edge and rotates rather than failing everywhere at once.
+        ///
+        /// Tension only. A joint yields rather than breaking - the force holds at the limit
+        /// and the structure redistributes, and if it cannot it moves, which the verdict is
+        /// already watching for. Releasing it outright is more conservative and less useful:
+        /// it makes the answer hinge on one number being exactly right.
+        /// </remarks>
+        public double Capacity = double.PositiveInfinity;
+
+        /// <summary>
+        /// Whether this bearing point ever reached its limit during the run.
+        /// </summary>
+        /// <remarks>
+        /// Ever, not currently. A joint that yields settles at its limit, so the step that
+        /// finds it exceeded is the step before it stops being exceeded - and reading the last
+        /// step alone reports nothing happened.
+        /// </remarks>
+        public bool ReachedCapacity;
+
+        /// <summary>
         /// Which way is "out of the bearing" for each body listed here: +1 or -1 against
         /// <see cref="Normal"/>.
         /// </summary>
@@ -739,6 +767,12 @@ internal static class StabilityRigidBodies
                     site.Outward.Count == site.Bodies.Count;
                 site.Opened = 0;
 
+                // Whether this joint has a stated limit and a plane to measure tension across.
+                // Without a normal there is no way to tell a pull from a push, and capping a
+                // magnitude would limit compression too - which no fastener does.
+                var limited = !double.IsPositiveInfinity(site.Capacity) &&
+                    site.Normal.IsValid && site.Outward.Count == site.Bodies.Count;
+
                 for (var i = 0; i < site.Bodies.Count; i++)
                 {
                     var body = bodies[site.Bodies[i]];
@@ -787,6 +821,25 @@ internal static class StabilityRigidBodies
                     else
                     {
                         pull += damping;
+                    }
+
+                    // A stated capacity, reached. The joint yields: the part of the force
+                    // pulling the two apart holds at the limit while everything else is
+                    // unchanged, so the structure redistributes and, if it cannot, moves -
+                    // which is what the verdict is already watching for.
+                    //
+                    // After the contact branch rather than inside the else, because a contact
+                    // joint can be given a capacity too. It refuses tension outright, so the
+                    // limit never binds on one and costs nothing to check.
+                    if (limited)
+                    {
+                        var outward = site.Normal * site.Outward[i];
+                        var tension = pull * outward;
+                        if (tension > site.Capacity)
+                        {
+                            pull -= (tension - site.Capacity) * outward;
+                            site.ReachedCapacity = true;
+                        }
                     }
 
                     // What this joint is carrying, overwritten every step so the last one
@@ -1017,7 +1070,7 @@ public partial class RhinoMCPModFunctions
         // Keyed by the joint rather than by the site: one bearing is up to four sites.
         var totals = new Dictionary<(int Body, int Joint), (Vector3d Force, Vector3d Normal,
             Point3d Point, StabilityRigidBodies.JointType Type, List<int> Bodies,
-            double PeakTension, int Points)>();
+            double PeakTension, int Points, double Capacity, bool Reached)>();
 
         for (var s = 0; s < sites.Count; s++)
         {
@@ -1059,12 +1112,15 @@ public partial class RhinoMCPModFunctions
             if (!totals.TryGetValue(key, out var entry))
             {
                 entry = (Vector3d.Zero, normal, site.Anchor, site.Type,
-                    new List<int>(site.Bodies), double.NegativeInfinity, 0);
+                    new List<int>(site.Bodies), double.NegativeInfinity, 0, 0.0, false);
             }
 
             var force = siteForces[s][pick];
             entry.Force += force;
             entry.Points++;
+            // The joint's capacity is what its points hold between them.
+            entry.Capacity += site.Capacity;
+            entry.Reached |= site.ReachedCapacity;
 
             // The most any single bearing point is being pulled outward. Summing the four
             // points of a bearing gives the force the joint carries, and hides the one thing
@@ -1085,6 +1141,10 @@ public partial class RhinoMCPModFunctions
             var record = new JObject
             {
                 ["body"] = pair.Key.Body,
+                ["capacity_n"] = double.IsPositiveInfinity(entry.Capacity)
+                    ? (double?)null
+                    : Math.Round(entry.Capacity, 3),
+                ["reached_capacity"] = entry.Reached,
                 ["with"] = new JArray(entry.Bodies.Where(b => b != pair.Key.Body)
                     .Select(b => (object)b).ToArray()),
                 ["joint_type"] = TypeName(entry.Type),
@@ -1198,6 +1258,9 @@ public partial class RhinoMCPModFunctions
         // bearing can be summed back into the one force that joint carries. Reporting them
         // separately would quarter every number and describe a bearing nobody built.
         var slotJoints = new List<int[]>(pinned.Count);
+        // A joint's capacity divided among the points it was spread over, so four points of a
+        // bearing each hold a quarter of what the joint can.
+        var slotCapacities = new List<double[]>(pinned.Count);
         for (var i = 0; i < pinned.Count; i++)
         {
             var attachments = new List<Point3d>();
@@ -1205,6 +1268,7 @@ public partial class RhinoMCPModFunctions
             var types = new List<StabilityRigidBodies.JointType>();
             var normals = new List<Vector3d>();
             var joints = new List<int>();
+            var capacities = new List<double>();
             for (var j = 0; j < pinned[i].JointPoints.Count; j++)
             {
                 var extent = j < pinned[i].JointExtents.Count
@@ -1228,6 +1292,10 @@ public partial class RhinoMCPModFunctions
                     types.Add(type);
                     normals.Add(normal);
                     joints.Add(j);
+                    capacities.Add(
+                        j < pinned[i].JointCapacities.Count && pinned[i].JointCapacities[j].HasValue
+                            ? pinned[i].JointCapacities[j].Value / spread.Count
+                            : double.PositiveInfinity);
                 }
             }
 
@@ -1247,7 +1315,14 @@ public partial class RhinoMCPModFunctions
                 joints.Add(-1);
             }
 
+            while (capacities.Count < attachments.Count)
+            {
+                // The ground holds whatever stands on it.
+                capacities.Add(double.PositiveInfinity);
+            }
+
             slotJoints.Add(joints.ToArray());
+            slotCapacities.Add(capacities.ToArray());
             while (types.Count < attachments.Count)
             {
                 // Ground attachments: the earth holds what stands on it, both ways.
@@ -1301,6 +1376,7 @@ public partial class RhinoMCPModFunctions
                 // member feeding it, and the axial answer would move for a reason that has
                 // nothing to do with axial behaviour.
                 site.Stiffness = Math.Min(site.Stiffness, 2.0 * stiffness[b] * jointShare[b][slot]);
+                site.Capacity = Math.Min(site.Capacity, slotCapacities[b][slot]);
 
                 // Where the elements meeting here disagree about what the joint is, the
                 // weaker governs: a hinge assumed where a moment connection exists reports
@@ -1536,6 +1612,11 @@ public partial class RhinoMCPModFunctions
         // back to welded for want of a measured bearing plane is a silent stiffening
         // otherwise.
         graph["joint_forces"] = JointForceReport(pinned, sites, siteForces, slotJoints);
+        // Joints held at their stated limit. A verdict that changed because a joint yielded
+        // has to say so, rather than leaving it to be inferred from a deflection.
+        graph["joints_with_capacity"] = sites.Count(
+            s => !s.Grounded && !double.IsPositiveInfinity(s.Capacity));
+        graph["joints_at_capacity"] = sites.Count(s => s.ReachedCapacity);
         graph["bearing_source"] = allowBuriedBearings
             ? "buried"
             : preferExactBearings ? "exact" : "sampled";

@@ -132,6 +132,9 @@ public partial class RhinoMCPModFunctions
         /// </summary>
         public List<ContactExtent> JointExtents { get; } = new();
 
+        /// <summary>How much tension each joint can hold, in newtons, or null for unlimited.</summary>
+        public List<double?> JointCapacities { get; } = new();
+
         /// <summary>
         /// What each joint is, in the same order. Welded until something says otherwise -
         /// that is the behaviour these joints already had, since a spring over a measured
@@ -656,6 +659,7 @@ public partial class RhinoMCPModFunctions
             new JointTypeRules(null, DefaultJointType);
         var linkTypes = new StabilityRigidBodies.JointType[links.Count];
         var linkRules = new string[links.Count];
+        var linkCapacities = new double?[links.Count];
         for (var i = 0; i < links.Count; i++)
         {
             var elementA = bodies[links[i].A].Node;
@@ -663,7 +667,8 @@ public partial class RhinoMCPModFunctions
             linkTypes[i] = rules.Resolve(
                 elementA?.Node?["g"]?.ToString(), elementA?.LayerName, elementA?.ElementJointType,
                 elementB?.Node?["g"]?.ToString(), elementB?.LayerName, elementB?.ElementJointType,
-                out linkRules[i]);
+                elementA?.ElementJointCapacityNewtons, elementB?.ElementJointCapacityNewtons,
+                out linkRules[i], out linkCapacities[i]);
         }
 
         var byBody = new List<int>[bodies.Count];
@@ -796,6 +801,7 @@ public partial class RhinoMCPModFunctions
         // keeps the rule honest if that ever stops being true.
         var nodeTypes = new Dictionary<int, StabilityRigidBodies.JointType>();
         var nodeRules = new Dictionary<int, string>();
+        var nodeCapacities = new Dictionary<int, double?>();
         foreach (var index in Enumerable.Range(0, links.Count))
         {
             var root = Find(index);
@@ -803,6 +809,16 @@ public partial class RhinoMCPModFunctions
             {
                 nodeTypes[root] = linkTypes[index];
                 nodeRules[root] = linkRules[index];
+            }
+
+            // The smallest capacity in the node, treating unstated as unlimited: a node is no
+            // stronger than the weakest thing meeting in it.
+            var stated = linkCapacities[index];
+            if (stated.HasValue)
+            {
+                nodeCapacities[root] = nodeCapacities.TryGetValue(root, out var held) && held.HasValue
+                    ? Math.Min(held.Value, stated.Value)
+                    : stated.Value;
             }
         }
 
@@ -823,6 +839,8 @@ public partial class RhinoMCPModFunctions
                     bodies[body].JointPoints.Add(point);
                     bodies[body].JointExtents.Add(nodeExtent);
                     bodies[body].JointTypes.Add(nodeType);
+                    bodies[body].JointCapacities.Add(
+                        nodeCapacities.TryGetValue(root, out var stated) ? stated : null);
                 }
             }
         }

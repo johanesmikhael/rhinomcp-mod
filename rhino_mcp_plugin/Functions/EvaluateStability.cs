@@ -255,7 +255,9 @@ public partial class RhinoMCPModFunctions
                 // the mass came from. Read here rather than in the solver because this is the
                 // one place the graph's node is paired with its Rhino object.
                 StabilityRigidBodies.JointType? elementJointType =
-                    TryGetElementJointType(rhinoObject, out var parsedType) ? parsedType : null;
+                    TryGetElementJointType(rhinoObject, out var parsedType, out var parsedCapacity)
+                        ? parsedType
+                        : null;
 
                 stabilityNodes.Add(new StabilityNode
                 {
@@ -263,7 +265,8 @@ public partial class RhinoMCPModFunctions
                     Geometry = geometry,
                     MassKilograms = massKilograms,
                     LayerName = doc.Layers.FindIndex(rhinoObject.Attributes.LayerIndex)?.Name,
-                    ElementJointType = elementJointType
+                    ElementJointType = elementJointType,
+                    ElementJointCapacityNewtons = parsedCapacity
                 });
             }
 
@@ -607,6 +610,7 @@ public partial class RhinoMCPModFunctions
                             "projected_displacement_m", "lateral_load_fraction", "sway",
                             "joint_count", "joint_type_default", "joint_type_counts",
                             "bearing_source", "joint_forces",
+                            "joints_with_capacity", "joints_at_capacity",
                             "contact_joints_sided", "contact_joints_open", "joint_type_pair_rules",
                             "bounded_response", "motion_reversals",
                             "mechanism_threshold_m", "verdict_metric",
@@ -2687,5 +2691,9 @@ public partial class RhinoMCPModFunctions
         /// two stated rules governs, while one stated rule governs alone.
         /// </remarks>
         public StabilityRigidBodies.JointType? ElementJointType { get; set; }
+
+        /// <summary>What this element says its own joints can hold, in newtons, or null for
+        /// unlimited. Stated beside the joint type, on the same user string.</summary>
+        public double? ElementJointCapacityNewtons { get; set; }
     }
 }
