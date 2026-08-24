@@ -188,133 +188,145 @@ Keep only one server enabled at a time (`rhino` or `rhino-dev`) to avoid duplica
 7. Confirm Rhino tools appear in Claude (hammer/tools icon).
 
 
-## 0.3.0-beta.1: Experimental Assembly Stability
+## Experimental Assembly Stability
 
-This prerelease introduces an assembly stability workflow with three evaluation modes. They answer different questions, and none subsumes the others - run more than one.
+An assembly is evaluated as separate rigid bodies resting on one another, joined where the
+geometry says they touch, under gravity. The question it answers is whether the thing stands
+up: whether it is a mechanism, whether an element rotates off its support, whether a stack
+topples. It is a first check on a configuration, not a structural analysis.
 
-| Mode | Bodies | Joints | Answers |
-| --- | --- | --- | --- |
-| `welded` (default) | the whole scope as one rigid body | none; graph edges are not simulated | does the assembly as a whole settle, slide or tip under gravity? |
-| `multi_body_contact` | one per element | bearing surfaces carrying compression and no tension, with friction | can an element rotate off its support, lift, or slide? |
-| `multi_body_pinned` | one per element | the graph's contact points, shared and so bilateral | is the assembly a mechanism? |
+Try it on the models in [`RhinoAndGHFiles/`](RhinoAndGHFiles/README.md), whose answers are
+known independently of the solver.
 
-Welded is an upper bound: it silently supplies every moment connection the real assembly lacks, so it passes structures that a dry stack would not hold. Contact is the closest of the three to dry-stacked masonry and the only one that can fail a single element rather than the whole scope. Pinned holds in tension, so it cannot see an element toppling off another.
+Requires Rhino 8 with Grasshopper/Kangaroo. The plugin loads Rhino's installed
+`KangarooSolver.dll` at runtime; developers can override its location with
+`KangarooSolverPath` and `RHINOMCP_KANGAROO_PATH`. The Yak package ships no private copy.
 
-Read the limitations at the end of this section before trusting any verdict.
+### Joints have a type
 
-Stability evaluation requires Rhino 8 with Grasshopper/Kangaroo installed. The plugin loads Rhino's installed `KangarooSolver.dll` at runtime. Developers can override its build/runtime location with `KangarooSolverPath` and `RHINOMCP_KANGAROO_PATH`, respectively; the Yak package does not ship a private Kangaroo copy.
+Geometry cannot tell a screwed panel from a dry-stacked one - they look identical to an
+intersection test - so the connection is stated rather than guessed. Three types, and the
+type decides how the measured bearing is used:
 
-### 1. Identify and Maintain the Connectivity Graph
+| type | carries | what it is |
+| --- | --- | --- |
+| `contact` | compression and moment until it opens; friction across it | dry masonry, a beam on a corbel, a panel on a pad |
+| `pin` | force in three directions, no moment | truss to truss, a single bolt |
+| `welded` | force and moment, both ways, always | a moment connection: beam to column, a rigid plate |
 
-Run the following Rhino command to enable connectivity-graph mode:
+The moment comes from the *spread* of the bearing, not from the type: a joint reduced to a
+point has no lever arm and resists no rotation, so `pin` collapses the bearing to its centre
+and the other two keep its extent.
 
-```text
-mcpmodgraph
+A joint nobody names is a `contact`. It is the only one of the three that describes two
+things merely found touching - `welded` is the strongest assumption available applied where
+the least is known, and `pin` hangs in tension and discards the bearing, which turns a stack
+into a mechanism hinged at points that exist nowhere in the drawing.
+
+State the rules by element class, not joint by joint:
+
+```python
+assign_joint_type(joint_type="pin", layer="Truss", with_layer="Truss")
+assign_joint_type(joint_type="contact", layer="Truss", with_layer="Pads")
+assign_joint_type(joint_type="welded", layer="Beams", with_layer="Columns", capacity_kn=40)
 ```
 
-While this mode is on, supported Rhino object changes—including adding, copying, deleting, restoring, replacing, transforming, and changing object attributes—automatically invalidate and rebuild the graph. The latest graph is stored in the Rhino document under `rhinomcp-mod:connectivity-graph`
+A pair rule beats an element rule beats the default, and where two elements disagree the
+weaker governs - a hinge assumed where a moment connection exists reports the structure
+softer than it is, which fails safe. The result reports each joint's resolved type and the
+rule that decided it, so a verdict that changed because a rule matched more than intended can
+be diagnosed without re-deriving the rules by hand.
 
+`capacity_kn` is optional and limits **tension**, per bearing point, which is what gives a
+joint a moment capacity as well as an axial one. It yields rather than breaking. Read
+`peak_point_tension_n` and never the net: a cantilever's connection can sit in net
+compression at -7.1 kN while one of its bearing points is pulled at 24.5.
 
-This automatic document update was missing in earlier builds and has now been fixed. Turning `mcpmodgraph` off stops automatic graph rebuilding and persistence until the mode is enabled again.
+### Bearings are measured, not assumed
 
-### 2. Assign Mass for Stability Evaluation
+A joint is built over the polygon two flat faces actually share, on the mean plane between
+them. One rule covers all three states two solids can be drawn in - nearly touching,
+touching, and overlapping:
 
-The mass-assignment workflow iterates over the nodes stored in `rhinomcp-mod:connectivity-graph`. Mass can be assigned in either of the following ways.
+| the two faces | what the solver gets |
+| --- | --- |
+| near parallel | the shared polygon |
+| crossing, no overlap | the line they cross along - a hinge about itself |
+| crossing and overlapping | the surface inside the shared volume, **off by default** |
 
-#### Option A: Assign Mass Directly
+The last is gated behind `bearing_source="buried"` because its area grows with how far the
+drawing goes through itself, which would hand a joint capacity in proportion to a modelling
+artefact. Left off, such a contact falls back to a point, which carries no moment. Curved
+faces have no flat region to intersect and are sampled instead.
 
-Run:
+Run `mcpmodgraph` to see all of this drawn on the model: what the evaluator found, where it
+found it, and what each joint resolved to. A joint the graph never found cannot be given a
+type, and a bearing measured on the wrong plane restrains the wrong rotation - both are
+visible there and neither is visible in a number.
 
-```text
-mcpmodassignmass
+### The workflow
+
+**1. Build the connectivity graph.** `mcpmodgraph` turns it on; object changes invalidate and
+rebuild it automatically, and it is stored in the document under
+`rhinomcp-mod:connectivity-graph`.
+
+**2. Give every element a mass.** `mcpmodassignmass` prompts per object,
+`mcpmodassignmissingmass` only for those without one, and `mcpmodassignlayerdensity` +
+`mcpmodmassfromlayerdensity` derive mass from each object's own volume. Over MCP, `assign_mass`
+does it without prompting - scoped by `ids`, `names`, `layer` or `selected` - taking either a
+`density` in kg/m³ or one `mass` in kg. Objects with no computable volume are reported under
+`skipped` rather than guessed at.
+
+Metric documents take `kg` and `kg/m³`, imperial take pound-mass (`lbm`, never pound-force)
+and `lbm/ft³`. Mass is converted and stored as tagged canonical `kg`. Documents with `None`,
+`Unset` or custom units are rejected rather than normalised unreliably.
+
+**3. Evaluate.** `mcpmodevaluatestability`, or:
+
+```python
+evaluate_stability(mode="pinned")
 ```
 
-This command iterates over every graph node and prompts for the mass of its corresponding Rhino object.
+Geometry, tolerances and mass are normalised internally to metres and kilograms; gravity
+defaults to 9.80665 m/s². Returned lengths are in the document's units. Invalid graph nodes,
+missing or non-positive mass, and non-finite values fail explicitly rather than being
+reported as instability.
 
-To assign mass only to nodes that do not already have a positive mass, run:
+`mode="welded"` remains as a cheap independent upper bound: it treats the whole scope as one
+rigid body and asks only whether it tips. It supplies every moment connection the real
+assembly lacks, so it passes structures a dry stack would not hold.
 
-```text
-mcpmodassignmissingmass
-```
+**4. Look at the result.** `mcpmodstabilitydisplay` draws where the bodies ended up, in grey,
+over the original geometry, which it does not modify. `mcpmodclearcache` - or
+`-mcpmodclearcache` from a script - clears it along with the stored graph.
 
-#### Option B: Calculate Mass from Layer Density
+### What it reports
 
-First, assign a material density to each relevant layer:
-
-```text
-mcpmodassignlayerdensity
-```
-
-Then place each object on the appropriate material layer and run:
-
-```text
-mcpmodmassfromlayerdensity
-```
-
-The command calculates each object's volume and derives its mass from the density stored on its layer.
-
-#### Option C: Assign Mass over MCP
-
-The `assign_mass` tool assigns mass without prompting, which is what makes the workflow scriptable - the Rhino commands above stop per object or per layer and cannot be driven from an MCP client.
-
-Scope by `ids`, `names`, `layer`, or `selected`; omit every scope argument to take the whole document. Then either give a `density` in kg/m^3, and each object's mass follows from its own closed volume, or give one `mass` in kg applied to every object in scope. Objects with no computable volume are reported under `skipped` with the reason rather than guessed at.
-
-Unit handling is important:
-
-- Metric documents accept mass in `kg` and density in `kg/m³`.
-- Imperial documents accept pound-mass (`lbm`, never pound-force) and density in `lbm/ft³`.
-- New object mass is converted immediately and stored as tagged canonical `kg`; layer density retains its explicit input-unit tag. Untagged legacy values remain readable with a warning. To preserve the earlier behavior, only legacy feet documents infer untagged values as imperial; other legacy documents infer metric values.
-- Documents with `None`, `Unset`, or custom units cannot be normalized reliably and are rejected by stability and density-derived mass evaluation.
-
-### 3. Evaluate Assembly Stability
-
-Run:
-
-```text
-mcpmodevaluatestability
-```
-
-The command first asks for the evaluation mode - `Welded`, `Contact`, or `PinnedJoints` - and then runs the corresponding solver over the selected scope. Solver geometry, floor elevation, tolerances, and mass are normalized internally to meters and kilograms, and gravity defaults to standard gravity (`9.80665 m/s²`). The returned displacement, transform, floor elevation, and explicit length parameters remain in the active Rhino document's units.
-
-When omitted, the stability threshold (`0.01 m`), solver threshold (`0.001 m`), and particle-assignment tolerance (`0.000001 m`) are converted into document units at runtime. Rigid and floor strengths remain Kangaroo tuning weights. Invalid graph nodes, missing or non-positive mass, unsupported or non-finite units/values, and invalid iteration counts fail explicitly rather than being classified as instability.
-
-Choose a stability threshold that is appropriate for the model's scale and units. The assembly is classified as stable when its normalized maximum displacement does not exceed the normalized threshold. Results expose displacement in both document units and meters.
-
-The MCP `evaluate_stability` tool exposes the same solver parameters through `mode`, allowing an AI client such as Claude to adjust them for a particular case.
-
-#### Multi-body parameters
-
-The multi-body modes report per-element displacement and rotation, name the element that moved furthest, and carry no assembly transform or support margin - there is no single transform to report. Contact mode also reports each bearing surface: how many of its springs carry load, the compression across it, its corners, and where that compression acts.
-
-Contact stiffness is derived from the load each bearing surface carries and needs no tuning. An absolute stiffness is not a material property in this solver but the size of the pseudo-time step: Kangaroo blends goals by weight, so pinning the stiffness ties the rate of collapse to the model's mass and bearing area, and the same structure can read as stable or as toppling depending on the number chosen. The knobs are therefore stated as lengths:
-
-- `joint_penetration` - how far a bearing surface may close under its own load. This sets the per-step motion directly.
-- `ground_settlement` - how far a body may settle into the ground under its own load. Separate from the joints because the ground is a soil and the joints are not.
-- `contact_strength` and `floor_strength` - pin the joints or the ground to an absolute modulus instead, for study rather than for use.
-- `torque_gain` - how much of a patch's eccentric compression becomes rotation of the bodies it joins.
+Beyond the verdict: each joint's type and the rule that resolved it, the force across it, its
+sense, its shear, the peak tension at any single bearing point, whether it reached its
+capacity, and which elements it joins. `joints_at_capacity` says whether anything yielded.
 
 ### Limitations
 
-These are measured against hand-computed statics, not estimated:
+Measured against hand-computed statics, not estimated:
 
-- **Contact mode absorbs marginal eccentricity.** A joint whose resultant falls well outside its bearing surface topples correctly; one only marginally outside settles into a tilted equilibrium and reads as stable. On three-block stairs, 112 mm of eccentricity past the patch edge topples and 75 mm does not.
-- **Pinned mode makes almost everything a mechanism.** Each graph edge merges into one shared particle, and a body pinned at a single point is free to rotate about it. Kangaroo offers no middle ground - one shared point rotates freely, two give a hinge, three or more weld - so with one contact point per edge, a dry stack comes apart regardless of its geometry. Treat an unstable pinned verdict as a statement about the joint model, not about the structure.
-- **Joints cannot be typed individually.** A mode applies one joint model to every edge in the scope, so a structure mixing bolted, pinned and dry-bearing connections cannot be expressed.
-- **Self-weight only.** No lateral load, no strength or crushing limit, so a design can pass on stability while its bearing stress is absurd.
-- **A body that leaves its support falls through the ground.** Ground bearing is built only for points that start at floor level. The verdict is unaffected; the trajectory afterwards is meaningless.
-- **Contact patches are computed once, from the initial pose,** as the overlap of the two elements' bounding boxes. This is exact for axis-aligned boxes and an over-estimate of the bearing area for rotated ones.
+- **Self-weight only.** No lateral load, no strength or crushing limit, so a design can pass
+  on stability while its bearing stress is absurd.
+- **A verdict depends on a budget.** Relaxation converges toward equilibrium rather than
+  falling, so a mechanism creeps instead of collapsing. `inconclusive` is not `unstable`.
+- **Contact absorbs marginal eccentricity.** A joint whose resultant falls well outside its
+  bearing topples correctly; one only marginally outside settles into a tilted equilibrium and
+  reads as stable. On three-block stairs, 112 mm past the bearing edge topples and 75 mm does
+  not.
+- **A body that leaves its support falls through the ground.** Ground bearing is built only
+  for points that start at floor level. The verdict is unaffected; the trajectory afterwards
+  is meaningless.
+- **Joint stiffness is per end,** not shared along a member's load path.
+- **Overlapping bodies double-count mass** when mass comes from `assign_mass(density=...)`,
+  since each element's own volume includes the overlap - about 4% for a centreline truss, and
+  it largely cancels.
 
-This normalization makes equivalent metric and imperial models comparable. It does not turn Kangaroo's dynamic-relaxation result into an engineering-certified structural analysis.
-
-### 4. Display the Evaluated Result
-
-Run the following command and choose `On` or `Off` to control the evaluated-geometry display:
-
-```text
-mcpmodstabilitydisplay
-```
-
-The display visualizes the geometry cached from the latest stability evaluation, in every mode. It does not modify the original Rhino objects.
+None of this turns the result into a certified structural analysis.
 
 ## Credits
 
