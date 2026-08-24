@@ -1242,6 +1242,101 @@ def check_extent(send: Callable[[str, dict], Any], ids: list[str]) -> list[str]:
 # reports nothing at all for either buried joint. Exact measurement puts the bearing on the
 # mean plane of the two faces - 2490 for a slab sunk 20 mm into a wall topping out at 2500 -
 # which is where the shared surface is.
+# A slab tilted on a wall top, at angles either side of the 20-degree window inside which two
+# faces count as parallel enough to bear on one another.
+#
+# The window is the claim being tested, so the case has to fail on both sides of it: measured
+# up to 19 degrees, refused at 21 and 25. Two faces crossing at a steep angle share a line
+# rather than an area, and reporting a bearing there would be inventing one.
+#
+# It exists because a slab tilted 10 degrees - well inside the window - was being refused, and
+# not by the parallel test. Each region's plane carried its origin at a corner, so the offset
+# between two regions was measured between two unrelated corners and read as buried far too
+# deep. Origins are at region centroids now. Nothing about the angles below would have caught
+# that; the widths are what catch it, because a corner-origin measurement that happens to pass
+# still lands the bearing in the wrong place.
+BEARING_TILT_WALL = (400.0, 300.0)
+BEARING_TILT_BURIAL = 20.0
+BEARING_TILT_MEASURED = (0.0, 10.0, 15.0, 19.0)
+BEARING_TILT_REFUSED = (21.0, 25.0)
+
+
+def bearing_tilt_scene() -> str:
+    lines = ["import math", "import Rhino", ""]
+    dx, dy = BEARING_TILT_WALL
+    top = 2500.0
+    for index, tilt in enumerate(BEARING_TILT_MEASURED + BEARING_TILT_REFUSED):
+        x = index * 2000.0
+        lines.append(
+            f"world_box('WALL_{int(tilt):02d}', {x!r}, {-dy / 2.0!r}, 0.0, {x + dx!r}, "
+            f"{dy / 2.0!r}, {top!r}, 2000.0)")
+        # The slab overhangs the wall on every side, so the bearing is the wall's own
+        # footprint foreshortened onto the tilted plane and nothing else.
+        lines.append(
+            f"slab = Rhino.Geometry.Box(Rhino.Geometry.Plane.WorldXY,\n"
+            f"    Rhino.Geometry.Interval({x - 100.0!r}, {x + dx + 100.0!r}),\n"
+            f"    Rhino.Geometry.Interval({-dy / 2.0 - 100.0!r}, {dy / 2.0 + 100.0!r}),\n"
+            f"    Rhino.Geometry.Interval({top - BEARING_TILT_BURIAL!r}, "
+            f"{top - BEARING_TILT_BURIAL + 200.0!r})).ToBrep()")
+        lines.append(
+            f"slab.Transform(Rhino.Geometry.Transform.Rotation(math.radians({tilt!r}),\n"
+            f"    Rhino.Geometry.Vector3d.XAxis,\n"
+            f"    Rhino.Geometry.Point3d({x + dx / 2.0!r}, 0.0, "
+            f"{top - BEARING_TILT_BURIAL + 100.0!r})))")
+        lines.append("attrs = Rhino.DocObjects.ObjectAttributes()")
+        lines.append(f"attrs.Name = 'SLAB_{int(tilt):02d}'")
+        lines.append(
+            "attrs.SetUserString('rhinomcp.stability.v1', "
+            "'{\"mass\": 500.0, \"mass_unit\": \"kg\"}')")
+        lines.append("built.append(str(doc.Objects.AddBrep(slab, attrs)))")
+    return "\n".join(lines) + "\n"
+
+
+# Half a millimetre on a 300 mm bearing. The widths below are closed forms, not fits.
+BEARING_TILT_TOLERANCE_MM = 0.5
+
+
+def check_bearing_tilt(send: Callable[[str, dict], Any], ids: list[str]) -> list[str]:
+    """Foreshortened where the faces are near enough parallel, refused where they are not."""
+    graph = send("get_connectivity_graph", {"ids": ids})
+    names = {node["i"]: node.get("name", "") for node in graph.get("n", [])}
+    measured = {}
+    for entry in graph.get("contact_extent_exact") or []:
+        pair = {names.get(entry["a"], ""), names.get(entry["b"], "")}
+        tag = next(
+            (t for t in BEARING_TILT_MEASURED + BEARING_TILT_REFUSED
+             if f"WALL_{int(t):02d}" in pair),
+            None)
+        if tag is not None:
+            measured[tag] = entry
+
+    dx, dy = BEARING_TILT_WALL
+    problems = []
+    for tilt in BEARING_TILT_MEASURED:
+        entry = measured.get(tilt)
+        if entry is None:
+            problems.append(f"{tilt:.0f} deg: no exact bearing, and it is inside the window")
+            continue
+
+        # The wall's footprint projected onto the mean plane of the pair: unchanged along the
+        # tilt axis, foreshortened across it.
+        want = sorted((dx, dy * math.cos(math.radians(tilt))), reverse=True)
+        got = sorted((entry["length_u"], entry["length_v"]), reverse=True)
+        for measure, expected, axis in zip(got, want, ("long", "short")):
+            if abs(measure - expected) > BEARING_TILT_TOLERANCE_MM:
+                problems.append(
+                    f"{tilt:.0f} deg: {axis} side {measure:.2f} against {expected:.2f}")
+
+    for tilt in BEARING_TILT_REFUSED:
+        if measured.get(tilt) is not None:
+            entry = measured[tilt]
+            problems.append(
+                f"{tilt:.0f} deg: bearing reported at {entry['length_u']:.1f} x "
+                f"{entry['length_v']:.1f}, but the faces cross rather than bear")
+
+    return problems
+
+
 BEARING_STATE_WALL = (400.0, 300.0)
 BEARING_STATE_TOP = 2500.0
 BEARING_STATE_BURIAL = 20.0
@@ -1392,6 +1487,17 @@ CASES: list[Case] = [
             "Breps and as meshes; sampling reports nothing at all for either buried pair"),
         build=bearing_states_scene,
         check=check_bearing_states,
+    ),
+    Case(
+        name="bearing_tilted_faces",
+        mode="none",
+        tier=GEOMETRY,
+        stable=True,
+        reason=(
+            "a slab tilted on a wall top at 0, 10, 15 and 19 degrees measures the wall's "
+            "footprint foreshortened; at 21 and 25 the faces cross and no bearing is claimed"),
+        build=bearing_tilt_scene,
+        check=check_bearing_tilt,
     ),
     Case(
         name="stair3_step100",

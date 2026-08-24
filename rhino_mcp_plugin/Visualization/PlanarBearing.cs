@@ -173,11 +173,21 @@ internal static class PlanarBearing
             // Holes are ignored deliberately: a bearing measured through a bolt hole is wrong
             // by the area of the hole, which is negligible, and carrying inner loops through a
             // boolean intersection is not.
-            var area = AreaMassProperties.Compute(outline, tolerance)?.Area ?? 0.0;
+            var properties = AreaMassProperties.Compute(outline, tolerance);
+            var area = properties?.Area ?? 0.0;
             if (!(Math.Abs(area) > 0.0))
             {
                 continue;
             }
+
+            // The plane's origin is moved to the face's centroid. Where TryGetPlane puts it
+            // is a corner of the surface's parameterisation, and the offset between two
+            // regions is measured from these origins - so for a pair that is not exactly
+            // parallel the measurement was taken at two unrelated corners and came out as a
+            // number about the corners rather than about the bearing. A slab tilted 10 degrees
+            // on a wall was rejected as too deeply buried on that basis, well inside the
+            // 20-degree window the parallel test allows.
+            plane.Origin = properties.Centroid;
 
             regions.Add(new PlanarRegion
             {
@@ -274,6 +284,13 @@ internal static class PlanarBearing
                 if (!(area > 0.0))
                 {
                     continue;
+                }
+
+                // Same reason as the Brep path: the offset between two regions is read from
+                // their origins, so an origin at a corner of the outline measures the corner.
+                if (TryPolygonCentroid(loop, plane, out var centroid))
+                {
+                    plane.Origin = centroid;
                 }
 
                 var curve = new PolylineCurve(loop);
@@ -394,6 +411,30 @@ internal static class PlanarBearing
         }
 
         return loops;
+    }
+
+    /// <summary>Area centroid of a closed polygon, in the plane it lies in.</summary>
+    private static bool TryPolygonCentroid(Polyline loop, Plane plane, out Point3d centroid)
+    {
+        centroid = Point3d.Unset;
+        double area = 0.0, cu = 0.0, cv = 0.0;
+        for (var i = 0; i + 1 < loop.Count; i++)
+        {
+            plane.ClosestParameter(loop[i], out var u0, out var v0);
+            plane.ClosestParameter(loop[i + 1], out var u1, out var v1);
+            var cross = u0 * v1 - u1 * v0;
+            area += cross;
+            cu += (u0 + u1) * cross;
+            cv += (v0 + v1) * cross;
+        }
+
+        if (Math.Abs(area) < RhinoMath.ZeroTolerance)
+        {
+            return false;
+        }
+
+        centroid = plane.PointAt(cu / (3.0 * area), cv / (3.0 * area));
+        return centroid.IsValid;
     }
 
     private static double PolygonArea(IEnumerable<Point3d> loop, Plane plane)
