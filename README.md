@@ -264,42 +264,119 @@ it, and what each joint resolved to. A joint the graph never found cannot be giv
 and a bearing measured on the wrong plane restrains the wrong rotation. Both show up there;
 neither shows up in a number.
 
-### The workflow
+### Commands and tools
 
-**1. Build the connectivity graph.** `mcpmodgraph` turns it on; object changes invalidate and
-rebuild it automatically, and it is stored in the document under
-`rhinomcp-mod:connectivity-graph`.
+Every step can be run from Rhino's command line or over MCP. The two do the same work.
 
-**2. Give every element a mass.** `mcpmodassignmass` prompts per object,
-`mcpmodassignmissingmass` only for those without one, and `mcpmodassignlayerdensity` +
-`mcpmodmassfromlayerdensity` derive mass from each object's own volume. Over MCP, `assign_mass`
-does it without prompting - scoped by `ids`, `names`, `layer` or `selected` - taking either a
-`density` in kg/m³ or one `mass` in kg. Objects with no computable volume are listed under
-`skipped`.
+| Rhino command | MCP tool | does |
+| --- | --- | --- |
+| `mcpmodstart` / `mcpmodstop` | - | start and stop the MCP listener on port 1999 |
+| `mcpmodversion` | - | print the loaded plugin version |
+| `mcpmodgraph` | `graph_display`, `get_connectivity_graph` | build the connectivity graph and draw the overlay |
+| `mcpmodgraphexport` | - | write the graph to a file |
+| `mcpmodassignmass` | `assign_mass` | mass per object |
+| `mcpmodassignmissingmass` | `assign_mass` | mass for objects that have none |
+| `mcpmodassignlayerdensity` | - | store a density on a layer |
+| `mcpmodmassfromlayerdensity` | `assign_mass(density=...)` | mass from layer density and object volume |
+| `mcpmodassignjointtype` | `assign_joint_type` | write, list, clear and prune joint type rules |
+| `mcpmodevaluatestability` | `evaluate_stability` | run the evaluation |
+| `mcpmodstabilitydisplay` | `evaluate_stability(display=True)` | draw the settled pose |
+| `mcpmodclearcache` | - | clear the stored graph, poses and preview |
+| `mcpmodobb` | - | oriented bounding boxes |
 
-Metric documents take `kg` and `kg/m³`, imperial take pound-mass (`lbm`, never pound-force)
-and `lbm/ft³`. Mass is converted and stored as tagged canonical `kg`. Documents with `None`,
-`Unset` or custom units cannot be normalised reliably and are rejected.
+A prompting command run from a script swallows the commands after it. Prefix with `-` to run
+it scripted: `-mcpmodclearcache`.
 
-**3. Evaluate.** `mcpmodevaluatestability`, or:
+### Tutorial
+
+Open [`RhinoAndGHFiles/stair_jointtypes.3dm`](RhinoAndGHFiles/README.md) - three blocks, each
+set 100 mm forward of the one below. It already carries mass on every element, so step 1 can
+be skipped on the demo files and is written out here for a model of your own.
+
+**1. Mass.** Nothing is evaluated without it.
+
+In Rhino: `mcpmodassignmissingmass`, which prompts for each object that has none.
+
+Over MCP, scoped by `ids`, `names`, `layer` or `selected`, taking either a `density` in kg/m³
+or one `mass` in kg:
+
+```python
+assign_mass(density=2400, layer="Blocks")
+```
+
+Objects with no computable volume come back under `skipped`. Metric documents take `kg` and
+`kg/m³`, imperial take pound-mass (`lbm`, never pound-force) and `lbm/ft³`. Mass is converted
+and stored as tagged canonical `kg`. Documents with `None`, `Unset` or custom units are
+rejected.
+
+**2. Joint types.** A joint nobody names is a `contact`.
+
+In Rhino, `mcpmodassignjointtype` asks in this order:
+
+```
+Select elements on one side of the joint            [List] [Prune]
+Select elements on the other side (Enter for a rule about the first set alone)
+Write the rule about                Layers | Objects
+Joint type                          Contact | Pin | Fixed | Clear
+```
+
+It prints the document's rules on entry and again after writing. `List` prints them and
+exits; `Prune` deletes rules naming an object or layer that no longer exists; `Clear` removes
+the rule for the selection instead of writing one.
+
+Over MCP:
+
+```python
+assign_joint_type(joint_type="pin", layer="Truss", with_layer="Truss")
+assign_joint_type(joint_type="contact", ids=[block], with_ids=[pad])   # one joint
+assign_joint_type()                                                    # list, change nothing
+```
+
+Layer rules match the layer's leaf name, not its full path, and are stored in the document.
+Element rules are stored on the object beside its mass and travel with a copy.
+
+**3. Graph.** `mcpmodgraph` builds it and draws it over the model: which elements touch, the
+bearing surface each joint is built over, and the type each one resolved to. Contact green,
+pin blue, fixed amber; dim took the default, bright was named by a rule.
+
+Over MCP, `graph_display(enabled=True)` for the overlay, `get_connectivity_graph()` for the
+data. The graph is stored under `rhinomcp-mod:connectivity-graph` and rebuilds when objects
+change.
+
+Check here before running anything. A joint the graph never found cannot be given a type, and
+a bearing measured on the wrong face restrains the wrong rotation.
+
+**4. Evaluate.** `mcpmodevaluatestability` prompts for scope, mode and the default joint type.
 
 ```python
 evaluate_stability(mode="pinned")
+evaluate_stability(mode="pinned", joint_type="pin")      # default for unnamed joints
+evaluate_stability(mode="pinned", ids=[...])             # a subset
 ```
+
+The stair is `stable` as contact and `unstable` as pin. Both are correct answers to different
+questions: contact bears over the measured surface and pushes without pulling; pin collapses
+each bearing to its centre, and a body held at one point rotates about it.
 
 Geometry, tolerances and mass are normalised internally to metres and kilograms; gravity
 defaults to 9.80665 m/s². Returned lengths are in the document's units. Invalid graph nodes,
-missing or non-positive mass, and non-finite values fail explicitly instead of being reported
+missing or non-positive mass, and non-finite values fail explicitly rather than being reported
 as instability.
 
-`mode="welded"` is a different thing from the `fixed` joint type, and remains as a cheap
-independent upper bound: it treats the whole scope as one rigid body and asks only whether it
-tips. It supplies every moment connection the real
-assembly lacks, so it passes structures a dry stack would not hold.
+`mode="welded"` is a different thing from the `fixed` joint type. It treats the whole scope as
+one rigid body and asks only whether it tips, supplying every moment connection the real
+assembly lacks, so it passes structures a dry stack would not hold. It is a cheap upper bound.
 
-**4. Look at the result.** `mcpmodstabilitydisplay` draws where the bodies ended up, in grey,
-over the original geometry, which it does not modify. `mcpmodclearcache` - or
-`-mcpmodclearcache` from a script - clears it along with the stored graph.
+**5. Read it.** `verdict` is `stable`, `unstable` or `inconclusive`; `inconclusive` is not
+`unstable`. `settled_displacement_m` is where it came to rest, `mechanism_threshold_m` the
+distance that counts as collapse. `nodes` carries each joint's type and the rule that decided
+it. `contact_joints_open` counts bearings that lifted.
+
+**6. See it.** `mcpmodstabilitydisplay`, or `evaluate_stability(display=True)`, draws the
+settled bodies in grey over the original geometry, which is not modified.
+
+**7. Clear it.** `mcpmodclearcache` removes the stored graph, poses and preview.
+`-mcpmodclearcache` for the scripted form.
 
 ### Reported values
 
@@ -322,6 +399,16 @@ Measured against hand-computed statics:
 - **A body that leaves its support falls through the ground.** Ground bearing is built only
   for points that start at floor level. The verdict holds; the trajectory afterwards is
   meaningless.
+- **A member seated into a support keeps only one of its bearing faces.** A chord dropped
+  75 mm into a pad rests on the pad's top and bears against its side; the larger shared area
+  is kept and the other discarded. Where the side face is larger, the joint's normal points
+  sideways, carries no weight, and the member's load rests on friction. The two areas cross as
+  the support slides along the member, so the verdict can change with support position: on the
+  demo bridge, moving one pad in 250 mm steps gave 58, 282, 1200, 1434, 0.09, 1171, 156, 98
+  and 21 mm of settlement. Models whose members sit flush on their supports are unaffected.
+  The symptom is visible in `mcpmodgraph` - a bearing patch drawn on a vertical face under a
+  member that sits on top of it, or a support showing far more patches than it has members
+  resting on it.
 - **Joint stiffness is per end,** and is not shared along a member's load path.
 - **Overlapping bodies double-count mass** when mass comes from `assign_mass(density=...)`,
   since each element's own volume includes the overlap - about 4% for a centreline truss, and
