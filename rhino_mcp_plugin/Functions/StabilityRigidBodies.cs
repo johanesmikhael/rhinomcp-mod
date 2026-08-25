@@ -59,6 +59,16 @@ internal static class StabilityRigidBodies
     public const double TimestepSafety = 0.2;
 
     /// <summary>
+    /// How many times a diverged run is retried, each on half the step before it.
+    /// </summary>
+    /// <remarks>
+    /// Four takes 0.2 down to 0.025, which is the value this integrator used before the
+    /// dashpot defect behind it was found. A model needing finer than that is not being
+    /// rescued by another halving.
+    /// </remarks>
+    public const int DivergenceRetries = 4;
+
+    /// <summary>
     /// Damping as a fraction of critical, for this path's own mode.
     /// </summary>
     /// <remarks>
@@ -1624,19 +1634,46 @@ public partial class RhinoMCPModFunctions
         }
 
         var collapsed = false;
-        var run = StabilityRigidBodies.Run(
-            bodies, sites, new Vector3d(0.0, 0.0, -gravity), durationSeconds, timestep,
-            dampingRatio, jolt, settledSpeed, false, MotionSampleCount, Measure,
-            displacement =>
-            {
-                if (displacement > threshold)
-                {
-                    collapsed = true;
-                }
 
-                return collapsed;
-            },
-            siteForces);
+        // A run that ran away is retried on a finer step before it is given up on.
+        //
+        // The step is sized from sqrt(k/m) summed over each body's joints with a safety
+        // fraction, and 0.2 is the coarsest value the closed-form cases verified. It is not
+        // coarse enough for every model: an eccentric truss on two pads diverged at 8e6 m/s
+        // after 32 steps there and settled to 0.194 mm with nothing open at a quarter of it.
+        //
+        // Halving until it integrates costs nothing on models that never diverge, which is
+        // almost all of them, and answers the ones that do instead of reporting that there is
+        // no answer. Making 0.1 the default instead would have cost every model: the fast tier
+        // takes 48 seconds at 0.2 and 206 at 0.1, for verdicts that do not change.
+        StabilityDynamics.Result run = null;
+        var attemptTimestep = timestep;
+        for (var attempt = 0; attempt < StabilityRigidBodies.DivergenceRetries; attempt++)
+        {
+            collapsed = false;
+            run = StabilityRigidBodies.Run(
+                bodies, sites, new Vector3d(0.0, 0.0, -gravity), durationSeconds, attemptTimestep,
+                dampingRatio, jolt, settledSpeed, false, MotionSampleCount, Measure,
+                displacement =>
+                {
+                    if (displacement > threshold)
+                    {
+                        collapsed = true;
+                    }
+
+                    return collapsed;
+                },
+                siteForces);
+
+            if (!run.Diverged)
+            {
+                break;
+            }
+
+            attemptTimestep *= 0.5;
+        }
+
+        timestep = attemptTimestep;
 
         var worstPin = run.DisplacementSamples.Count > 0 ? run.DisplacementSamples.Max() : 0.0;
         // A diverged run's samples are meaningless in both directions, so it cannot be read

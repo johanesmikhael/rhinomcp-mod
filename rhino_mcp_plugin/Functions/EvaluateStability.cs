@@ -614,6 +614,11 @@ public partial class RhinoMCPModFunctions
                             "contact_joints_sided", "contact_joints_open", "joint_type_pair_rules",
                             "bounded_response", "motion_reversals",
                             "mechanism_threshold_m", "verdict_metric",
+                            // Whether the run answered at all. Computed but not copied, so a
+                            // diverged run reached the caller looking merely inconclusive,
+                            // with no way to tell "it stands but I cannot prove it" from
+                            // "the integration blew up at 4.8e6 m/s".
+                            "diverged", "diverged_reason",
                             "motion_samples_m"
                         })
                         {
@@ -656,7 +661,7 @@ public partial class RhinoMCPModFunctions
                         "joint_welded_examples", "joint_count", "lateral_load_fraction", "sway",
                         "time_samples_s", "speed_samples_m_s", "member_stiffness_min_n_per_m",
                         "member_stiffness_max_n_per_m", "node_count_clustered", "node_widest_m",
-                        "nodes", "span_m"
+                        "nodes", "span_m", "diverged", "diverged_reason"
                     })
                     {
                         dynamicResult[key] = graph[key];
