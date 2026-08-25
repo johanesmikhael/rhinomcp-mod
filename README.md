@@ -253,6 +253,18 @@ found touching. `fixed` is the strongest assumption available applied where the 
 known; `pin` hangs in tension and discards the bearing, so a stack becomes a mechanism hinged
 at points that exist nowhere in the drawing.
 
+A base is a bearing too. Anything resting on the floor can lift off it and slide on it,
+which is what an unfounded block does; a footing has to be stated:
+
+```python
+assign_joint_type(joint_type="fixed", layer="PAD", with_ground=True)
+```
+
+A pad cast into a footing and one set down on gravel are drawn identically, so `with_ground`
+is the same statement about the ground that the other rules make about a joint. Without it an
+arch spreads at its springings and a post lifts the far edge of its base under an overhanging
+load - both correct for something merely set down.
+
 State the rules by element class, not joint by joint:
 
 ```python
@@ -359,6 +371,7 @@ Over MCP:
 ```python
 assign_joint_type(joint_type="pin", layer="Truss", with_layer="Truss")
 assign_joint_type(joint_type="contact", ids=[block], with_ids=[pad])   # one joint
+assign_joint_type(joint_type="fixed", layer="Pads", with_ground=True)  # a founded base
 assign_joint_type()                                                    # list, change nothing
 ```
 
@@ -429,6 +442,10 @@ Measured against hand-computed statics:
 - **A body that leaves its support falls through the ground.** Ground bearing is built only
   for points that start at floor level. The verdict holds; the trajectory afterwards is
   meaningless.
+- **A run that diverges reports no verdict.** Non-finite velocities, or a body crossing the
+  whole assembly in one step, stop the run: `verdict` is `inconclusive`, `diverged` is true,
+  and `diverged_reason` carries the peak speed that triggered it. Such a run used to record no
+  motion at all and read as `stable`.
 - **A member seated into a support keeps only one of its bearing faces.** A chord dropped
   75 mm into a pad rests on the pad's top and bears against its side; the larger shared area
   is kept and the other discarded. Where the side face is larger, the joint's normal points

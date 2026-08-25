@@ -142,6 +142,12 @@ public partial class RhinoMCPModFunctions
         /// </summary>
         public List<StabilityRigidBodies.JointType> JointTypes { get; } = new();
         public List<Point3d> GroundPoints { get; } = new();
+
+        /// <summary>What holds this body to the ground - a bearing unless a rule founds it.</summary>
+        public StabilityRigidBodies.JointType GroundType { get; set; } =
+            StabilityRigidBodies.JointType.Contact;
+
+        public string GroundRule { get; set; } = "ground:default";
         public Point3d[] Markers { get; set; }
         public int[] MarkerParticles { get; set; }
         public Plane InitialMarkerPlane { get; set; }
@@ -669,6 +675,20 @@ public partial class RhinoMCPModFunctions
                 elementB?.Node?["g"]?.ToString(), elementB?.LayerName, elementB?.ElementJointType,
                 elementA?.ElementJointCapacityNewtons, elementB?.ElementJointCapacityNewtons,
                 out linkRules[i], out linkCapacities[i]);
+        }
+
+        // And what holds each body to the ground, resolved from the same rules. A body with
+        // no ground points is never asked.
+        foreach (var body in bodies)
+        {
+            if (body.GroundPoints.Count == 0)
+            {
+                continue;
+            }
+
+            body.GroundType = rules.ResolveGround(
+                body.Node?.Node?["g"]?.ToString(), body.Node?.LayerName, out var groundRule);
+            body.GroundRule = groundRule;
         }
 
         var byBody = new List<int>[bodies.Count];

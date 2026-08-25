@@ -144,6 +144,18 @@ public partial class RhinoMCPModFunctions
             // for the joint that is genuinely its own case. Same choice Rhino gives everywhere
             // else, and the same choice assign_mass already gives on its single scope.
             var sideB = ReadPairTokens(doc, parameters, "with_layer", "with_ids", "with_names");
+
+            // The other side of a rule can be the ground itself.
+            //
+            // A base is founded or it is not, and geometry cannot tell: a pad cast into a
+            // footing and one set down on gravel are drawn identically. So it is stated, the
+            // same way every other connection is. Its own token rather than a layer named
+            // "ground", which anyone might have.
+            if (parameters?["with_ground"]?.Type == JTokenType.Boolean &&
+                parameters["with_ground"].Value<bool>())
+            {
+                sideB.Add(GroundToken);
+            }
             var sideA = ReadPairTokens(doc, parameters, "layer", "ids", "names");
 
             if (sideB.Count > 0)
@@ -357,6 +369,16 @@ public partial class RhinoMCPModFunctions
     /// kind of thing it is without needing the code that wrote it.
     /// </remarks>
     internal const string LayerTokenPrefix = "layer:";
+
+    /// <summary>
+    /// The ground, as one half of a pair rule.
+    /// </summary>
+    /// <remarks>
+    /// Prefixed like the others so it cannot collide with a layer or an object of that name,
+    /// and readable in the stored rule: "ground: to layer:PAD is fixed" says that those pads
+    /// are founded rather than set down.
+    /// </remarks>
+    internal const string GroundToken = "ground:";
     internal const string IdTokenPrefix = "id:";
 
     /// <summary>How specific a token is, so the tighter rule wins where two match.</summary>
@@ -728,6 +750,38 @@ public partial class RhinoMCPModFunctions
 
             rule = "default";
             return Default;
+        }
+
+        /// <summary>
+        /// What holds a body to the ground, which is a bearing unless somebody says otherwise.
+        /// </summary>
+        /// <remarks>
+        /// Only a rule naming the ground answers this. An element rule saying a beam's joints
+        /// are fixed is about the beam's joints to other elements and says nothing about
+        /// whether it is founded, and the global default is the same: a thing set on the
+        /// floor rests on it. Founding is a claim about a footing, so it has to be made.
+        /// </remarks>
+        public StabilityRigidBodies.JointType ResolveGround(
+            string guid, string layer, out string rule)
+        {
+            PairRule best = null;
+            foreach (var token in Tokens(guid, layer))
+            {
+                if (_pairs.TryGetValue(PairKey(token, GroundToken), out var candidate) &&
+                    (best == null || candidate.Rank > best.Rank))
+                {
+                    best = candidate;
+                }
+            }
+
+            if (best != null)
+            {
+                rule = best.Label;
+                return best.Type;
+            }
+
+            rule = "ground:default";
+            return StabilityRigidBodies.JointType.Contact;
         }
 
         /// <summary>The smaller of two capacities, treating "unstated" as unlimited.</summary>

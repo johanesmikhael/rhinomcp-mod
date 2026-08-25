@@ -345,6 +345,7 @@ async def assign_joint_type(
     with_layer: str | list[str] | None = None,
     with_ids: list[str] | None = None,
     with_names: list[str] | None = None,
+    with_ground: bool = False,
     ids: list[str] | None = None,
     names: list[str] | None = None,
     selected: bool = False,
@@ -383,6 +384,15 @@ async def assign_joint_type(
         with_layer: The other side, by layer, making this a rule about the
             joints *between* two classes - "beam to column is fixed".
         with_ids: The other side, by object GUID.
+        with_ground: Makes the ground the other side, so the rule says how this
+            element is founded rather than how it meets another element. A base
+            is `contact` unless a rule says otherwise: it bears on the floor,
+            can lift off it and can slide on it. `fixed` or `pin` founds it.
+            A pad cast into a footing and one set down on gravel are drawn
+            identically, so which it is has to be stated.
+
+                assign_joint_type(joint_type="fixed", layer="PAD",
+                                  with_ground=True)
         with_names: The other side, by object name.
         selected: When True, applies to the current selection.
         clear: When True, removes the rule instead of writing it.
@@ -462,6 +472,8 @@ async def assign_joint_type(
         params["layer"] = layer
     if with_layer is not None:
         params["with_layer"] = with_layer
+    if with_ground:
+        params["with_ground"] = True
     if with_ids:
         params["with_ids"] = with_ids
     if with_names:

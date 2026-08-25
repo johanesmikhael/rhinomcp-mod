@@ -84,6 +84,17 @@ def build(connection: RhinoConnection, case: Case) -> list[str]:
     return ids
 
 
+def apply_rules(connection: RhinoConnection, case: Case, ids: list[str]) -> None:
+    """The case's joint-type rules, with "*" standing for everything it built."""
+    for rule in case.rules:
+        payload = dict(rule)
+        if payload.get("ids") == "*":
+            payload["ids"] = ids
+        if payload.get("with_ids") == "*":
+            payload["with_ids"] = ids
+        connection.send_command("assign_joint_type", payload)
+
+
 def evaluate(
     connection: RhinoConnection, case: Case, substeps: int, ids: list[str]
 ) -> dict[str, Any]:
@@ -153,6 +164,7 @@ def run_once(connection: RhinoConnection, case: Case, substeps: int) -> dict[str
             "result": {},
         }
 
+    apply_rules(connection, case, ids)
     result = evaluate(connection, case, substeps, ids)
     return {
         "objects": len(ids),

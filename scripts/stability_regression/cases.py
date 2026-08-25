@@ -34,6 +34,10 @@ class Case:
     # Optional numeric assertions: key in the result -> (low, high) in the result's own unit.
     expect: dict[str, tuple[float, float]] = field(default_factory=dict)
     params: dict[str, Any] = field(default_factory=dict)
+    # Joint-type rules applied after the model is built and before it is evaluated, each one
+    # an assign_joint_type payload. "ids": "*" means every object the builder made, which is
+    # how a case founds its bases without needing a layer to name them by.
+    rules: list[dict[str, Any]] = field(default_factory=list)
     # Cases that ask something other than "is it stable". Given the built object ids and a
     # function to send a command, returns the problems it found - empty when it passes. The
     # solver is not run at all for these, because what is under test is upstream of it.
@@ -556,6 +560,11 @@ def check_capacity(send: Callable[[str, dict], Any], ids: list[str]) -> list[str
 
     def run(capacity_kn):
         send("assign_joint_type", {"clear": True, "ids": ids})
+        # The post has a footing. Without saying so its base lifts on the far edge under the
+        # arm's moment, which is what an unfounded block on a floor does and not what this
+        # case is about - it asks what a stated capacity is worth, and needs the model to
+        # stand before any is stated.
+        send("assign_joint_type", {"joint_type": "fixed", "ids": ids, "with_ground": True})
         if capacity_kn is not None:
             send("assign_joint_type",
                  {"joint_type": "fixed", "capacity_kn": capacity_kn, "ids": ids})
@@ -2265,6 +2274,7 @@ CASES: list[Case] = [
             "the thrust runs down its centreline and no joint opens at 25 mm - a sixth of "
             "the thickness the circle of the same span and rise needs"),
         build=funicular_build("catenary", 25.0),
+        rules=[{"joint_type": "fixed", "ids": "*", "with_ground": True}],
         expect={"contact_joints_open": (0.0, 0.0)},
     ),
     # The catenary's shape is worth nothing to a load it was not drawn for. Five times the
@@ -2278,6 +2288,7 @@ CASES: list[Case] = [
             "one voussoir at five times its mass, at 150 mm - the funicular of self-weight "
             "is the funicular of nothing else, and ten of twelve joints open"),
         build=funicular_build("catenary", 150.0, heavy_block=3, heavy_factor=5.0),
+        rules=[{"joint_type": "fixed", "ids": "*", "with_ground": True}],
     ),
     # A parabola is funicular for load uniform per unit horizontal run - the right kind of
     # curve for a deck hung under it, not for the ring's own weight. It lands between the
@@ -2289,6 +2300,7 @@ CASES: list[Case] = [
         stable=True,
         reason="100 mm parabola stands where the circle of the same span and rise does not",
         build=funicular_build("parabola", 100.0),
+        rules=[{"joint_type": "fixed", "ids": "*", "with_ground": True}],
     ),
     Case(
         name="funicular_parabola_fails",
@@ -2299,6 +2311,7 @@ CASES: list[Case] = [
             "60 mm parabola goes over where the catenary stands at 25, so suiting a "
             "different load is worth something and is not worth what suiting this one is"),
         build=funicular_build("parabola", 60.0),
+        rules=[{"joint_type": "fixed", "ids": "*", "with_ground": True}],
     ),
     Case(
         name="funicular_circle_fails",
@@ -2309,6 +2322,7 @@ CASES: list[Case] = [
             "100 mm semicircle of the same span and rise, funicular for nothing, opens 12 "
             "of 12 joints - the arch case above puts its limit near 200 mm"),
         build=funicular_build("circle", 100.0),
+        rules=[{"joint_type": "fixed", "ids": "*", "with_ground": True}],
     ),
     # Heyman's limit from the outside, at the one discretisation whose hinge count is right.
     # 13 voussoirs, inner radius 2000 mm; t/R quoted on the mean radius 2000 + t/2.
@@ -2323,6 +2337,9 @@ CASES: list[Case] = [
             "joints open against the four a mechanism needs, so the threshold agrees and "
             "the mechanism does not"),
         build=arch_build(212.0),
+        # Heyman's limit assumes the springings neither slide nor lift, which is a statement
+        # about the abutment and not about the arch. Said out loud, now that it can be.
+        rules=[{"joint_type": "fixed", "ids": "*", "with_ground": True}],
         expect={"contact_joints_open": (6.0, 10.0)},
     ),
     Case(
@@ -2335,6 +2352,7 @@ CASES: list[Case] = [
             "threshold - three orders of magnitude off the stable case, so the verdict does "
             "not turn on where that threshold sits"),
         build=arch_build(195.0),
+        rules=[{"joint_type": "fixed", "ids": "*", "with_ground": True}],
     ),
     Case(
         name="bearing_extent",

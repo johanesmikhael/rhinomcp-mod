@@ -1339,6 +1339,9 @@ public partial class RhinoMCPModFunctions
 
         var bodies = new List<StabilityRigidBodies.Body>(pinned.Count);
         var groundSlots = new List<HashSet<int>>(pinned.Count);
+
+        // What each body's footing is, resolved before the sites are built.
+        var groundTypes = pinned.Select(body => body.GroundType).ToArray();
         // A joint becomes the bearing it was measured to be, rather than its centre point.
         //
         // A single point transmits force in three directions and no moment, because it has no
@@ -1530,7 +1533,11 @@ public partial class RhinoMCPModFunctions
                 // normal from the line of centres would let it open along an axis nothing was
                 // measured about. That caution does not apply here. The floor is a horizontal
                 // plane at a single z, so its normal is known exactly and needs no measuring.
-                site.Type = StabilityRigidBodies.JointType.Contact;
+                // Contact unless the model says the base is founded. A pad cast into a
+                // footing and one set down on gravel are drawn identically, so which it is
+                // gets stated - assign_joint_type(..., with_ground=True) - and a founded base
+                // is two-sided again, deliberately and where somebody asked for it.
+                site.Type = groundTypes[site.Bodies[0]];
                 site.Normal = Vector3d.ZAxis;
                 anchoredGround++;
             }
