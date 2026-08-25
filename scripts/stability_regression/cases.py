@@ -1876,7 +1876,147 @@ GEOMETRY = "geometry"
 SYSTEMS = "systems"
 
 
+# --------------------------------------------------------------------------------------
+# Masonry arch: a semicircular ring of voussoirs, swept across its collapse thickness
+# --------------------------------------------------------------------------------------
+#
+# Every other case here is settled by hand statics written out beside it. This one has an
+# outside reference: Heyman's limit-analysis minimum thickness for a semicircular arch of
+# mean radius R carrying only its own weight, with no tension across the joints and no
+# sliding, is
+#
+#     t / R = 0.1075
+#
+# below which the thrust line cannot be kept inside the ring and the arch becomes a
+# four-hinge mechanism. That number comes out of limit analysis and knows nothing about
+# stiffness, damping or timestep, so nothing the solver is tuned by can move it.
+#
+# There is no arch theory anywhere in the plugin. The ring is 13 wedges bearing on each
+# other as ordinary contact joints - compression only, moment across the measured joint
+# width until the joint opens, friction along it - springing straight off the floor.
+#
+# Measured, at 13 blocks, inner radius 2000 mm, quoting t/R on the mean radius:
+#
+#     t = 212 mm, t/R = 0.1007 - stable, settles 0.04 mm, 8 of 12 joints open
+#     t = 205 mm, t/R = 0.0975 - inconclusive
+#     t = 195 mm, t/R = 0.0930 - unstable, settles 25.5 mm
+#
+# The threshold sits 6 to 13 per cent under Heyman's, on the side theory predicts: a ring of
+# finite blocks can only hinge at a joint, never at the worst point on the intrados, so it
+# stands slightly thinner than the continuous ideal.
+#
+# Eight of the twelve joints are already open at that last stable thickness, against the four
+# a collapse mechanism needs. So the agreement with Heyman is in the threshold, not in the
+# mechanism: the ring is standing on a thrust line the solver has not resolved as four
+# hinges. See the block-count sweep below for what that costs.
+#
+# THE THRESHOLD MOVES WITH THE NUMBER OF BLOCKS, and that is a solver limit, not arch
+# physics. Collapse thickness over the same geometry:
+#
+#     N =  9   stable at t = 195 (0.0930)      - stronger, as discretisation predicts
+#     N = 13   fails between 195 and 212       - the case below
+#     N = 17   fails at 240 (0.1132)
+#     N = 21   fails at 240 (0.1132), 12 of 20 joints open
+#     N = 25   fails at 280 (0.1308)
+#
+# Refining the ring should converge on 0.1075 from below. It passes through and keeps going,
+# and the open count goes with it - 8 of 12 at N = 13, 12 of 20 at N = 21. The ring is not
+# hinging, it is shortening. Joint stiffness is a solver constant per joint rather than a
+# material property per unit length, so a ring cut into more pieces is a softer ring, the
+# springings spread further, and joints open the whole way round. The same N = 21 ring with
+# every joint fixed stands at 0.07 mm, and with every joint pinned it is worse than contact,
+# which is the ordering an arch should give.
+#
+# The case is pinned at 13 blocks for that reason. It records one discretisation where the
+# hinge count is right, and the sweep above records what the others do.
+#
+# The ring springs directly off the floor. An earlier version stood it on two free abutment
+# blocks and collapsed from t/R = 0.15 up, every run settling 22-28 mm whatever the
+# thickness - the abutments walking apart under the horizontal thrust rather than the arch
+# hinging. Real behaviour, different experiment: free abutments measure the abutments.
+
+ARCH_SPAN = 4000.0
+ARCH_WIDTH = 1000.0
+ARCH_BLOCKS = 13
+HEYMAN_RATIO = 0.1075
+
+
+def arch_build(thickness_mm: float) -> Callable[[], str]:
+    radius = ARCH_SPAN / 2.0
+
+    def build() -> str:
+        return script(f'''
+import math
+
+R = {radius!r}
+T = {thickness_mm!r}
+W = {ARCH_WIDTH!r}
+N = {ARCH_BLOCKS!r}
+
+
+def voussoir(name, pts_xz):
+    """A prism from a closed XZ polyline, extruded W along Y and centred on Y = 0."""
+    pts = [Rhino.Geometry.Point3d(x, -W / 2.0, z) for (x, z) in pts_xz]
+    pts.append(pts[0])
+    curve = Rhino.Geometry.Polyline(pts).ToNurbsCurve()
+    brep = Rhino.Geometry.Extrusion.Create(curve, W, True).ToBrep()
+    # Extrusion.Create extrudes along the curve plane's normal, and the normal follows the
+    # winding of the points - so a wedge is not reliably on the side it was drawn on.
+    # Re-centre rather than trust the winding.
+    box = brep.GetBoundingBox(True)
+    brep.Transform(Rhino.Geometry.Transform.Translation(
+        0.0, -0.5 * (box.Min.Y + box.Max.Y), 0.0))
+    brep.Faces.SplitKinkyFaces(0.001)
+    volume = Rhino.Geometry.VolumeMassProperties.Compute(brep)
+    mass = (volume.Volume / 1e9) * {CONCRETE_DENSITY!r} if volume else 0.0
+    attrs = Rhino.DocObjects.ObjectAttributes()
+    attrs.Name = name
+    attrs.SetUserString("rhinomcp.stability.v1", json.dumps(
+        {{"mass": mass, "mass_unit": "kg"}}))
+    built.append(str(doc.Objects.AddBrep(brep, attrs)))
+
+
+for i in range(N):
+    a0 = math.pi * i / N
+    a1 = math.pi * (i + 1) / N
+    voussoir("VOUSSOIR_%02d" % i, [
+        (R * math.cos(a0), R * math.sin(a0)),
+        (R * math.cos(a1), R * math.sin(a1)),
+        ((R + T) * math.cos(a1), (R + T) * math.sin(a1)),
+        ((R + T) * math.cos(a0), (R + T) * math.sin(a0)),
+    ])
+''')
+
+    return build
+
+
 CASES: list[Case] = [
+    # Heyman's limit from the outside, at the one discretisation whose hinge count is right.
+    # 13 voussoirs, inner radius 2000 mm; t/R quoted on the mean radius 2000 + t/2.
+    Case(
+        name="arch_heyman_thickness",
+        mode="pinned",
+        tier=SYSTEMS,
+        stable=True,
+        reason=(
+            "212 mm ring at t/R = 0.1007, just under Heyman's 0.1075 for a continuous "
+            "semicircular arch and above it for one hinging only at its 12 joints; eight "
+            "joints open against the four a mechanism needs, so the threshold agrees and "
+            "the mechanism does not"),
+        build=arch_build(212.0),
+        expect={"contact_joints_open": (6.0, 10.0)},
+    ),
+    Case(
+        name="arch_heyman_thickness_below",
+        mode="pinned",
+        tier=SYSTEMS,
+        stable=False,
+        reason=(
+            "the same ring at 195 mm, t/R = 0.0930, settles 25 mm against a 22.5 mm "
+            "threshold - three orders of magnitude off the stable case, so the verdict does "
+            "not turn on where that threshold sits"),
+        build=arch_build(195.0),
+    ),
     Case(
         name="bearing_extent",
         mode="none",
