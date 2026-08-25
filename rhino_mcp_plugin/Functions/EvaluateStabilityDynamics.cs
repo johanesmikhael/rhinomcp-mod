@@ -206,6 +206,19 @@ internal static class StabilityDynamics
         public double SimulatedSeconds { get; set; }
         public double DampingRatio { get; set; }
         public double PeakSpeed { get; set; }
+
+        /// <summary>
+        /// True when the integration ran away rather than answering.
+        /// </summary>
+        /// <remarks>
+        /// A run that reaches non-finite velocities, or moves a body further in one step than
+        /// the assembly is wide, has stopped being a simulation. It has to be said out loud:
+        /// left to fall through, such a run records no motion at all - the samples it would
+        /// have been judged on are never taken - and a structure that blew up reads as one that
+        /// never moved. A welded bridge cantilevered ten metres past its only footing reported
+        /// stable at 0.00 mm with a peak speed of 1.8e63 m/s.
+        /// </remarks>
+        public bool Diverged { get; set; }
         public List<double> DisplacementSamples { get; } = new();
         public List<double> TimeSamples { get; } = new();
         public List<double> SpeedSamples { get; } = new();

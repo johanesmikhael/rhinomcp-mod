@@ -442,6 +442,16 @@ internal static class StabilityRigidBodies
         return true;
     }
 
+    private static bool IsFinite(Point3d point)
+    {
+        return double.IsFinite(point.X) && double.IsFinite(point.Y) && double.IsFinite(point.Z);
+    }
+
+    private static bool IsFinite(Vector3d vector)
+    {
+        return double.IsFinite(vector.X) && double.IsFinite(vector.Y) && double.IsFinite(vector.Z);
+    }
+
     internal static Vector3d CollinearSpinAxis(Body body)
     {
         if (body.Local.Count < 2)
@@ -731,6 +741,23 @@ internal static class StabilityRigidBodies
         // happened. So the cadence is a property of the physics - the default run, divided
         // into the same number of samples it always was - and a run ten times as long gets ten
         // times as many samples rather than ten times the gap between them.
+        // How far a body may move in one step before the run has stopped being a simulation.
+        //
+        // Taken from the assembly's own size rather than from a stated speed, so it means the
+        // same thing to a footbridge and to a pedestal: nothing crosses the whole structure
+        // between two steps. A run past this point records nothing useful - it is stopped and
+        // says so, instead of falling through to a verdict.
+        var reach = 0.0;
+        for (var i = 0; i < bodies.Count; i++)
+        {
+            for (var j = i + 1; j < bodies.Count; j++)
+            {
+                reach = Math.Max(reach, bodies[i].Centre.DistanceTo(bodies[j].Centre));
+            }
+        }
+
+        var runawayStep = reach > 0.0 ? reach : double.MaxValue;
+
         var sampleInterval = StabilityDynamics.DefaultDurationSeconds /
             Math.Max(1, sampleCount);
         var sampleEvery = Math.Max(1, (int)Math.Round(sampleInterval / timestep));
@@ -963,7 +990,16 @@ internal static class StabilityRigidBodies
                     body.Rotation = spinStep * body.Rotation;
                 }
 
-                peakSpeed = Math.Max(peakSpeed, body.Velocity.Length);
+                // Non-finite first: once a velocity is NaN every comparison below it is
+                // false, so a diverged run slides past every test that would have caught it.
+                var speed = body.Velocity.Length;
+                if (!IsFinite(body.Centre) || !IsFinite(body.Velocity) ||
+                    !IsFinite(body.AngularVelocity) || speed * timestep > runawayStep)
+                {
+                    result.Diverged = true;
+                }
+
+                peakSpeed = Math.Max(peakSpeed, speed);
                 // Rotation counts. These members are pinned at both ends and much of their
                 // energy is angular, so a kinetic energy built from linear velocity alone
                 // turns over at the wrong moments - and kinetic damping, which acts on
@@ -978,6 +1014,11 @@ internal static class StabilityRigidBodies
             result.PeakSpeed = Math.Max(result.PeakSpeed, peakSpeed);
             result.Steps = step + 1;
             result.SimulatedSeconds = result.Steps * timestep;
+
+            if (result.Diverged)
+            {
+                break;
+            }
 
             if (kineticDamping)
             {
@@ -1474,6 +1515,23 @@ public partial class RhinoMCPModFunctions
                 // ground sized from a stated joint stiffness is soft enough for the assembly
                 // to sink into it.
                 site.Stiffness = site.Stiffness * AutoBodyStiffnessRatio;
+
+                // The floor pushes and does not pull.
+                //
+                // Ground attachments were built with this integrator, before joints had
+                // types, as bare points held to an anchor. When contact became one-sided the
+                // gate it added asked for a type and a measured normal, and a ground point has
+                // neither - so it fell through to a two-sided spring and stayed there, holding
+                // a body down as firmly as it holds it up. Anything resting on the floor was
+                // glued to it: a welded bridge cantilevered ten metres past its only footing,
+                // 5042 kNm of overturning against 178 restoring, did not tip.
+                //
+                // A joint found by proximity is left unsided on purpose, because inventing a
+                // normal from the line of centres would let it open along an axis nothing was
+                // measured about. That caution does not apply here. The floor is a horizontal
+                // plane at a single z, so its normal is known exactly and needs no measuring.
+                site.Type = StabilityRigidBodies.JointType.Contact;
+                site.Normal = Vector3d.ZAxis;
                 anchoredGround++;
             }
         }
@@ -1574,7 +1632,9 @@ public partial class RhinoMCPModFunctions
             siteForces);
 
         var worstPin = run.DisplacementSamples.Count > 0 ? run.DisplacementSamples.Max() : 0.0;
-        var isMechanism = worstPin > threshold;
+        // A diverged run's samples are meaningless in both directions, so it cannot be read
+        // as a collapse any more than as a standing structure.
+        var isMechanism = !run.Diverged && worstPin > threshold;
 
         // A structure that rings without growing is standing.
         //
@@ -1619,7 +1679,11 @@ public partial class RhinoMCPModFunctions
             bounded = late <= early && reversals >= 2;
         }
 
-        var conclusive = run.Settled || run.Converged || isMechanism || bounded;
+        // A run that ran away concluded nothing, whatever else it looks like. It is not
+        // stable and it is not a mechanism either: it is a failed integration, and the only
+        // honest report is that there is no answer.
+        var conclusive = !run.Diverged &&
+            (run.Settled || run.Converged || isMechanism || bounded);
         var stable = conclusive && !isMechanism;
 
         var sway = new JObject();
@@ -1708,7 +1772,17 @@ public partial class RhinoMCPModFunctions
         graph["contact_joints_sided"] = sites.Count(
             s => s.Type == StabilityRigidBodies.JointType.Contact && s.Outward.Count == s.Bodies.Count);
         graph["stable"] = stable;
-        graph["verdict"] = isMechanism ? "unstable" : (conclusive ? "stable" : "inconclusive");
+        graph["verdict"] = run.Diverged
+            ? "inconclusive"
+            : isMechanism ? "unstable" : (conclusive ? "stable" : "inconclusive");
+        graph["diverged"] = run.Diverged;
+        if (run.Diverged)
+        {
+            graph["diverged_reason"] =
+                "the integration ran away rather than answering: peak speed " +
+                run.PeakSpeed.ToString("G3", System.Globalization.CultureInfo.InvariantCulture) +
+                " m/s after " + run.Steps + " steps. Nothing is reported about this model.";
+        }
         graph["conclusive"] = conclusive;
         graph["settled"] = run.Settled;
         graph["converged"] = run.Converged;
