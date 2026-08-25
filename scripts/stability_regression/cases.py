@@ -1990,7 +1990,233 @@ for i in range(N):
     return build
 
 
+# --------------------------------------------------------------------------------------
+# Funicular: three arches of the same span and rise, and only one suits the load
+# --------------------------------------------------------------------------------------
+#
+# Gaudi hung chains and read the arch off them upside down. A hanging chain of uniform
+# weight per unit LENGTH is a catenary, so inverted it is the funicular of a constant-
+# thickness ring's own weight: the thrust line lies along its centreline, every joint stays
+# in compression across its whole width, and limit analysis gives it a minimum thickness of
+# zero. Thickness stops mattering.
+#
+# That claim is only worth testing against the near misses, so all three arches here have
+# the same 4000 mm span, the same 2000 mm rise, the same 13 blocks and the same density.
+# Only the curve differs:
+#
+#   catenary   funicular for load uniform per unit ARC - which is what a ring of constant
+#              thickness weighs, so this one is right for this load
+#   parabola   funicular for load uniform per unit HORIZONTAL RUN - the right kind of curve
+#              for the wrong load, which is a deck hung off it, not the ring itself
+#   circle     funicular for nothing in particular
+#
+# Measured, 13 blocks, thickness in mm:
+#
+#              t = 150   t = 100   t = 60   t = 25   t = 10
+#   catenary    stable    stable   stable   stable   stable      0 joints open throughout
+#   parabola    stable    stable   UNSTABLE UNSTABLE UNSTABLE    12 to 16 open
+#   circle      UNSTABLE  UNSTABLE UNSTABLE UNSTABLE UNSTABLE    12 to 24 open
+#
+# The ordering is the assertion, not any one threshold: the shape that suits the load beats
+# the shape that suits a different load, which beats the shape that suits none. Nothing in
+# the plugin knows what a funicular is. The four cases below pin the two crossings - the
+# catenary standing where the parabola has gone, and the parabola standing where the circle
+# has gone.
+#
+# Not a hidden pass. Multiply one voussoir's mass by five and the catenary collapses at
+# every thickness including 150 mm, 10 to 20 joints open: the shape is the funicular of its
+# OWN weight and of no other load, and the solver reports exactly that.
+#
+# Two limits on how far this can be read.
+#
+# The ring is 13 straight chords, not a curve, so it is not exactly funicular. Working the
+# thrust line out by hand over the chords leaves a residual eccentricity of about 3 mm at 13
+# blocks, falling towards zero as the chording refines - which is why the catenary has a real
+# minimum thickness somewhere below the 10 mm tested here rather than none at all.
+#
+# Nothing here buckles. There is no elastic buckling and no material strength anywhere in
+# the solver, so a 10 mm ring standing is a statement about rigid blocks and their joints.
+# A real 10 mm masonry ribbon spanning 4 m would buckle or crush long before its thrust line
+# left the section. The cases are set at 25 mm and above for that reason.
+
+FUNICULAR_SPAN = 4000.0
+FUNICULAR_RISE = 2000.0
+FUNICULAR_WIDTH = 1000.0
+FUNICULAR_BLOCKS = 13
+
+
+def catenary_parameter(half_span: float, rise: float) -> float:
+    """The a with a*(cosh(half/a) - 1) = rise: the chain through both springings."""
+    low, high = 1.0, 1e7
+    for _ in range(200):
+        mid = 0.5 * (low + high)
+        if mid * (math.cosh(half_span / mid) - 1.0) > rise:
+            low = mid          # a larger a is a flatter chain, so this one sags too far
+        else:
+            high = mid
+    return 0.5 * (low + high)
+
+
+FUNICULAR_A = catenary_parameter(FUNICULAR_SPAN / 2.0, FUNICULAR_RISE)
+
+
+def funicular_centreline(shape: str, fraction: float) -> tuple[float, float, float, float]:
+    """Point and unit tangent at a fraction along the arch, in the XZ plane."""
+    half = FUNICULAR_SPAN / 2.0
+    if shape == "catenary":
+        # Stepped by arc length, so the blocks are equal and their weights are too.
+        total = 2.0 * FUNICULAR_A * math.sinh(half / FUNICULAR_A)
+        x = FUNICULAR_A * math.asinh((fraction - 0.5) * total / FUNICULAR_A)
+        z = FUNICULAR_RISE + FUNICULAR_A - FUNICULAR_A * math.cosh(x / FUNICULAR_A)
+        dx, dz = 1.0, -math.sinh(x / FUNICULAR_A)
+    elif shape == "parabola":
+        x = (fraction - 0.5) * FUNICULAR_SPAN
+        z = FUNICULAR_RISE * (1.0 - (x / half) ** 2)
+        dx, dz = 1.0, -2.0 * FUNICULAR_RISE * x / half ** 2
+    else:
+        angle = math.pi * (1.0 - fraction)
+        x, z = half * math.cos(angle), half * math.sin(angle)
+        dx, dz = math.sin(angle), -math.cos(angle)
+    length = math.hypot(dx, dz)
+    return x, z, dx / length, dz / length
+
+
+def funicular_wedges(shape: str, thickness: float) -> list[list[tuple[float, float]]]:
+    faces = []
+    for i in range(FUNICULAR_BLOCKS + 1):
+        x, z, tx, tz = funicular_centreline(shape, i / float(FUNICULAR_BLOCKS))
+        # The joint face is perpendicular to the tangent, so the joint carries the thrust
+        # square on rather than at a slant.
+        nx, nz = -tz, tx
+        half = thickness / 2.0
+        faces.append(((x - nx * half, z - nz * half), (x + nx * half, z + nz * half)))
+
+    wedges = []
+    for i in range(FUNICULAR_BLOCKS):
+        (inner_a, outer_a), (inner_b, outer_b) = faces[i], faces[i + 1]
+        wedges.append(clip_above_floor([inner_a, inner_b, outer_b, outer_a]))
+    return wedges
+
+
+def clip_above_floor(polygon: list[tuple[float, float]]) -> list[tuple[float, float]]:
+    """Sutherland-Hodgman against z >= 0.
+
+    A catenary meets the ground at 68 degrees and its end joint is perpendicular to that, so
+    half of each springing block is below the floor. Left there, every catenary is unstable
+    at every thickness - the first version of this was, and the shape was blamed before the
+    geometry was. Cutting the block flat is what a mason does: a springing needs a bed.
+    """
+    out = []
+    for i, point in enumerate(polygon):
+        previous = polygon[i - 1]
+        inside, was_inside = point[1] >= 0.0, previous[1] >= 0.0
+        if inside != was_inside:
+            f = -previous[1] / (point[1] - previous[1])
+            out.append((previous[0] + f * (point[0] - previous[0]), 0.0))
+        if inside:
+            out.append(point)
+    return out
+
+
+def funicular_build(
+    shape: str, thickness: float, heavy_block: int | None = None, heavy_factor: float = 1.0
+) -> Callable[[], str]:
+    # Emitted only when a block is loaded, so the common case draws no dead branch.
+    heavy_clause = "" if heavy_block is None else (
+        '    if name == "VOUSSOIR_%02d":\n        mass = mass * %r\n'
+        % (heavy_block, heavy_factor))
+
+    def build() -> str:
+        wedges = funicular_wedges(shape, thickness)
+        return script(f'''
+W = {FUNICULAR_WIDTH!r}
+
+
+def prism(name, pts_xz):
+    pts = [Rhino.Geometry.Point3d(x, -W / 2.0, z) for (x, z) in pts_xz]
+    pts.append(pts[0])
+    curve = Rhino.Geometry.Polyline(pts).ToNurbsCurve()
+    brep = Rhino.Geometry.Extrusion.Create(curve, W, True).ToBrep()
+    # Extrusion.Create follows the curve plane's normal, and the normal follows the winding
+    # of the points, so a wedge is not reliably on the side it was drawn on.
+    box = brep.GetBoundingBox(True)
+    brep.Transform(Rhino.Geometry.Transform.Translation(
+        0.0, -0.5 * (box.Min.Y + box.Max.Y), 0.0))
+    brep.Faces.SplitKinkyFaces(0.001)
+    volume = Rhino.Geometry.VolumeMassProperties.Compute(brep)
+    mass = (volume.Volume / 1e9) * {CONCRETE_DENSITY!r} if volume else 0.0
+    attrs = Rhino.DocObjects.ObjectAttributes()
+    attrs.Name = name
+{heavy_clause}    attrs.SetUserString("rhinomcp.stability.v1", json.dumps(
+        {{"mass": mass, "mass_unit": "kg"}}))
+    built.append(str(doc.Objects.AddBrep(brep, attrs)))
+
+
+for i, wedge in enumerate({json.dumps(wedges)}):
+    prism("VOUSSOIR_%02d" % i, [tuple(p) for p in wedge])
+''')
+
+    return build
+
+
 CASES: list[Case] = [
+    # Gaudi's hanging chain, upside down. Same span, rise, block count and density as the
+    # two below; only the curve differs, so the verdict is about shape and nothing else.
+    Case(
+        name="funicular_catenary",
+        mode="pinned",
+        tier=SYSTEMS,
+        stable=True,
+        reason=(
+            "the catenary is the funicular of a constant-thickness ring's own weight, so "
+            "the thrust runs down its centreline and no joint opens at 25 mm - a sixth of "
+            "the thickness the circle of the same span and rise needs"),
+        build=funicular_build("catenary", 25.0),
+        expect={"contact_joints_open": (0.0, 0.0)},
+    ),
+    # The catenary's shape is worth nothing to a load it was not drawn for. Five times the
+    # mass on one voussoir and the same ring at six times the thickness goes over.
+    Case(
+        name="funicular_catenary_wrong_load",
+        mode="pinned",
+        tier=SYSTEMS,
+        stable=False,
+        reason=(
+            "one voussoir at five times its mass, at 150 mm - the funicular of self-weight "
+            "is the funicular of nothing else, and ten of twelve joints open"),
+        build=funicular_build("catenary", 150.0, heavy_block=3, heavy_factor=5.0),
+    ),
+    # A parabola is funicular for load uniform per unit horizontal run - the right kind of
+    # curve for a deck hung under it, not for the ring's own weight. It lands between the
+    # other two, which is the ordering the pair of cases exists to hold.
+    Case(
+        name="funicular_parabola_stands",
+        mode="pinned",
+        tier=SYSTEMS,
+        stable=True,
+        reason="100 mm parabola stands where the circle of the same span and rise does not",
+        build=funicular_build("parabola", 100.0),
+    ),
+    Case(
+        name="funicular_parabola_fails",
+        mode="pinned",
+        tier=SYSTEMS,
+        stable=False,
+        reason=(
+            "60 mm parabola goes over where the catenary stands at 25, so suiting a "
+            "different load is worth something and is not worth what suiting this one is"),
+        build=funicular_build("parabola", 60.0),
+    ),
+    Case(
+        name="funicular_circle_fails",
+        mode="pinned",
+        tier=SYSTEMS,
+        stable=False,
+        reason=(
+            "100 mm semicircle of the same span and rise, funicular for nothing, opens 12 "
+            "of 12 joints - the arch case above puts its limit near 200 mm"),
+        build=funicular_build("circle", 100.0),
+    ),
     # Heyman's limit from the outside, at the one discretisation whose hinge count is right.
     # 13 voussoirs, inner radius 2000 mm; t/R quoted on the mean radius 2000 + t/2.
     Case(
