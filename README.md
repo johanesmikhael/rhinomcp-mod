@@ -25,7 +25,37 @@ Rhino visualization command for this geometry cache:
 - Rhino command: `mcpmodobb` (toggle OBB + projection profile display)
 - Rhino command: `mcpmodclearcache` (clear cached pose/OBB user strings)
 
-### 2. Added Topological Context
+### 2. Viewport Capture and Views
+
+The agent can look at the model rather than only read it.
+
+- MCP tool: `capture_view` - frames the targets, captures a PNG, and returns the image with
+  compact metadata
+
+```python
+capture_view(view="front", ids=[...], display_mode="Shaded")
+capture_view(view="isometric", all_visible=True, resolution="high")
+capture_view(camera_location=[x, y, z], camera_target=[x, y, z], lens_mm=50)
+```
+
+`view` takes `perspective`, `isometric`, `top`, `front` or `right`; targets are `ids`,
+`selected` or `all_visible`, framed with `fit` and `padding`. `display_mode` is any Rhino
+display mode name - `Shaded`, `Rendered`, `Wireframe`, `Technical`. `resolution` is `low`
+(640x480), `medium` (960x720) or `high` (1280x900), with `width`/`height` overrides clamped by
+the plugin. `camera_location`, `camera_target`, `camera_up` and `lens_mm` place the camera
+explicitly; `draw_grid` and `draw_axes` are off by default. `preserve_view` defaults to true,
+restoring the camera, projection, lens, frustum and display mode afterwards, so a capture does
+not disturb what is on screen.
+
+Views and camera state:
+
+- MCP tool: `get_viewport_info` - camera, projection, lens, display mode and active state for
+  every viewport
+- MCP tool: `zoom_to_objects` - zoom to given or currently selected objects
+- MCP tool: `save_named_view`, `restore_named_view`, `get_named_views`, `delete_named_view` -
+  named views stored in the document
+
+### 3. Added Topological Context
 
 This mod adds a connectivity graph pipeline:
 
@@ -80,7 +110,7 @@ bitmap, then restores the original viewport state. Set `preserve_view=false` onl
 is intentionally meant to become the new active view. Perspective/isometric presets use 50 mm
 unless `lens_mm` is supplied explicitly; they never inherit a lens value from a parallel viewport.
 
-### 3. Pose-Aware and Batch Transform Workflows
+### 4. Pose-Aware and Batch Transform Workflows
 
 This mod adds stronger pose operations for reliable editing pipelines:
 
