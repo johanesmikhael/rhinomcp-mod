@@ -1628,8 +1628,7 @@ public partial class RhinoMCPModFunctions
         // to be diagnosable without re-deriving the rules by hand - and a contact that fell
         // back to welded for want of a measured bearing plane is a silent stiffening
         // otherwise.
-        var jointForces = JointForceReport(pinned, sites, siteForces, slotJoints);
-        graph["joint_forces"] = jointForces;
+        graph["joint_forces"] = JointForceReport(pinned, sites, siteForces, slotJoints);
         // Joints held at their stated limit. A verdict that changed because a joint yielded
         // has to say so, rather than leaving it to be inferred from a deflection.
         graph["joints_with_capacity"] = sites.Count(
@@ -1693,7 +1692,7 @@ public partial class RhinoMCPModFunctions
         if (displayDoc != null)
         {
             ClearAfterEvaluationCache(displayDoc);
-            WriteMultiBodyDisplay(displayDoc, pinned, jointForces, lengthToMeters);
+            WriteMultiBodyDisplay(displayDoc, pinned);
             global::RhinoMCPModPlugin.MCPStabilityController.SetEnabled(true);
         }
 

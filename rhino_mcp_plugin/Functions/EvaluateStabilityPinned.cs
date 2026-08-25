@@ -1435,51 +1435,10 @@ public partial class RhinoMCPModFunctions
     /// that mode has. Here each element moved on its own, and showing them all shifted by
     /// one average transform would hide exactly the thing this mode exists to reveal.
     /// </remarks>
-    private static void WriteMultiBodyDisplay(
-        RhinoDoc doc, List<PinnedBody> bodies, JArray jointForces = null,
-        double lengthToMeters = 1.0)
+    private static void WriteMultiBodyDisplay(RhinoDoc doc, List<PinnedBody> bodies)
     {
-        // Each body's own forces, keyed by the body index the report uses, converted to
-        // document units on the way in. The conduit draws what it is given and does no
-        // arithmetic of its own, which keeps one definition of where a force acts.
-        var forcesByBody = new Dictionary<int, JArray>();
-        if (jointForces != null && lengthToMeters > 0.0)
+        foreach (var body in bodies)
         {
-            var toDocument = 1.0 / lengthToMeters;
-            foreach (var token in jointForces.OfType<JObject>())
-            {
-                if (token["body"] == null || token["at_m"] is not JArray at ||
-                    token["vector_n"] is not JArray vector || at.Count < 3 || vector.Count < 3)
-                {
-                    continue;
-                }
-
-                var index = token["body"].Value<int>();
-                if (!forcesByBody.TryGetValue(index, out var list))
-                {
-                    list = new JArray();
-                    forcesByBody[index] = list;
-                }
-
-                list.Add(new JObject
-                {
-                    ["at"] = new JArray(
-                        at[0].Value<double>() * toDocument,
-                        at[1].Value<double>() * toDocument,
-                        at[2].Value<double>() * toDocument),
-                    ["f"] = new JArray(
-                        vector[0].Value<double>(),
-                        vector[1].Value<double>(),
-                        vector[2].Value<double>()),
-                    ["tension_n"] = token["tension_n"]?.Value<double>() ?? 0.0,
-                    ["joint_type"] = token["joint_type"]?.ToString()
-                });
-            }
-        }
-
-        for (var bodyIndex = 0; bodyIndex < bodies.Count; bodyIndex++)
-        {
-            var body = bodies[bodyIndex];
             try
             {
                 var guidText = body.Node.Node["g"]?.ToString();
@@ -1528,16 +1487,12 @@ public partial class RhinoMCPModFunctions
                         box.Min.X, box.Min.Y, box.Min.Z, box.Max.X, box.Max.Y, box.Max.Z)
                 };
 
-                WriteAfterEvaluationFullGeometry(
-                    obj,
-                    summary,
-                    new JObject
-                    {
-                        ["type"] = "MESH",
-                        ["vertices"] = verts,
-                        ["faces"] = faces
-                    },
-                    forcesByBody.TryGetValue(bodyIndex, out var forces) ? forces : null);
+                WriteAfterEvaluationFullGeometry(obj, summary, new JObject
+                {
+                    ["type"] = "MESH",
+                    ["vertices"] = verts,
+                    ["faces"] = faces
+                });
             }
             catch
             {

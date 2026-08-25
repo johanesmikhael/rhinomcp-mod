@@ -2586,8 +2586,7 @@ public partial class RhinoMCPModFunctions
             referenceLengthSquared * referenceLengthSquared * 1e-24);
     }
 
-    private static void WriteAfterEvaluationFullGeometry(
-        RhinoObject obj, JObject geometry, JObject fullMesh, JArray forces = null)
+    private static void WriteAfterEvaluationFullGeometry(RhinoObject obj, JObject geometry, JObject fullMesh)
     {
         if (obj == null || geometry == null || fullMesh == null)
         {
@@ -2599,11 +2598,6 @@ public partial class RhinoMCPModFunctions
             ["geometry"] = geometry,
             ["full_mesh"] = fullMesh
         };
-
-        if (forces != null && forces.Count > 0)
-        {
-            payload["forces"] = forces;
-        }
 
         obj.Attributes.SetUserString(AfterEvaluationKey, payload.ToString(Newtonsoft.Json.Formatting.None));
         obj.CommitChanges();
