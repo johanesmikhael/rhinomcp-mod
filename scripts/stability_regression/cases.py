@@ -2159,7 +2159,100 @@ for i, wedge in enumerate({json.dumps(wedges)}):
     return build
 
 
+# --------------------------------------------------------------------------------------
+# A column stood on its base edge, which must fall over
+# --------------------------------------------------------------------------------------
+#
+# The simplest object that cannot stand, and for two years nothing in the suite asked for
+# one. A 400 x 400 x 1000 mm column turned 45 degrees about its own base edge touches its
+# pad along a 400 mm line and nothing else. Its centre of mass, at (200, 200, 500) before
+# the turn, lands at
+#
+#     y = 200 cos 45 - 500 sin 45 = -212.1 mm
+#     z = 200 sin 45 + 500 cos 45 =  495.0 mm
+#
+# so the weight hangs 212 mm to one side of the only thing under it. There is no thrust line,
+# no margin to compute and nothing to balance: it rotates about the line and goes over. The
+# flat one beside it is the same column, same pad, same mass, set down square.
+#
+# It was reported stable, and two separate defects had to be fixed before it fell.
+#
+# The pin friction at StabilityRigidBodies.Run damps rotation about the axis through a body's
+# attachments. That exists because a member pinned at two points may spin about the line
+# through them with nothing resisting it - a real pin has friction, and without it a run
+# never settles. But a line bearing holds a body at two points too, and there the rotation
+# about that line is not a spin, it is the fall. Sized as a fraction of critical for the
+# joint mode, the friction held this column up under half its own weight applied sideways:
+# 0.0003 mm at every lateral load from zero to 0.5, identical to four decimals. The axis is
+# now taken only where every joint holding the body is one that grants the spin deliberately.
+# A dry bearing grants nothing.
+#
+# That alone was not enough. The motion the verdict watches was the largest displacement of
+# any ATTACHMENT point - and a body rocking off a line bearing turns about exactly those
+# points, so they do not move at all. With the damping gone the column fell at 1.7 m/s and
+# still reported 0.0002 mm and stable. The measure now includes each body's centre of mass,
+# which is where the weight acts and what swings furthest.
+#
+# Neither fix moves any other case: fast 17/17, systems 18/18, geometry 4/4, micro 7/8 before
+# and after, with the same iteration counts.
+
+EDGE_COLUMN = 400.0
+EDGE_COLUMN_HEIGHT = 1000.0
+
+
+def edge_column_build(tilt_degrees: float) -> Callable[[], str]:
+    def build() -> str:
+        mass = concrete_mass(EDGE_COLUMN, EDGE_COLUMN, EDGE_COLUMN_HEIGHT)
+        return script(f"""
+import math
+
+# The pad reaches 400 mm past the column on every side, so the column has somewhere to fall
+# to and the answer is about the column rather than about running out of pad.
+world_box('PAD', -400.0, -800.0, -200.0, {EDGE_COLUMN + 400.0!r}, {EDGE_COLUMN + 400.0!r},
+          0.0, {concrete_mass(1200.0, 1600.0, 200.0)!r})
+
+brep = Rhino.Geometry.Box(
+    Rhino.Geometry.Plane.WorldXY,
+    Rhino.Geometry.Interval(0.0, {EDGE_COLUMN!r}),
+    Rhino.Geometry.Interval(0.0, {EDGE_COLUMN!r}),
+    Rhino.Geometry.Interval(0.0, {EDGE_COLUMN_HEIGHT!r})).ToBrep()
+# Turned about the base edge at y = 0, z = 0, so the edge stays on the pad and the rest of
+# the column leans off to one side of it.
+brep.Transform(Rhino.Geometry.Transform.Rotation(
+    math.radians({tilt_degrees!r}),
+    Rhino.Geometry.Vector3d.XAxis,
+    Rhino.Geometry.Point3d({EDGE_COLUMN / 2.0!r}, 0.0, 0.0)))
+attrs = Rhino.DocObjects.ObjectAttributes()
+attrs.Name = 'COLUMN'
+attrs.SetUserString('rhinomcp.stability.v1', '{{"mass": %r, "mass_unit": "kg"}}' % {mass!r})
+built.append(str(doc.Objects.AddBrep(brep, attrs)))
+""")
+
+    return build
+
+
 CASES: list[Case] = [
+    # The simplest thing that must fall over, and the two defects that stopped it falling.
+    Case(
+        name="column_on_edge_falls",
+        mode="pinned",
+        tier=FAST,
+        stable=False,
+        reason=(
+            "a 400 x 400 x 1000 column turned 45 degrees about its base edge touches along a "
+            "400 mm line with its centre of mass 212 mm to one side of it - no equilibrium "
+            "exists, and it read stable until pin friction stopped damping the fall and the "
+            "measure started watching the centre of mass"),
+        build=edge_column_build(45.0),
+    ),
+    Case(
+        name="column_flat_stands",
+        mode="pinned",
+        tier=FAST,
+        stable=True,
+        reason="the same column and pad, set down square, bearing over its whole 400 x 400 base",
+        build=edge_column_build(0.0),
+    ),
     # Gaudi's hanging chain, upside down. Same span, rise, block count and density as the
     # two below; only the curve differs, so the verdict is about shape and nothing else.
     Case(

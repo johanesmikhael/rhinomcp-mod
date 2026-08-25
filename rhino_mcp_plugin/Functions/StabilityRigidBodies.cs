@@ -411,6 +411,37 @@ internal static class StabilityRigidBodies
     /// The axis is taken through the two furthest-apart attachments, so a near-collinear set
     /// is judged against its own longest chord rather than against whichever pair came first.
     /// </remarks>
+    /// <summary>
+    /// Whether a body's spin about its attachments is a freedom some joint granted it.
+    /// </summary>
+    /// <remarks>
+    /// A pin carries no moment by construction, so a member pinned at two points may spin
+    /// about the line through them and a real pin resists that with friction. A contact
+    /// bearing grants nothing: it is a measured region that carries moment across its own
+    /// width until it opens, and where that region is a line, rocking about the line is how
+    /// the thing falls over. Friction there would hold up something that cannot stand.
+    ///
+    /// One contact is enough to disqualify the body. The friction is a property of how it is
+    /// held, and a body held partly on a bearing is free to leave that bearing.
+    /// </remarks>
+    internal static bool SpinIsGranted(Body body, List<Site> sites)
+    {
+        if (body.Sites.Count == 0)
+        {
+            return false;
+        }
+
+        foreach (var index in body.Sites)
+        {
+            if (index < 0 || index >= sites.Count || sites[index].Type == JointType.Contact)
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
     internal static Vector3d CollinearSpinAxis(Body body)
     {
         if (body.Local.Count < 2)
@@ -652,10 +683,21 @@ internal static class StabilityRigidBodies
         // exactly on the axis and see no velocity. A body held at three points off a line has
         // no such freedom - the joint dashpots already damp every rotation, with the right
         // lever arms - so it needs no friction and must be free to topple.
+        //
+        // And the freedom has to have been granted, not merely left over. A body bearing on a
+        // line is held at two points as surely as a member pinned at both ends is, so the two
+        // are the same picture to the geometry - but rocking off an edge IS the rotation about
+        // that line, and damping it is damping the collapse. A 400 mm column stood on its base
+        // edge with its centre of mass 212 mm to one side of the only thing under it read
+        // stable, and moved 0.0003 mm under half its own weight applied sideways. So the axis
+        // is taken only where every joint holding the body is one that grants the spin on
+        // purpose. A dry bearing grants nothing.
         var spinAxis = new Vector3d[bodies.Count];
         for (var b = 0; b < bodies.Count; b++)
         {
-            spinAxis[b] = CollinearSpinAxis(bodies[b]);
+            spinAxis[b] = SpinIsGranted(bodies[b], sites)
+                ? CollinearSpinAxis(bodies[b])
+                : Vector3d.Unset;
         }
 
         // One damping coefficient per joint, not one per body.
@@ -1485,6 +1527,17 @@ public partial class RhinoMCPModFunctions
             var worst = 0.0;
             foreach (var body in bodies)
             {
+                // The centre counts, and not only the attachments.
+                //
+                // A body rocking off a line bearing turns about the very points its joints
+                // hold, so every attachment stays exactly where it started while the body
+                // goes over. Measured on the attachments alone that motion is invisible: a
+                // column stood on its base edge, centre of mass 212 mm to one side of the
+                // only thing under it, read 0.0002 mm and stable while it was falling at
+                // 1.7 m/s. The centre of mass is where the weight acts and it swings
+                // furthest, so it is what says the body moved.
+                worst = Math.Max(worst, body.StartCentre.DistanceTo(body.Centre));
+
                 for (var slot = 0; slot < body.Local.Count; slot++)
                 {
                     worst = Math.Max(
