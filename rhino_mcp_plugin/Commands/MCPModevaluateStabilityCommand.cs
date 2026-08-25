@@ -221,7 +221,7 @@ namespace RhinoMCPModPlugin.Commands
                 // its order as well as by what it does when nothing is chosen.
                 var contactJointOption = getDefaultJoint.AddOption("Contact");
                 var pinJointOption = getDefaultJoint.AddOption("Pin");
-                var weldedJointOption = getDefaultJoint.AddOption("Welded");
+                var fixedJointOption = getDefaultJoint.AddOption("Fixed");
                 getDefaultJoint.AcceptNothing(true);
 
                 if (getDefaultJoint.Get() == GetResult.Cancel)
@@ -235,9 +235,9 @@ namespace RhinoMCPModPlugin.Commands
                 {
                     defaultJoint = "pin";
                 }
-                else if (jointIndex == weldedJointOption)
+                else if (jointIndex == fixedJointOption)
                 {
-                    defaultJoint = "welded";
+                    defaultJoint = "fixed";
                 }
 
                 parameters["joint_type"] = defaultJoint;

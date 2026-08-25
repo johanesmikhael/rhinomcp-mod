@@ -212,14 +212,14 @@ measured bearing is used:
 | --- | --- | --- |
 | `contact` | compression and moment until it opens; friction across it | dry masonry, a beam on a corbel, a panel on a pad |
 | `pin` | force in three directions, no moment | truss to truss, a single bolt |
-| `welded` | force and moment, both ways, always | a moment connection: beam to column, a rigid plate |
+| `fixed` | force and moment, both ways, always | a moment connection: beam to column, a rigid plate |
 
 The moment comes from the *spread* of the bearing. A joint reduced to a point has no lever
 arm and resists no rotation, so `pin` collapses the bearing to its centre and the other two
 keep its extent.
 
 A joint nobody names is a `contact`, the only one of the three that describes two things
-found touching. `welded` is the strongest assumption available applied where the least is
+found touching. `fixed` is the strongest assumption available applied where the least is
 known; `pin` hangs in tension and discards the bearing, so a stack becomes a mechanism hinged
 at points that exist nowhere in the drawing.
 
@@ -228,7 +228,7 @@ State the rules by element class, not joint by joint:
 ```python
 assign_joint_type(joint_type="pin", layer="Truss", with_layer="Truss")
 assign_joint_type(joint_type="contact", layer="Truss", with_layer="Pads")
-assign_joint_type(joint_type="welded", layer="Beams", with_layer="Columns", capacity_kn=40)
+assign_joint_type(joint_type="fixed", layer="Beams", with_layer="Columns", capacity_kn=40)
 ```
 
 A pair rule beats an element rule beats the default, and where two elements disagree the
@@ -292,8 +292,9 @@ defaults to 9.80665 m/s². Returned lengths are in the document's units. Invalid
 missing or non-positive mass, and non-finite values fail explicitly instead of being reported
 as instability.
 
-`mode="welded"` remains as a cheap independent upper bound: it treats the whole scope as one
-rigid body and asks only whether it tips. It supplies every moment connection the real
+`mode="welded"` is a different thing from the `fixed` joint type, and remains as a cheap
+independent upper bound: it treats the whole scope as one rigid body and asks only whether it
+tips. It supplies every moment connection the real
 assembly lacks, so it passes structures a dry stack would not hold.
 
 **4. Look at the result.** `mcpmodstabilitydisplay` draws where the bodies ended up, in grey,

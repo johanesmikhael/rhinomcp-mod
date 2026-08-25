@@ -14,7 +14,7 @@ namespace RhinoMCPModPlugin.Functions;
 /// Connection type is domain knowledge and not geometry: a screwed panel and a dry-stacked
 /// one look identical to an intersection test, and no amount of sampling will tell them
 /// apart. So it has to be stated, and the natural unit for stating it is a *pair of element
-/// classes* - "beam to column is welded", "truss to truss is pinned" - because that is how an
+/// classes* - "beam to column is fixed", "truss to truss is pinned" - because that is how an
 /// engineer knows it. One rule, not one per joint.
 ///
 /// Three scopes, most specific first:
@@ -91,11 +91,11 @@ public partial class RhinoMCPModFunctions
                 capacityNewtons = kilonewtons * 1000.0;
             }
 
-            var type = StabilityRigidBodies.JointType.Welded;
+            var type = StabilityRigidBodies.JointType.Fixed;
             if (!clear && !pruning && !StabilityRigidBodies.TryParseJointType(typeText, out type))
             {
                 throw new InvalidOperationException(
-                    $"Unknown joint_type '{typeText}'. Expected contact, pin or welded.");
+                    $"Unknown joint_type '{typeText}'. Expected contact, pin or fixed.");
             }
 
             // Rules that can no longer match anything, cleared out on request.
@@ -303,7 +303,7 @@ public partial class RhinoMCPModFunctions
         Rhino.DocObjects.RhinoObject rhinoObject, out StabilityRigidBodies.JointType type,
         out double? capacityNewtons)
     {
-        type = StabilityRigidBodies.JointType.Welded;
+        type = StabilityRigidBodies.JointType.Fixed;
         capacityNewtons = null;
         var stored = rhinoObject?.Attributes?.GetUserString(StabilityKey);
         if (string.IsNullOrWhiteSpace(stored))
@@ -652,7 +652,7 @@ public partial class RhinoMCPModFunctions
         /// Each body offers what it can be named by - the object itself, and the layer it sits
         /// on - and the tightest rule matching any combination wins. Two named objects beat an
         /// object and a layer, which beats two layers, so "this beam meets that column as a
-        /// pin" survives a blanket "beams meet columns welded" rather than being averaged with
+        /// pin" survives a blanket "beams meet columns fixed" rather than being averaged with
         /// it. Specificity, not order: a rule table is not a script.
         /// </remarks>
         public StabilityRigidBodies.JointType Resolve(

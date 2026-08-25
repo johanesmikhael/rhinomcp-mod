@@ -134,7 +134,7 @@ internal static class StabilityRigidBodies
     /// - <see cref="Pin"/> collapses the region to its centre. One point has no lever arm, so
     ///   it carries force in three directions and no moment. That is the pinned idealisation,
     ///   and it is now something chosen rather than something the geometry forced.
-    /// - <see cref="Welded"/> uses the region as measured. Points d apart resist rotation with
+    /// - <see cref="Fixed"/> uses the region as measured. Points d apart resist rotation with
     ///   k d^2, so the moment comes from the bearing rather than from a constant.
     /// - <see cref="Contact"/> is welded with each point able to push and not pull, plus
     ///   friction across it. A bearing that carries no tension opens when the load leaves it,
@@ -159,7 +159,7 @@ internal static class StabilityRigidBodies
     {
         Contact = 0,
         Pin = 1,
-        Welded = 2
+        Fixed = 2
     }
 
     /// <summary>
@@ -171,7 +171,7 @@ internal static class StabilityRigidBodies
     /// </remarks>
     internal static bool TryParseJointType(string text, out JointType type)
     {
-        type = JointType.Welded;
+        type = JointType.Fixed;
         if (string.IsNullOrWhiteSpace(text))
         {
             return false;
@@ -189,11 +189,17 @@ internal static class StabilityRigidBodies
             case "hinge":
                 type = JointType.Pin;
                 return true;
+            // "welded" is kept because documents written before the rename hold it, and
+            // because it is what a fabricator would say. It is not the canonical name: the
+            // type means a moment connection however it is made, a bolted rigid plate as much
+            // as a weld - and "welded" is already the name of an evaluation mode, where it
+            // means the whole scope solved as one rigid body rather than anything about a
+            // joint.
+            case "fixed":
             case "welded":
             case "weld":
-            case "fixed":
             case "moment":
-                type = JointType.Welded;
+                type = JointType.Fixed;
                 return true;
             default:
                 return false;
@@ -1293,7 +1299,7 @@ public partial class RhinoMCPModFunctions
                     : default;
                 var type = j < pinned[i].JointTypes.Count
                     ? pinned[i].JointTypes[j]
-                    : StabilityRigidBodies.JointType.Welded;
+                    : StabilityRigidBodies.JointType.Fixed;
 
                 var spread = StabilityRigidBodies.BearingPoints(
                     pinned[i].JointPoints[j], extent, type);
@@ -1343,7 +1349,7 @@ public partial class RhinoMCPModFunctions
             while (types.Count < attachments.Count)
             {
                 // Ground attachments: the earth holds what stands on it, both ways.
-                types.Add(StabilityRigidBodies.JointType.Welded);
+                types.Add(StabilityRigidBodies.JointType.Fixed);
                 normals.Add(Vector3d.ZAxis);
             }
 
@@ -1375,7 +1381,7 @@ public partial class RhinoMCPModFunctions
                     {
                         Anchor = point,
                         Stiffness = double.MaxValue,
-                        Type = StabilityRigidBodies.JointType.Welded
+                        Type = StabilityRigidBodies.JointType.Fixed
                     });
                 }
 
@@ -1643,7 +1649,7 @@ public partial class RhinoMCPModFunctions
         {
             ["contact"] = sites.Count(s => !s.Grounded && s.Type == StabilityRigidBodies.JointType.Contact),
             ["pin"] = sites.Count(s => !s.Grounded && s.Type == StabilityRigidBodies.JointType.Pin),
-            ["welded"] = sites.Count(s => !s.Grounded && s.Type == StabilityRigidBodies.JointType.Welded)
+            ["fixed"] = sites.Count(s => !s.Grounded && s.Type == StabilityRigidBodies.JointType.Fixed)
         };
         graph["contact_joints_open"] = sites.Count(s => s.Opened > 0);
         graph["contact_joints_sided"] = sites.Count(

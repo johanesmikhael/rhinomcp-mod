@@ -202,7 +202,7 @@ def rule_stair_build() -> str:
 RULE_EVAL = {
     "mode": "pinned_dynamic",
     "integrator": "rigid_bodies",
-    "joint_type": "welded",
+    "joint_type": "fixed",
     "damping_ratio": 0.2,
     "lateral_load_fraction": 0.0,
     "gravity": 9.80665,
@@ -240,13 +240,15 @@ def check_joint_type_rules(send: Callable[[str, dict], Any], ids: list[str]) -> 
     clear_rules()
 
     got = nodes_by_type("no rules", True)
-    if got != [("welded", "default"), ("welded", "default")]:
-        problems.append(f"no rules: {got}, expected both welded from the default")
+    if got != [("fixed", "default"), ("fixed", "default")]:
+        problems.append(f"no rules: {got}, expected both fixed from the default")
 
     send("assign_joint_type",
          {"joint_type": "pin", "layer": "STEP_A", "with_layer": "STEP_B"})
     got = nodes_by_type("pair rule", False)
-    if got != [("pin", "pair:STEP_A|STEP_B"), ("welded", "default")]:
+    # Sorted, so the order follows the type names rather than the joints: "fixed" sorts
+    # before "pin" where "welded" sorted after it.
+    if got != [("fixed", "default"), ("pin", "pair:STEP_A|STEP_B")]:
         problems.append(
             f"pair rule: {got}, expected the A-to-B joint pinned and the B-to-B joint left")
 
@@ -264,11 +266,11 @@ def check_joint_type_rules(send: Callable[[str, dict], Any], ids: list[str]) -> 
     # "this one connection is different" is exactly the case a per-joint rule exists for.
     send("assign_joint_type", {"joint_type": "pin", "layer": "STEP_B", "with_layer": "STEP_B"})
     send("assign_joint_type",
-         {"joint_type": "welded", "ids": [ids[1]], "with_ids": [ids[2]]})
+         {"joint_type": "fixed", "ids": [ids[1]], "with_ids": [ids[2]]})
     got = nodes_by_type("id pair over layer pair", True)
     types = sorted(entry[0] for entry in got)
     rules = sorted(entry[1] for entry in got)
-    if types != ["welded", "welded"]:
+    if types != ["fixed", "fixed"]:
         problems.append(
             f"id pair over layer pair: {got}, expected the object rule to override the layer one")
     if sum(rule.startswith("pair:id:") for rule in rules) != 1:
@@ -276,7 +278,7 @@ def check_joint_type_rules(send: Callable[[str, dict], Any], ids: list[str]) -> 
 
     clear_rules()
     got = nodes_by_type("cleared", True)
-    if got != [("welded", "default"), ("welded", "default")]:
+    if got != [("fixed", "default"), ("fixed", "default")]:
         problems.append(f"cleared: {got}, expected the rules to be gone")
 
     return problems
@@ -556,7 +558,7 @@ def check_capacity(send: Callable[[str, dict], Any], ids: list[str]) -> list[str
         send("assign_joint_type", {"clear": True, "ids": ids})
         if capacity_kn is not None:
             send("assign_joint_type",
-                 {"joint_type": "welded", "capacity_kn": capacity_kn, "ids": ids})
+                 {"joint_type": "fixed", "capacity_kn": capacity_kn, "ids": ids})
         return send("evaluate_stability", {
             "mode": "pinned_dynamic",
             "integrator": "rigid_bodies",
@@ -564,7 +566,7 @@ def check_capacity(send: Callable[[str, dict], Any], ids: list[str]) -> list[str
             "gravity": GRAVITY,
             "solver_substeps": 1,
             "display": SHOW_WORK,
-            "joint_type": "welded",
+            "joint_type": "fixed",
             "damping_ratio": 0.2,
             "lateral_load_fraction": 0.0,
         })
@@ -633,7 +635,7 @@ def check_joint_forces(send: Callable[[str, dict], Any], ids: list[str]) -> list
         "gravity": GRAVITY,
         "solver_substeps": 1,
         "display": SHOW_WORK,
-        "joint_type": "welded",
+        "joint_type": "fixed",
         "damping_ratio": MICRO_DAMPING["rigid_bodies"]["damping_ratio"],
         **MICRO_PARAMS,
     })
@@ -862,7 +864,7 @@ HYBRID_RULES_AS_BUILT = [
     #
     # Cast in one pour, so the pad and the column above it really are one moment connection.
     # That is knowledge, not optimism, so it is stated.
-    ("CONCRETE", "CONCRETE", "welded"),
+    ("CONCRETE", "CONCRETE", "fixed"),
     # A glulam beam in a bolted shoe carries force and no moment. Also known.
     ("GLULAM", "CONCRETE", "pin"),
     # A CLT panel laid on a beam. Nothing holds it down.
@@ -882,10 +884,10 @@ HYBRID_RULES_SPLINE_UPPER = [
     # edge - the optimistic end of the bracket, kept because running both ends is how you see
     # whether a detail is load-bearing for the verdict. Where the two disagree, the lower
     # bound is the answer and the difference is what that detail is worth.
-    ("CONCRETE", "CONCRETE", "welded"),
+    ("CONCRETE", "CONCRETE", "fixed"),
     ("GLULAM", "CONCRETE", "pin"),
     ("CLT", "GLULAM", "contact"),
-    ("CLT", "CLT", "welded"),
+    ("CLT", "CLT", "fixed"),
 ]
 
 HYBRID_RULES_DRY = [
@@ -1304,7 +1306,7 @@ def micro_splay_build() -> str:
 MICRO_PARAMS = {
     "lateral_load_fraction": 0.0,
     "imperfection_fraction": 0.0,
-    "joint_type": "welded",
+    "joint_type": "fixed",
 }
 
 
@@ -2172,7 +2174,7 @@ CASES: list[Case] = [
         build=stair_build(100.0),
         params={
             "integrator": "rigid_bodies",
-            "joint_type": "welded",
+            "joint_type": "fixed",
             "damping_ratio": 0.2,
             "lateral_load_fraction": 0.0,
         },

@@ -163,18 +163,19 @@ async def evaluate_stability(
             in the assembly is, since geometry cannot tell you: a screwed panel and a
             dry-stacked one look identical to an intersection test.
 
-            "welded" - the bearing carries force and moment, always. A moment
-            connection: beam to column, a plate welded or bolted rigid.
+            "fixed" - the bearing carries force and moment, always. A moment
+            connection: beam to column, a plate welded or bolted rigid. Not to be
+            confused with mode="welded", which is the whole scope as one rigid body.
             "pin" - the bearing collapses to its centre, so it carries force in three
-            directions and no moment. A hinge: truss to truss, a bolted single fastener.
+            directions and no moment about any axis. Truss to truss, a single bolt.
             "contact" (default) - the bearing pushes and does not pull, with friction across it,
             so it opens as load leaves it. Dry masonry, a beam sitting on a corbel, a
             precast panel bearing on a pad.
 
-            "contact" is the honest floor and "welded" the optimistic ceiling, so
+            "contact" is the honest floor and "fixed" the optimistic ceiling, so
             running both brackets a verdict. Where a joint has no measured bearing
             region - it was found by proximity rather than by two faces meeting -
-            "contact" has no direction to open along and falls back to welded; the
+            "contact" has no direction to open along and falls back to fixed; the
             result reports how many were actually sided.
 
         integrator: pinned_dynamic mode only. "rigid_bodies" (default) or
@@ -362,11 +363,11 @@ async def assign_joint_type(
     other modes, which have their own fixed idea of what a joint is.
 
     Args:
-        joint_type: "welded", "pin" or "contact".
+        joint_type: "fixed", "pin" or "contact".
 
-            "welded" - carries force and moment over the measured bearing,
+            "fixed" - carries force and moment over the measured bearing,
             always. A moment connection: beam to column, a plate welded or
-            bolted rigid. Synonyms: weld, fixed, moment.
+            bolted rigid. Synonyms: welded, weld, moment.
             "pin" - the bearing collapses to its centre, so it carries force
             in three directions and no moment. Truss to truss, a single
             bolt. Synonyms: pinned, hinge.
@@ -380,7 +381,7 @@ async def assign_joint_type(
         names: One side, named by object name. Resolved to GUIDs as it is
             written, since a name can be changed or duplicated later.
         with_layer: The other side, by layer, making this a rule about the
-            joints *between* two classes - "beam to column is welded".
+            joints *between* two classes - "beam to column is fixed".
         with_ids: The other side, by object GUID.
         with_names: The other side, by object name.
         selected: When True, applies to the current selection.
