@@ -891,10 +891,27 @@ internal static class StabilityRigidBodies
                             continue;
                         }
 
+                        // The dashpot cannot hold the faces together either.
+                        //
+                        // Open and closed is decided on the spring, and the force applied was
+                        // spring plus dashpot - so a site whose spring had barely any
+                        // compression left stayed closed while the dashpot, proportional to
+                        // how fast the point was lifting, supplied as much tension as it
+                        // liked. A pedestal with its centre of mass 275 mm outside its footing
+                        // stood up on 6.1 kN of it, and since the coefficient is sized on
+                        // sqrt(k m), a heavier footing held harder: the same arrangement
+                        // toppled at 2600 kg and stood at 2880.
+                        //
+                        // Clamping the outward component to zero leaves the dashpot doing what
+                        // it is for - damping relative motion across a joint that is carrying
+                        // - and stops it doing the one thing the joint itself refuses.
                         var total = pull + damping;
-                        var along = total * normal;
-                        var across = total - along * normal;
-                        var limit = site.Friction * (-bearing);
+                        var along = Math.Min(total * normal, 0.0);
+                        var across = total - (total * normal) * normal;
+
+                        // Friction rides on what the joint is actually pressed with, which is
+                        // the clamped normal force rather than the spring's own.
+                        var limit = site.Friction * (-along);
                         var magnitude = across.Length;
                         if (magnitude > limit && magnitude > 0.0)
                         {
@@ -1834,6 +1851,33 @@ public partial class RhinoMCPModFunctions
         graph["motion_reversals"] = reversals;
         graph["decay_ratio_per_swing"] = run.DecayRatio;
         graph["projected_displacement_m"] = run.ProjectedDisplacement;
+        // What each footing point is carrying, and whether it is still touching.
+        //
+        // Ground reactions were the one load path the report did not carry, so a model held up
+        // by its footings could not be checked against hand statics at all - and a footing
+        // holding a body DOWN, which is what a bearing cannot do, was invisible. A negative
+        // force here is the tell.
+        var groundReport = new JArray();
+        for (var s = 0; s < sites.Count; s++)
+        {
+            if (!sites[s].Grounded)
+            {
+                continue;
+            }
+
+            var force = siteForces[s].Length > 0 ? siteForces[s][0] : Vector3d.Zero;
+            groundReport.Add(new JObject
+            {
+                ["x_m"] = Math.Round(sites[s].Anchor.X, 4),
+                ["z_m"] = Math.Round(sites[s].Anchor.Z, 4),
+                ["type"] = TypeName(sites[s].Type),
+                ["opened"] = sites[s].Opened,
+                ["fz_n"] = Math.Round(force.Z, 1)
+            });
+        }
+
+        graph["ground_sites"] = groundReport;
+
         graph["verdict_metric"] = "pin_displacement";
         graph["mechanism_threshold_m"] = threshold;
         graph["span_m"] = span;

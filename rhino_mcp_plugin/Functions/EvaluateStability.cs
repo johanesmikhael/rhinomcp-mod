@@ -618,7 +618,7 @@ public partial class RhinoMCPModFunctions
                             // diverged run reached the caller looking merely inconclusive,
                             // with no way to tell "it stands but I cannot prove it" from
                             // "the integration blew up at 4.8e6 m/s".
-                            "diverged", "diverged_reason",
+                            "diverged", "diverged_reason", "ground_sites",
                             "motion_samples_m"
                         })
                         {

@@ -2240,7 +2240,89 @@ built.append(str(doc.Objects.AddBrep(brep, attrs)))
     return build
 
 
+# --------------------------------------------------------------------------------------
+# Toppling about a footing, which is not the same as toppling off a bearing
+# --------------------------------------------------------------------------------------
+#
+# A 400 x 400 x 1000 mm pedestal on the ground with a 2 m slab laid across its head, both
+# 0.16 m3 of concrete at 384 kg. Welded, so nothing can rotate off anything: the only way
+# down is the pair tipping about the edge of the pedestal's own footing.
+#
+#     cap centroid            x = 1150
+#     pair centroid           x = (384*200 + 384*1150) / 768 = 675
+#     footing spans           x = 0 .. 400
+#     centre of mass outside  675 - 400 = 275 mm
+#
+# It must go over, and `mode="welded"` says so analytically: support_margin_m = -0.275, to
+# the millimetre. The rigid path said stable at 0.12 mm.
+#
+# The suite had every other kind of toppling and not this one. Every case that tips does it
+# off another body's bearing - the stair, the pedestal cap, the column on its edge - and
+# those were right. Nothing asked whether an assembly tips about the ground it stands on,
+# and the answer was no, by a factor of 2.3 to 6 in eccentricity.
+#
+# The cause was a dashpot doing what its joint refuses. Open and closed is decided on the
+# spring; the force applied was spring plus dashpot. A footing point whose spring had almost
+# no compression left stayed closed while the dashpot, proportional to how fast the point was
+# lifting, supplied the tension - 6.1 kN of it here, holding the pedestal down. The
+# coefficient is sized on sqrt(k m), so a heavier footing held harder: this arrangement
+# toppled at 2600 kg of pedestal and stood at 2880.
+#
+# The pair below is either side of the footing edge, and the stable one is the same cap
+# centred rather than overhung.
+
+FOOTING_PEDESTAL = (400.0, 400.0, 1000.0)
+FOOTING_CAP = (2000.0, 400.0, 200.0)
+
+
+def footing_build(cap_x0: float) -> Callable[[], str]:
+    def build() -> str:
+        pedestal = concrete_mass(*FOOTING_PEDESTAL)
+        cap = concrete_mass(*FOOTING_CAP)
+        return script(
+            f'world_box("PEDESTAL", 0.0, 0.0, 0.0, {FOOTING_PEDESTAL[0]!r}, '
+            f'{FOOTING_PEDESTAL[1]!r}, {FOOTING_PEDESTAL[2]!r}, {pedestal!r}, "PEDESTAL")\n'
+            f'world_box("CAP", {cap_x0!r}, 0.0, {FOOTING_PEDESTAL[2]!r}, '
+            f'{cap_x0 + FOOTING_CAP[0]!r}, {FOOTING_CAP[1]!r}, '
+            f'{FOOTING_PEDESTAL[2] + FOOTING_CAP[2]!r}, {cap!r}, "CAP")')
+
+    return build
+
+
+def footing_margin_mm(cap_x0: float) -> float:
+    """How far the pair's centre of mass falls outside the footing. Positive is outside."""
+    pedestal = concrete_mass(*FOOTING_PEDESTAL)
+    cap = concrete_mass(*FOOTING_CAP)
+    centre = (pedestal * FOOTING_PEDESTAL[0] / 2.0 +
+              cap * (cap_x0 + FOOTING_CAP[0] / 2.0)) / (pedestal + cap)
+    return centre - FOOTING_PEDESTAL[0]
+
+
 CASES: list[Case] = [
+    # Toppling about the ground, which nothing else in the suite asks about.
+    Case(
+        name="footing_overturns",
+        mode="pinned",
+        tier=FAST,
+        stable=False,
+        reason=(
+            f"cap and pedestal welded, their centre of mass {footing_margin_mm(150.0):.0f} mm "
+            "outside the footing, so the pair tips about the pedestal's own base - welded mode "
+            "puts the same margin at -275 mm analytically"),
+        build=footing_build(150.0),
+        rules=[{"joint_type": "fixed", "layer": "CAP", "with_layer": "PEDESTAL"}],
+    ),
+    Case(
+        name="footing_holds",
+        mode="pinned",
+        tier=FAST,
+        stable=True,
+        reason=(
+            f"the same cap centred on the same pedestal, centre of mass "
+            f"{-footing_margin_mm(-800.0):.0f} mm inside the footing"),
+        build=footing_build(-800.0),
+        rules=[{"joint_type": "fixed", "layer": "CAP", "with_layer": "PEDESTAL"}],
+    ),
     # The simplest thing that must fall over, and the two defects that stopped it falling.
     Case(
         name="column_on_edge_falls",
