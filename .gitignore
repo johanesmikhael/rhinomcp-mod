@@ -39,3 +39,6 @@ dev_plan.md
 __pycache__/
 *.pyc
 *.rhl
+
+# stale scratch
+howtobuild.txt
