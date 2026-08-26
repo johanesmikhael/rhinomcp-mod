@@ -463,6 +463,11 @@ Measured against hand-computed statics:
 
 None of this makes the result a certified structural analysis.
 
+## Development notes
+
+How the stability evaluator got its numbers - the state of each mode, the defects found
+along the way, and the plans they came from - is in [`docs/dev/`](docs/dev/README.md).
+
 ## Credits
 
 - Original project and concept: [Jingcheng Chen](https://github.com/jingcheng-chen/rhinomcp)

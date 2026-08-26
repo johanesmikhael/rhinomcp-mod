@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Sampled bearings against exactly measured ones, on every model the suite draws.
 
-This is the deliverable of step A of CONTACT_PLAN.md, and it exists because three patches
+This is the deliverable of step A of docs/dev/CONTACT_PLAN.md, and it exists because three patches
 to the sampler were each written without one. The exact measurement is emitted beside the
 sampled one and changes nothing; what decides whether it may ever replace it is this table.
 
