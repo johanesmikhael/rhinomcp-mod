@@ -390,7 +390,11 @@ change.
 Check here before running anything. A joint the graph never found cannot be given a type, and
 a bearing measured on the wrong face restrains the wrong rotation.
 
-**4. Evaluate.** `mcpmodevaluatestability` prompts for scope, mode and the default joint type.
+**4. Evaluate.** `mcpmodevaluatestability` prompts for scope, mode, the default joint type,
+then `Defaults` or `Custom`. In Elements mode `Custom` asks for the things the multi-body
+solver reads - duration, damping ratio, joint penetration, joint stiffness, the sway probe,
+floor level, gravity - and `Defaults` leaves all but gravity to the solver's own sizing. In
+Assembly mode it asks for the welded solver's knobs instead, ground settlement among them.
 
 ```python
 evaluate_stability(mode="pinned")
@@ -413,8 +417,10 @@ assembly lacks, so it passes structures a dry stack would not hold. It is a chea
 
 **5. Read it.** `verdict` is `stable`, `unstable` or `inconclusive`; `inconclusive` is not
 `unstable`. `settled_displacement_m` is where it came to rest, `mechanism_threshold_m` the
-distance that counts as collapse. `nodes` carries each joint's type and the rule that decided
-it. `contact_joints_open` counts bearings that lifted.
+distance that counts as collapse. `contact_joints_open` counts bearings that lifted.
+`joint_forces_summary` names the most-tensioned and most-loaded joints; for every joint, and
+for each node's type and the rule that decided it, page the stored report with
+`get_stability_report(section="joint_forces")` or `section="nodes"` - see *Reported values*.
 
 **6. See it.** `mcpmodstabilitydisplay`, or `evaluate_stability(display=True)`, draws the
 settled bodies in grey over the original geometry, which is not modified.
