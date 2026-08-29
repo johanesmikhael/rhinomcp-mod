@@ -229,7 +229,7 @@ def check_joint_type_rules(send: Callable[[str, dict], Any], ids: list[str]) -> 
         send("assign_joint_type", {"clear": True, "ids": ids})
 
     def nodes_by_type(label: str, expect_stable: bool) -> list[tuple[str, str]]:
-        result = send("evaluate_stability", dict(RULE_EVAL, ids=ids))
+        result = send("evaluate_stability", dict(RULE_EVAL, ids=ids, detail="full"))
         if result.get("success") is not True:
             problems.append(f"{label}: {result.get('message')}")
             return []
@@ -568,7 +568,7 @@ def check_capacity(send: Callable[[str, dict], Any], ids: list[str]) -> list[str
         if capacity_kn is not None:
             send("assign_joint_type",
                  {"joint_type": "fixed", "capacity_kn": capacity_kn, "ids": ids})
-        return send("evaluate_stability", {
+        return send("evaluate_stability", {"detail": "full",
             "mode": "pinned_dynamic",
             "integrator": "rigid_bodies",
             "ids": ids,
@@ -637,7 +637,7 @@ MICRO_REACTION_TOLERANCE = 0.02
 
 def check_joint_forces(send: Callable[[str, dict], Any], ids: list[str]) -> list[str]:
     """Reported joint forces against the reactions statics requires."""
-    result = send("evaluate_stability", {
+    result = send("evaluate_stability", {"detail": "full",
         "mode": "pinned_dynamic",
         "integrator": "rigid_bodies",
         "ids": ids,
@@ -762,7 +762,7 @@ def check_bridge_on_pads(send: Callable[[str, dict], Any], ids: list[str]) -> li
     if SHOW_WORK:
         send("graph_display", {"enabled": True, "ids": ids})
 
-    result = send("evaluate_stability", {
+    result = send("evaluate_stability", {"detail": "full",
         "mode": "pinned_dynamic",
         "integrator": "rigid_bodies",
         "ids": ids,
@@ -949,7 +949,7 @@ def hybrid_check(rules, expect_stable: bool, weight_n: float, expect_types=None)
         if SHOW_WORK:
             send("graph_display", {"enabled": True, "ids": ids})
 
-        result = send("evaluate_stability", {
+        result = send("evaluate_stability", {"detail": "full",
             "mode": "pinned_dynamic",
             "ids": ids,
             "gravity": GRAVITY,
@@ -1097,7 +1097,7 @@ def pavilion_check(expect_stable: bool, sway=None):
         #
         # What this arrangement should be asked instead is how it resists a load that is
         # actually a load, which is the notional lateral fraction below.
-        result = send("evaluate_stability", {
+        result = send("evaluate_stability", {"detail": "full",
             "mode": "pinned_dynamic",
             "ids": ids,
             "gravity": GRAVITY,

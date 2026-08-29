@@ -104,6 +104,8 @@ def evaluate(
         "ids": ids,
         "gravity": 9.80665,
         "display": False,
+        # The suite reads the per-joint tables; the default answer leaves them out.
+        "detail": "full",
     }
     params.update(case.params)
 
