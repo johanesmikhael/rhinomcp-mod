@@ -280,7 +280,97 @@ namespace RhinoMCPModPlugin.Commands
                 return Result.Cancel;
             }
 
-            if (optionResult == GetResult.Nothing || selectedMode == defaultsOption)
+            if ((optionResult == GetResult.Nothing || selectedMode == defaultsOption) && multiBody)
+            {
+                // The multi-body solver sizes everything it needs from the document - joint
+                // stiffness from each member, the run length from the span, the ground from
+                // the joints. Only gravity is a number worth stating. It used to receive the
+                // assembly mode's defaults here, which it never read, so "Defaults" looked
+                // like a choice and was not one.
+                parameters["gravity"] = DefaultGravity;
+            }
+            else if (selectedMode == customOption && multiBody)
+            {
+                var getFloorMode = new GetOption();
+                getFloorMode.SetCommandPrompt("Floor level");
+                var autoFloorOption = getFloorMode.AddOption("Auto");
+                getFloorMode.AddOption("Manual");
+                getFloorMode.AcceptNothing(true);
+                var floorModeResult = getFloorMode.Get();
+                if (floorModeResult == GetResult.Cancel)
+                {
+                    return Result.Cancel;
+                }
+
+                var floorZIsAuto = floorModeResult == GetResult.Nothing ||
+                    getFloorMode.Option()?.Index == autoFloorOption;
+
+                // The knobs the multi-body solver actually reads, in the order a reader
+                // meets them: how long, how damped, how stiff, whether to probe sway.
+                var parameterLabels = new[]
+                {
+                    "Duration (s)",
+                    "Damping ratio (fraction of critical at a joint)",
+                    $"Joint penetration ({doc.ModelUnitSystem}; sizes joint stiffness where none is stated)",
+                    "Joint stiffness (N/m, 0 = derived per member)",
+                    "Sway probe (fraction of weight, 0 = off)",
+                    $"Floor Z ({doc.ModelUnitSystem})",  // skipped when the floor is auto
+                    "Gravity (m/s²)"
+                };
+                var values = new double[]
+                {
+                    StabilityDynamics.DefaultDurationSeconds,
+                    StabilityRigidBodies.DefaultDampingRatio,
+                    unitContext.FromMeters(DefaultJointPenetrationMeters),
+                    0.0,
+                    0.0,
+                    DefaultFloorZ,
+                    DefaultGravity
+                };
+
+                for (var i = 0; i < parameterLabels.Length; i++)
+                {
+                    if (i == 5 && floorZIsAuto)
+                    {
+                        continue;
+                    }
+
+                    var getNumber = new GetNumber();
+                    getNumber.SetCommandPrompt($"{parameterLabels[i]} = {values[i]}");
+                    getNumber.SetDefaultNumber(values[i]);
+                    getNumber.AcceptNothing(true);
+                    var numberResult = getNumber.Get();
+                    if (numberResult == GetResult.Number)
+                    {
+                        values[i] = getNumber.Number();
+                    }
+                    else if (numberResult == GetResult.Cancel)
+                    {
+                        return Result.Cancel;
+                    }
+                }
+
+                parameters["duration_seconds"] = values[0];
+                parameters["damping_ratio"] = values[1];
+                parameters["joint_penetration"] = values[2];
+                if (values[3] > 0.0)
+                {
+                    parameters["joint_stiffness_n_per_m"] = values[3];
+                }
+
+                if (values[4] > 0.0)
+                {
+                    parameters["lateral_load_fraction"] = values[4];
+                }
+
+                if (!floorZIsAuto)
+                {
+                    parameters["floor_z"] = values[5];
+                }
+
+                parameters["gravity"] = values[6];
+            }
+            else if (optionResult == GetResult.Nothing || selectedMode == defaultsOption)
             {
                 parameters["current_step"] = DefaultCurrentStep;
                 parameters["stability_threshold"] = defaultStabilityThreshold;
@@ -321,15 +411,16 @@ namespace RhinoMCPModPlugin.Commands
                     "Current step",
                     $"Stability threshold ({doc.ModelUnitSystem})",
                     "Rigid strength (0 = auto from floor)",
-                    "Floor strength (0 = auto from mass)",
+                    "Floor strength (0 = auto from mass and settlement)",
                     $"Floor Z ({doc.ModelUnitSystem})",  // skipped when the floor is auto
                     "Gravity (m/s²)",
                     $"Assign tolerance ({doc.ModelUnitSystem})",
                     $"Displacement threshold ({doc.ModelUnitSystem})",
-                    "Solver substeps"
+                    "Solver substeps",
+                    $"Ground settlement ({doc.ModelUnitSystem}; sizes the floor where no strength is stated)"
                 };
 
-                var values = new double[9]
+                var values = new double[10]
                 {
                     DefaultCurrentStep,
                     defaultStabilityThreshold,
@@ -339,7 +430,8 @@ namespace RhinoMCPModPlugin.Commands
                     DefaultGravity,
                     defaultAssignTolerance,
                     defaultSolverThreshold,
-                    DefaultSolverSubsteps
+                    DefaultSolverSubsteps,
+                    unitContext.FromMeters(DefaultGroundSettlementMeters)
                 };
 
                 for (var i = 0; i < parameterLabels.Length; i++)
@@ -389,6 +481,7 @@ namespace RhinoMCPModPlugin.Commands
                 parameters["assign_tol"] = values[6];
                 parameters["threshold"] = values[7];
                 parameters["solver_substeps"] = (int)values[8];
+                parameters["ground_settlement"] = values[9];
             }
             else
             {

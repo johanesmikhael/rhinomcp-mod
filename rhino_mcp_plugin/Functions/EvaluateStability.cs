@@ -277,6 +277,15 @@ public partial class RhinoMCPModFunctions
 
             var currentStep = ReadIntegerParameter(
                 parameters, "current_step", DefaultCurrentStep, 1, MaxCurrentStep);
+            // How far the ground may settle under the assembly's weight; the floor spring
+            // is sized from it. Advertised by the MCP tool since the ground was first sized
+            // this way, and read by nothing until now.
+            var groundSettlement = ReadFiniteParameter(
+                parameters,
+                "ground_settlement",
+                unitContext.FromMeters(DefaultGroundSettlementMeters),
+                0.0,
+                inclusiveMinimum: false);
             var stabilityThreshold = ReadFiniteParameter(
                 parameters,
                 "stability_threshold",
@@ -681,7 +690,7 @@ public partial class RhinoMCPModFunctions
                 rigidStrengthIsAuto,
                 floorStrength,
                 floorStrengthIsAuto,
-                DefaultGroundSettlementMeters,
+                unitContext.ToMeters(groundSettlement),
                 unitContext.ToMeters(floorZ),
                 gravity,
                 unitContext.ToMeters(assignTol),

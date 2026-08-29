@@ -61,9 +61,11 @@ async def evaluate_stability(
         joint_penetration: How far a bearing surface may close under its own
             load, in document units. Sizes the joint stiffness where none is
             stated.
-        ground_settlement: How far a body may settle into the ground under its
-            own load, in document units. Separate from the joints because the
-            ground is a soil and the joints are not.
+        ground_settlement: Welded (assembly) mode only. How far the assembly
+            may settle into the ground under its own weight, in document units;
+            the floor spring is sized from it where no floor strength is given.
+            The multi-body modes size their ground springs from the joints
+            instead and do not read it.
         joint_stiffness_n_per_m: Pinned modes only. Axial joint stiffness in N/m,
             stated rather than derived, and applied to EVERY member in the scope.
             That last part matters: left unset, each member gets its own
