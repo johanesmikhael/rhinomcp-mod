@@ -126,12 +126,10 @@ def obb_off(session: Session) -> None:
 
 
 # White background and a print-size capture: the readout and markers scale with the size,
-# and the figure is read at a fraction of it on the page. Arctic rather than Shaded: Shaded
-# fills objects with its own material - white, in the default Mac profile - which on a white
-# background leaves only the edges, while Arctic shades white surfaces with ambient occlusion
-# and reads on white.
+# and the figure is read at a fraction of it on the page. Shaded with the display mode's
+# own object colour; the plugin drops the mode's background and flattens onto white.
 SHADED_HIGH = {
-    "all_visible": True, "display_mode": "Arctic", "resolution": "print",
+    "all_visible": True, "display_mode": "Shaded", "resolution": "print",
     "background": "white", "padding": 1.05,
 }
 

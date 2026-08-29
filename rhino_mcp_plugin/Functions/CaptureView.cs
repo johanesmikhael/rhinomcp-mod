@@ -128,12 +128,8 @@ namespace RhinoMCPModPlugin.Functions
                     viewport.ZoomBoundingBox(fitBox);
                 }
 
-                viewport.DisplayMode = displayMode;
-
                 // A shaded mode draws render meshes, and Rhino builds them lazily on the
-                // first draw. A capture taken before that draw has finished shows every solid
-                // as wireframe - the first capture after a file is opened, reliably. Build
-                // them here, then draw once, so the capture sees the meshed model.
+                // first draw. Build them here so the capture sees the meshed model.
                 foreach (var rhinoObject in doc.Objects)
                 {
                     if (rhinoObject.Geometry is Brep or Extrusion &&
@@ -142,8 +138,20 @@ namespace RhinoMCPModPlugin.Functions
                         rhinoObject.CreateMeshes(MeshType.Render, doc.GetCurrentMeshingParameters(), false);
                     }
                 }
-                doc.Views.Redraw();
-                RhinoApp.Wait();
+
+                // ViewCapture draws with the state the on-screen pipeline last drew with.
+                // Switching the viewport's mode here and capturing at once gives an image
+                // in the *previous* mode - a file saved in Wireframe captured as wireframe
+                // about half the time, whatever the redraw calls in between. So after the
+                // switch, pump the event loop until the screen has drawn one frame in the
+                // new mode (offscreen capture frames do not count), bounded in case it
+                // never does - an occluded window, say.
+                bool switchingMode = viewport.DisplayMode?.Id != displayMode.Id;
+                viewport.DisplayMode = displayMode;
+                if (switchingMode)
+                {
+                    WaitForScreenFrame(doc, view, displayMode);
+                }
 
                 bool drawGrid = parameters["draw_grid"]?.ToObject<bool>() ?? false;
                 bool drawAxes = parameters["draw_axes"]?.ToObject<bool>() ?? false;
@@ -152,6 +160,7 @@ namespace RhinoMCPModPlugin.Functions
                 {
                     return new JObject { ["error"] = $"Unsupported background '{background}'; use viewport, white or transparent" };
                 }
+                WaitForStableFrame(view, background != "viewport");
 
                 // ViewCapture rather than CaptureToBitmap: it can drop the display mode's
                 // background, and it scales screen-space items - the graph readout, point
@@ -247,6 +256,78 @@ namespace RhinoMCPModPlugin.Functions
                     doc.Views.Redraw();
                 }
             }
+        }
+
+        private static void WaitForScreenFrame(RhinoDoc doc, RhinoView view, DisplayModeDescription mode)
+        {
+            bool drawn = false;
+            void OnPostDraw(object sender, DrawEventArgs e)
+            {
+                if (e.Display.IsInViewCapture || e.Display.IsPrinting) return;
+                if (e.Viewport?.Id != view.ActiveViewport.Id) return;
+                if (e.Viewport.DisplayMode?.Id == mode.Id) drawn = true;
+            }
+
+            DisplayPipeline.PostDrawObjects += OnPostDraw;
+            try
+            {
+                view.Redraw();
+                var clock = System.Diagnostics.Stopwatch.StartNew();
+                while (!drawn && clock.ElapsedMilliseconds < 1500)
+                {
+                    RhinoApp.Wait();
+                    if (drawn) break;
+                    System.Threading.Thread.Sleep(20);
+                }
+                if (!drawn)
+                {
+                    RhinoApp.WriteLine("capture_view: no on-screen frame in {0} within 1.5 s; capturing anyway", mode.EnglishName);
+                }
+            }
+            finally
+            {
+                DisplayPipeline.PostDrawObjects -= OnPostDraw;
+            }
+        }
+
+        // Rhino 8 meshes a freshly opened file for the display on its own clock: a
+        // capture within a second of the open draws every solid as wireframe, even after
+        // the objects have render meshes. Nothing in RhinoCommon says when it is done, so
+        // take small captures 400 ms apart until two agree, bounded at 3 s.
+        private static void WaitForStableFrame(RhinoView view, bool transparent)
+        {
+            byte[] Snapshot()
+            {
+                var probe = new ViewCapture
+                {
+                    Width = 160, Height = 120, ScaleScreenItems = false,
+                    DrawGrid = false, DrawAxes = false, DrawGridAxes = false,
+                    TransparentBackground = transparent, Preview = false
+                };
+                using var bitmap = probe.CaptureToBitmap(view);
+                if (bitmap == null) return Array.Empty<byte>();
+                using var stream = new MemoryStream();
+#pragma warning disable CA1416
+                bitmap.Save(stream, ImageFormat.Png);
+#pragma warning restore CA1416
+                return stream.ToArray();
+            }
+
+            var clock = System.Diagnostics.Stopwatch.StartNew();
+            var previous = Snapshot();
+            while (clock.ElapsedMilliseconds < 3000)
+            {
+                var until = clock.ElapsedMilliseconds + 400;
+                while (clock.ElapsedMilliseconds < until)
+                {
+                    RhinoApp.Wait();
+                    System.Threading.Thread.Sleep(20);
+                }
+                var current = Snapshot();
+                if (current.Length > 0 && current.AsSpan().SequenceEqual(previous)) return;
+                previous = current;
+            }
+            RhinoApp.WriteLine("capture_view: display still changing after 3 s; capturing anyway");
         }
 
         private static bool TryResolveCaptureSize(JObject parameters, out int width, out int height, out string error)
