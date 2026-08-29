@@ -322,6 +322,7 @@ Every step can be run from Rhino's command line or over MCP. The two do the same
 | `mcpmodmassfromlayerdensity` | `assign_mass(density=...)` | mass from layer density and object volume |
 | `mcpmodassignjointtype` | `assign_joint_type` | write, list, clear and prune joint type rules |
 | `mcpmodevaluatestability` | `evaluate_stability` | run the evaluation |
+| - | `get_stability_report` | page the per-joint, per-node and per-step tables of the last evaluation |
 | `mcpmodstabilitydisplay` | `evaluate_stability(display=True)` | draw the settled pose |
 | `mcpmodclearcache` | - | clear the stored graph, poses and preview |
 | `mcpmodobb` | - | oriented bounding boxes |
@@ -426,6 +427,22 @@ settled bodies in grey over the original geometry, which is not modified.
 Besides the verdict: each joint's type and the rule that resolved it, the force across it,
 its sense, its shear, the peak tension at any single bearing point, whether it reached its
 capacity, and which elements it joins. `joints_at_capacity` counts what yielded.
+
+By default the result is a **summary**: every scalar, plus `joint_forces_summary` (the five
+most-tensioned joints, the five most-loaded, anything at capacity) and `ground_sites_summary`.
+The per-joint, per-node and per-step tables are left out and their sizes listed under
+`omitted_sections`, because on a 100-element assembly they run past 100 KB, which is more than
+a tool result can carry into an agent's context. The complete report is stored on the
+document either way; read it a page at a time:
+
+    get_stability_report()                                     # what sections there are
+    get_stability_report(section="joint_forces", limit=10)     # highest tension first
+    get_stability_report(section="joint_forces", sort="shear_n", joint_type="pin")
+    get_stability_report(section="joint_forces", reached_capacity_only=True)
+    get_stability_report(section="nodes", ids=[...])           # clusters an element belongs to
+    get_stability_report(section="sway")                       # any scalar section, whole
+
+`evaluate_stability(detail="full")` returns everything at once, as before.
 
 ### Limitations
 

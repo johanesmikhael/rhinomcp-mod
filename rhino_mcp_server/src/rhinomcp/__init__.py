@@ -1,6 +1,6 @@
 """Rhino integration through the Model Context Protocol."""
 
-__version__ = "0.3.0"
+__version__ = "0.3.1"
 
 # Expose key classes and functions for easier imports
 from .static.rhinoscriptsyntax import rhinoscriptsyntax_json
@@ -33,6 +33,7 @@ from .tools.run_rhino_command import run_rhino_command
 from .tools.get_rhino_log import get_rhino_log
 from .tools.extended_tools import (
     evaluate_stability,
+    get_stability_report,
     assign_mass,
     get_selected_objects,
     select_objects,

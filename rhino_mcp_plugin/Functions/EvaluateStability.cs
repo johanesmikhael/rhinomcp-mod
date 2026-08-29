@@ -147,7 +147,7 @@ public partial class RhinoMCPModFunctions
     private const int MaxSolverSubsteps = 1000;
     private const int MaxTotalSolverSteps = 100000;
 
-    public JObject EvaluateStability(JObject parameters)
+    private JObject EvaluateStabilityFull(JObject parameters)
     {
         try
         {

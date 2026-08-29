@@ -2,74 +2,99 @@ import asyncio
 import unittest
 from unittest.mock import Mock, patch
 
-from rhinomcp.tools.extended_tools import evaluate_stability
+from rhinomcp.tools.extended_tools import evaluate_stability, get_stability_report
+
+
+def run(coroutine):
+    return asyncio.run(coroutine)
 
 
 class EvaluateStabilityToolTests(unittest.TestCase):
-    def test_unit_sensitive_defaults_are_resolved_by_plugin(self):
+    def test_defaults_ask_for_a_summary_and_leave_sizing_to_the_plugin(self):
         connection = Mock()
-        connection.send_command.return_value = {
-            "success": True,
-            "evaluation_mode": "single_rigid_assembly",
-        }
+        connection.send_command.return_value = {"success": True, "stable": True}
 
         with patch("rhinomcp.server.get_rhino_connection", return_value=connection):
-            result = asyncio.run(evaluate_stability())
+            result = run(evaluate_stability())
 
         self.assertTrue(result["success"])
-        # floor_strength is deliberately absent: the plugin sizes it from the
-        # assembly's mass so that settling does not exhaust the stability budget.
+        # Everything unit- or model-dependent is absent: the plugin sizes floor
+        # stiffness, joint stiffness and thresholds from the document itself.
         connection.send_command.assert_called_once_with(
             "evaluate_stability",
-            {
-                "current_step": 50,
-                "rigid_strength": 10000.0,
-                "floor_z": 0.0,
-                "gravity": 9.80665,
-                "solver_substeps": 1,
-                "display": False,
-            },
+            {"gravity": 9.80665, "solver_substeps": 1, "display": False, "detail": "summary"},
         )
 
-    def test_explicit_floor_strength_overrides_auto_sizing(self):
+    def test_full_detail_is_passed_through(self):
         connection = Mock()
         connection.send_command.return_value = {"success": True}
 
         with patch("rhinomcp.server.get_rhino_connection", return_value=connection):
-            asyncio.run(evaluate_stability(floor_strength=55800.0))
+            run(evaluate_stability(detail="full", mode="pinned", joint_type="pin"))
 
         params = connection.send_command.call_args.args[1]
-        self.assertEqual(55800.0, params["floor_strength"])
+        self.assertEqual("full", params["detail"])
+        self.assertEqual("pinned", params["mode"])
+        self.assertEqual("pin", params["joint_type"])
 
-    def test_explicit_lengths_are_sent_in_document_units(self):
+    def test_document_unit_lengths_are_sent_unconverted(self):
         connection = Mock()
         connection.send_command.return_value = {"success": True}
 
         with patch("rhinomcp.server.get_rhino_connection", return_value=connection):
-            asyncio.run(
-                evaluate_stability(
-                    stability_threshold=0.25,
-                    assign_tol=0.0001,
-                    threshold=0.002,
-                    gravity=9.7,
-                )
-            )
+            run(evaluate_stability(stability_threshold=0.25, floor_z=-3.0, joint_penetration=0.01))
 
         params = connection.send_command.call_args.args[1]
         self.assertEqual(0.25, params["stability_threshold"])
-        self.assertEqual(0.0001, params["assign_tol"])
-        self.assertEqual(0.002, params["threshold"])
-        self.assertEqual(9.7, params["gravity"])
+        self.assertEqual(-3.0, params["floor_z"])
+        self.assertEqual(0.01, params["joint_penetration"])
 
-    def test_graph_objects_are_sent_as_compact_json(self):
+
+class GetStabilityReportToolTests(unittest.TestCase):
+    def test_no_section_lists_sections(self):
         connection = Mock()
-        connection.send_command.return_value = {"success": True}
+        connection.send_command.return_value = {"success": True, "sections": {}}
 
         with patch("rhinomcp.server.get_rhino_connection", return_value=connection):
-            asyncio.run(evaluate_stability(graph={"n": [], "e": []}))
+            run(get_stability_report())
 
-        params = connection.send_command.call_args.args[1]
-        self.assertEqual('{"n":[],"e":[]}', params["graph"])
+        connection.send_command.assert_called_once_with(
+            "get_stability_report", {"limit": 20, "offset": 0, "ascending": False}
+        )
+
+    def test_filters_and_paging_are_passed_through(self):
+        connection = Mock()
+        connection.send_command.return_value = {"success": True, "records": []}
+
+        with patch("rhinomcp.server.get_rhino_connection", return_value=connection):
+            run(
+                get_stability_report(
+                    section="joint_forces",
+                    sort="shear_n",
+                    ascending=True,
+                    limit=50,
+                    offset=100,
+                    ids=["abc"],
+                    joint_type="pin",
+                    min_tension_n=1000.0,
+                    reached_capacity_only=True,
+                )
+            )
+
+        connection.send_command.assert_called_once_with(
+            "get_stability_report",
+            {
+                "limit": 50,
+                "offset": 100,
+                "ascending": True,
+                "section": "joint_forces",
+                "sort": "shear_n",
+                "ids": ["abc"],
+                "joint_type": "pin",
+                "min_tension_n": 1000.0,
+                "reached_capacity_only": True,
+            },
+        )
 
 
 if __name__ == "__main__":

@@ -27,6 +27,7 @@ async def evaluate_stability(
     gravity: float = 9.80665,
     solver_substeps: int = 1,
     display: bool = False,
+    detail: str = "summary",
     graph: str | dict[str, Any] | None = None,
     layer: str | list[str] | None = None,
     ids: list[str] | None = None,
@@ -126,6 +127,14 @@ async def evaluate_stability(
             scope that leaves out the pads its columns stand on would otherwise
             start in mid-air and spend the run falling to world zero.
         gravity: Downward gravitational acceleration in m/s².
+        detail: "summary" (default) returns the verdict, every scalar, and a
+            digest of the per-joint tables - the five most-tensioned joints, the
+            five most-loaded, anything at capacity, the ground reactions - in a
+            few KB. "full" returns every per-joint, per-node and per-step
+            record as well, which on a 100-element assembly is over 100 KB and
+            more than a tool result can carry into context. The full report is
+            stored on the document either way; get_stability_report pages any
+            section of it afterwards.
         duration_seconds: pinned_dynamic mode only. How long to simulate, in seconds.
             Unlike a step count this means the same thing on every model: a mechanism
             with a tenth of gravity available to it covers 50 mm in 0.32 s, so the
@@ -232,6 +241,7 @@ async def evaluate_stability(
         "gravity": gravity,
         "solver_substeps": solver_substeps,
         "display": display,
+        "detail": detail,
     }
     if stability_threshold is not None:
         params["stability_threshold"] = stability_threshold
@@ -277,6 +287,66 @@ async def evaluate_stability(
 
     rhino = get_rhino_connection()
     return rhino.send_command("evaluate_stability", params)
+
+
+@mcp.tool()
+async def get_stability_report(
+    section: str | None = None,
+    sort: str | None = None,
+    ascending: bool = False,
+    limit: int = 20,
+    offset: int = 0,
+    ids: list[str] | None = None,
+    joint_type: str | None = None,
+    min_tension_n: float | None = None,
+    reached_capacity_only: bool = False,
+) -> dict[str, Any]:
+    """Read one section of the last evaluate_stability report, a page at a time.
+
+    evaluate_stability stores its complete report on the document and returns
+    a summary. This reads the rest without running the solver again.
+
+    Args:
+        section: Which part to read. Omit to list the sections and their
+            sizes. The pageable ones are "joint_forces" (one record per body
+            per joint: force, tension, shear, capacity, which elements it
+            joins), "nodes" (joint clusters: members, diameter, resolved type),
+            "ground_sites" (each ground bearing point and the vertical reaction
+            it carries), "bodies" (per-element displacement on the particle
+            path), and the per-step traces. Any scalar or object section - say
+            "sway" - is returned whole.
+        sort: Field to order by. Defaults per section: tension_n for
+            joint_forces, diameter_m for nodes, fz_n for ground_sites.
+        ascending: Reverse the order. Default is largest first.
+        limit: Records per page, 1-500. Default 20.
+        offset: Records to skip, for the next page.
+        ids: Keep only records whose guid, or whose members, are among these
+            object ids.
+        joint_type: Keep only "contact", "pin" or "fixed" joints.
+        min_tension_n: Keep only joints carrying at least this much tension.
+        reached_capacity_only: Keep only joints that yielded.
+
+    Returns the page with total, matched and returned counts, so the caller
+    can tell whether there is more.
+    """
+    from rhinomcp.server import get_rhino_connection
+
+    params: dict[str, Any] = {"limit": limit, "offset": offset, "ascending": ascending}
+    if section is not None:
+        params["section"] = section
+    if sort is not None:
+        params["sort"] = sort
+    if ids:
+        params["ids"] = ids
+    if joint_type is not None:
+        params["joint_type"] = joint_type
+    if min_tension_n is not None:
+        params["min_tension_n"] = min_tension_n
+    if reached_capacity_only:
+        params["reached_capacity_only"] = True
+
+    rhino = get_rhino_connection()
+    return rhino.send_command("get_stability_report", params)
 
 
 @mcp.tool()

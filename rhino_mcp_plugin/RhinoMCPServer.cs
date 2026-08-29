@@ -328,6 +328,7 @@ namespace RhinoMCPModPlugin
                 ["get_selected_objects_info"] = this.handler.GetSelectedObjectsInfo,
                 ["get_connectivity_graph"] = this.handler.GetConnectivityGraph,
                 ["evaluate_stability"] = this.handler.EvaluateStability,
+                ["get_stability_report"] = this.handler.GetStabilityReport,
                 ["assign_mass"] = this.handler.AssignMassScoped,
                 ["assign_joint_type"] = this.handler.AssignJointType,
                 ["graph_display"] = this.handler.GraphDisplay,
