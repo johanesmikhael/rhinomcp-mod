@@ -5,11 +5,11 @@ description = "Rhino integration through the Model Context Protocol"
 readme = "README.md"
 requires-python = ">=3.10"
 authors = [
-    {name = "Mikhael Johanes"},
+    {name = "Mikhael Johanes", email = "johanes.mikhael@gmail.com"},
     {name = "Jingcheng Chen", email = "mail@jchen.ch"}
 ]
 maintainers = [
-    {name = "Mikhael Johanes"}
+    {name = "Mikhael Johanes", email = "johanes.mikhael@gmail.com"}
 ]
 license = "Apache-2.0"
 license-files = ["LICENSE", "NOTICE"]
