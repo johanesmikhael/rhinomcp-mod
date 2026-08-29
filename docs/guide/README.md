@@ -8,10 +8,10 @@ tool and a Rhino command; every page shows both.
 | --- | --- |
 | [00 overview](00-overview.md) | feature areas, the stability pipeline, the two routes, what is stored on the document |
 | [01 setup](01-setup.md) | plugin, `uv`, Claude Desktop, Claude Code, from source, verify, troubleshooting, session tools |
-| 02 scene inspection | not yet written - see the [reference](11-reference.md) |
-| 03 geometry, layers, materials | not yet written - see the [reference](11-reference.md) |
-| 04 pose and transforms | not yet written - see the [reference](11-reference.md) |
-| 05 views and capture | not yet written - see the [reference](11-reference.md) |
+| [02 scene inspection](02-scene-inspection.md) | the inventory, paging, a region, per-object geometry, selection |
+| [03 geometry, layers, materials](03-geometry-layers-materials.md) | the primitive types, copy and modify, layers and their states, materials |
+| [04 pose and transforms](04-pose-transforms.md) | what a pose is, rotate, reset, rebase, the OBB overlay |
+| [05 views and capture](05-views-capture.md) | framing, cameras, display modes, size, named views |
 | [06 connectivity graph](06-connectivity-graph.md) | nodes, edges, measured bearings, the overlay, the cache |
 | [07 mass and joint types](07-mass-joint-types.md) | mass from density or stated; contact, pin, fixed; rules, capacity, pruning |
 | [08 stability](08-stability.md) | modes, parameters, the command's prompts, bearings, limitations |

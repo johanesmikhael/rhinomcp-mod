@@ -8,10 +8,10 @@ under gravity. The server exposes that to Claude as tools. Every feature is also
 
 | area | what it does | page |
 | --- | --- | --- |
-| scene inspection | inventory of the document with paging and a bounding-box scope; per-object geometry as an oriented box with a pose, or three orthographic outlines | 02 (not yet written; see [reference](11-reference.md)) |
-| geometry, layers, materials | create the primitive types, copy, modify, delete; select; layers and layer states; materials | 03 (not yet written) |
-| pose and transforms | rotate about a pivot, invert a rotation, rebase or reset the canonical pose; the OBB display | 04 (not yet written) |
-| views and capture | frame objects and capture a PNG in any display mode, with an explicit camera if wanted; named views; viewport state | 05 (not yet written) |
+| scene inspection | inventory of the document with paging and a bounding-box scope; per-object geometry as an oriented box with a pose, or three orthographic outlines | [02](02-scene-inspection.md) |
+| geometry, layers, materials | create the primitive types, copy, modify, delete; select; layers and layer states; materials | [03](03-geometry-layers-materials.md) |
+| pose and transforms | rotate about a pivot, invert a rotation, rebase or reset the canonical pose; the OBB display | [04](04-pose-transforms.md) |
+| views and capture | frame objects and capture a PNG in any display mode, with an explicit camera if wanted; named views; viewport state | [05](05-views-capture.md) |
 | connectivity graph | which elements touch, where, and the bearing surface measured at each contact; drawn as an overlay; cached on the document | [06](06-connectivity-graph.md) |
 | mass and joint types | mass per element from density or stated; rules naming each connection contact, pin or fixed, with an optional tension capacity | [07](07-mass-joint-types.md) |
 | stability evaluation | the scope as one welded body, or as separate rigid bodies joined at the measured bearings, under gravity; does it stand, how far does it move, how stiff is it | [08](08-stability.md) |

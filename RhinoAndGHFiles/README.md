@@ -1,7 +1,8 @@
 # Test files
 
 Six models with answers that are known independently of the solver, for checking that a
-build works and for seeing what the three joint types actually do. Open one and run
+build works and for seeing what the three joint types actually do, and one file of plain
+shapes the guide uses for the pages that are not about stability. Open one and run
 `mcpmodevaluatestability`, or over MCP:
 
     evaluate_stability(mode="pinned")
@@ -17,6 +18,7 @@ surface each joint is built over, and what type each one resolves to.
 | `bridge_jointtypes.3dm` | 10 m truss on two pads, 47 elements | **stable**, 29 joints, 36 contact and 17 pin |
 | `timber_bridge_xbraced.3dm` | 24 m timber truss on two pads, 104 elements, x-braced in plan and elevation, 37 t | **stable**, 77 joints, 24 contact and 53 pin; 3 mm at the worst pin |
 | `timber_bridge.3dm` | the same span with no diagonals: 90 elements, portal frames carry the sway, 36 t | **stable**, 206 joints, 24 contact, 70 pin and 112 fixed; 0.7 mm at the worst pin |
+| `guide_shapes.3dm` | one of each primitive `create_objects` makes, two of them turned, on one layer in one material - no mass, no joint rules | not a stability case; rebuilt by `scripts/dev/build_guide_images.py --build-shapes` |
 
 Run the stair twice. Same three blocks either way:
 

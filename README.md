@@ -9,119 +9,31 @@ RhinoMCP Mod is a derivative work based on the original [RhinoMCP](https://githu
 
 This repository extends Rhino MCP with deeper geometric and topological context for AI-assisted design in Rhino3D.
 
-### 1. Improved Geometry Understanding
+### What it adds
 
-Compared to baseline object metadata, this mod exposes richer geometric semantics (via tools like `get_object_info` / `get_objects_info`):
+Compared with the baseline, the mod exposes the geometry and the topology an agent needs to
+reason about an assembly rather than about isolated objects. Each area has its own page in
+the guide, with the calls, the responses and the Rhino command beside them.
 
-- Compact scene inventory via `get_document_info(detail="inventory")`
-- Local-first detailed geometry with optional world duplicates
-- `pose.world_from_local` frames for lines, curves/polylines, breps, and extrusions
-- Planarity-aware curve/polyline summaries
-- OBB-oriented summaries for complex solids (brep/extrusion)
-- Geometry details suitable for downstream reasoning
+- **Geometry understanding** - a compact scene inventory, oriented boxes with
+  `pose.world_from_local` frames for lines, curves, breps and extrusions, planarity-aware
+  curve summaries, and three orthographic outlines for shapes an oriented box cannot tell
+  apart: [02](docs/guide/02-scene-inspection.md), [04](docs/guide/04-pose-transforms.md)
+- **Viewport capture** - `capture_view` frames targets and returns a PNG in any display mode,
+  at any size up to 3840 px, from a preset or a stated camera, restoring the viewport
+  afterwards; named views and viewport state alongside it:
+  [05](docs/guide/05-views-capture.md)
+- **Topological context** - `get_connectivity_graph` and the `mcpmodgraph` overlay: which
+  elements touch, where, and the bearing surface measured between them, cached on the
+  document: [06](docs/guide/06-connectivity-graph.md)
+- **Pose-aware editing** - batch `modify_objects` / `rotate_objects` / `copy_objects`,
+  `rebase_objects_pose` to fix a canonical pose without moving anything, and
+  `reset_objects_pose` to return to it: [04](docs/guide/04-pose-transforms.md)
+- **Assembly stability** - mass, joint types, and an evaluation of whether the thing stands:
+  [07](docs/guide/07-mass-joint-types.md) to [10](docs/guide/10-worked-example-timber-bridges.md)
 
-Rhino visualization command for this geometry cache:
-
-- Rhino command: `mcpmodobb` (toggle OBB + projection profile display)
-- Rhino command: `mcpmodclearcache` (clear cached pose/OBB user strings)
-
-### 2. Viewport Capture and Views
-
-The agent can look at the model rather than only read it.
-
-- MCP tool: `capture_view` - frames the targets, captures a PNG, and returns the image with
-  compact metadata
-
-```python
-capture_view(view="front", ids=[...], display_mode="Shaded")
-capture_view(view="isometric", all_visible=True, resolution="high")
-capture_view(camera_location=[x, y, z], camera_target=[x, y, z], lens_mm=50)
-```
-
-`view` takes `perspective`, `isometric`, `top`, `front` or `right`; targets are `ids`,
-`selected` or `all_visible`, framed with `fit` and `padding`. `display_mode` is any Rhino
-display mode name - `Shaded`, `Rendered`, `Wireframe`, `Technical`. `resolution` is `low`
-(640x480), `medium` (960x720), `high` (1280x900) or `print` (2560x1800), with `width`/`height`
-overrides up to 3840; overlay text and markers scale with the size. `background` is
-`viewport`, `white` or `transparent`. `camera_location`, `camera_target`, `camera_up` and
-`lens_mm` place the camera explicitly; `draw_grid` and `draw_axes` are off by default.
-`preserve_view` defaults to true, restoring the camera, projection, lens, frustum and display
-mode afterwards, so a capture does not disturb what is on screen.
-
-Views and camera state:
-
-- MCP tool: `get_viewport_info` - camera, projection, lens, display mode and active state for
-  every viewport
-- MCP tool: `zoom_to_objects` - zoom to given or currently selected objects
-- MCP tool: `save_named_view`, `restore_named_view`, `get_named_views`, `delete_named_view` -
-  named views stored in the document
-
-### 3. Added Topological Context
-
-This mod adds a connectivity graph pipeline:
-
-- MCP tool: `get_connectivity_graph`
-- Rhino command: `mcpmodgraph`
-- Rhino command: `mcpmodgraphexport` (write the computed graph to a JSON file)
-
-The graph returns compact node/edge topology (including representative contact points), so AI can reason about adjacency/connectivity instead of isolated objects.
-
-The computed graph is cached in document user text under `rhinomcp-mod:connectivity-graph`, so it survives save/reopen. A fingerprint of the graph-relevant document state (candidate object ids + quantized bounding boxes + tolerance) is stored with it; the stored graph is reused only while that fingerprint matches, otherwise it is recomputed and rewritten. `get_connectivity_graph` reports which path was taken in `source` (`document_text_cache` or `computed`). `mcpmodclearcache` (without `SelectedOnly`) removes the stored graph.
-
-### Scene Inspection Contract
-
-Use `get_document_info` as the first scene-index call. Its default is intentionally compact:
-
-```text
-get_document_info(detail="inventory", limit=100, offset=0, include_bbox=true)
-```
-
-For focused edits, scope the inventory to a world axis-aligned bounding box:
-
-```text
-get_document_info(detail="inventory", bbox=[[0,0,0],[100,100,30]], bbox_mode="intersects")
-```
-
-Supported `detail` values:
-
-- `inventory`: id, name, type, layer, and optional world axis-aligned `bbox`.
-- `summary`: inventory fields plus compact descriptors such as point counts, planarity, face counts, and material/color.
-- `full`: legacy per-object document payload. Use sparingly; prefer `get_objects_info` for detailed geometry of selected targets.
-
-Pagination and truncation fields:
-
-- `object_count`: total object count in the document.
-- `objects_returned`: number of objects in this response.
-- `objects_truncated`: true when more objects are available.
-- `objects_offset` / `objects_limit`: page position and page size.
-- `spatial_filter`: present when `bbox` is supplied; includes normalized world AABB,
-  `bbox_mode`, and matched object count.
-
-For detailed geometry, first identify target ids/names from `inventory` or `summary`, then call `get_objects_info(objects=[...], geometry_detail="obb_pose")`.
-
-- `geometry_detail="bbox"`: world AABB only, cheapest detailed lookup.
-- `geometry_detail="obb_pose"`: default detailed mode. Curves/lines return local coordinates + pose; solids return OBB extents + pose.
-- `include_world=true`: re-add world-space duplicates such as `world_points`, `world_start`/`world_end`, and `obb.world_corners`.
-
-Use `max_geometry_points` with `detail="full"` only for legacy document payloads.
-
-Viewport captures preserve the active Rhino view by default. `capture_view(..., preserve_view=true)`
-temporarily applies the requested camera, projection, lens, fit, and display mode, captures the
-bitmap, then restores the original viewport state. Set `preserve_view=false` only when the capture
-is intentionally meant to become the new active view. Perspective/isometric presets use 50 mm
-unless `lens_mm` is supplied explicitly; they never inherit a lens value from a parallel viewport.
-
-### 4. Pose-Aware and Batch Transform Workflows
-
-This mod adds stronger pose operations for reliable editing pipelines:
-
-- Batch tools for modify/rotate/copy operations: `modify_objects`, `rotate_objects`, `copy_objects`
-- Pose rebasing without moving geometry: `rebase_objects_pose`
-- Pose reset: `reset_objects_pose`
-- Rotation helpers such as `invert_rotation_matrix`
-- Geometry-detected poses are recomputed after transforms so OBBs remain minimal; explicitly
-  rebased poses are tagged separately and remain attached to the object through later transforms.
-
+Rhino commands for the caches these build: `mcpmodobb` (oriented boxes and profiles),
+`mcpmodgraph` (connectivity), `mcpmodclearcache` (clear stored poses, boxes and graph).
 
 ## Installation
 
@@ -153,6 +65,10 @@ Every feature as an MCP tool and as a Rhino command, with what comes back and wh
 | --- | --- |
 | overview: feature map, the stability pipeline, the two routes, what is stored on the document | [00](docs/guide/00-overview.md) |
 | setup and session tools | [01](docs/guide/01-setup.md) |
+| scene inspection: the inventory, paging, a region, per-object geometry, selection | [02](docs/guide/02-scene-inspection.md) |
+| geometry, layers, materials | [03](docs/guide/03-geometry-layers-materials.md) |
+| pose and transforms: rotate, reset, rebase, the OBB overlay | [04](docs/guide/04-pose-transforms.md) |
+| views and capture: framing, cameras, display modes, size, named views | [05](docs/guide/05-views-capture.md) |
 | connectivity graph: measured bearings, the overlay, the cache | [06](docs/guide/06-connectivity-graph.md) |
 | mass and joint types: contact, pin, fixed; rules; capacity | [07](docs/guide/07-mass-joint-types.md) |
 | stability evaluation: modes, parameters, the command's prompts, limitations | [08](docs/guide/08-stability.md) |

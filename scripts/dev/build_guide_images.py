@@ -97,6 +97,82 @@ class Session:
         (self.dump_dir / f"{name}.json").write_text(json.dumps(payload, indent=1, default=str))
 
 
+# A 30 degrees rotation about world Z, as create_objects takes it.
+COS30, SIN30 = 0.8660254, 0.5
+TURNED = [[COS30, -SIN30, 0], [SIN30, COS30, 0], [0, 0, 1]]
+
+SOLID_NAMES = ("BLOCK", "TURNED_BLOCK", "BALL", "POST", "LAID_POST", "CAP")
+
+PRIMITIVES = [
+    {"type": "BOX", "name": "BLOCK", "params": {"width": 400, "length": 260, "height": 180},
+     "translation": [0, 0, 90], "color": [176, 176, 176]},
+    {"type": "SPHERE", "name": "BALL", "params": {"radius": 110},
+     "translation": [520, 0, 110], "color": [176, 176, 176]},
+    {"type": "CYLINDER", "name": "POST", "params": {"radius": 70, "height": 300, "cap": True, "axis": "z"},
+     "translation": [860, 0, 150], "color": [176, 176, 176]},
+    {"type": "CONE", "name": "CAP", "params": {"radius": 110, "height": 240, "cap": True, "axis": "z"},
+     "translation": [1140, 0, 120], "color": [176, 176, 176]},
+    {"type": "BOX", "name": "TURNED_BLOCK", "params": {"width": 600, "length": 240, "height": 200},
+     "translation": [520, 700, 100], "rotation_matrix": TURNED, "color": [176, 176, 176]},
+    {"type": "CYLINDER", "name": "LAID_POST",
+     "params": {"radius": 90, "height": 700, "cap": True, "axis": "x"},
+     "translation": [1140, 700, 90], "color": [176, 176, 176]},
+    {"type": "POLYLINE", "name": "PATH",
+     "params": {"points": [[-200, 320, 0], [1340, 320, 0], [1340, 320, 400]]}},
+    {"type": "CIRCLE", "name": "RING", "params": {"center": [520, -340, 0], "radius": 180}},
+]
+
+
+def obb_on(session: Session) -> None:
+    # The toggle prints only when it changes state, so ask Status for the verdict.
+    session.send("run_command", {"command": "mcpmodobb On"})
+    session.run_command("mcpmodobb Status", "MCP OBB is ON")
+
+
+def build_shapes(session: Session) -> None:
+    """Write RhinoAndGHFiles/guide_shapes.3dm: one of each primitive, two of them turned.
+
+    Built in a document opened from another demo file and written out under a new name, so
+    nothing existing is overwritten. Rhino cannot close an untitled document through the
+    plugin, which is why this is a file rather than a scratch document.
+    """
+    session.open("stair_jointtypes.3dm")
+    session.send("execute_rhinoscript_python_code", {"code": "\n".join([
+        "import Rhino, scriptcontext as sc",
+        "doc = sc.doc",
+        "[doc.Objects.Delete(o, True) for o in list(doc.Objects)]",
+        "keys = [doc.Strings.GetKey(i) for i in range(doc.Strings.Count)]",
+        "[doc.Strings.Delete(key) for key in keys]",
+        # one layer named SHAPES, so the file's listing is about the shapes and not
+        # about whatever the document it was built from happened to carry
+        "kept = doc.Layers.Add('SHAPES', System.Drawing.Color.FromArgb(120, 120, 120))"
+        if False else "kept = doc.Layers.Add('SHAPES', Rhino.ApplicationSettings.AppearanceSettings.DefaultLayerColor)",
+        "doc.Layers.SetCurrentLayerIndex(kept, True)",
+        "[doc.Layers.Delete(i, True) for i in range(doc.Layers.Count) if i != kept]",
+        "[doc.Materials.Delete(doc.Materials[i]) for i in range(doc.Materials.Count)]",
+        "doc.Views.Redraw()",
+    ])})
+    # The socket command takes one entry per object keyed by name, not a list; the MCP
+    # tool does that reshaping itself.
+    session.dump("guide-shapes-create",
+                 session.send("create_objects", {spec["name"]: spec for spec in PRIMITIVES}))
+    material = session.send("create_material", {"name": "guide oak", "r": 190, "g": 150, "b": 96})
+    session.dump("guide-shapes-material", material)
+    listing = session.send("get_document_info", {"limit": 100})
+    solids = [o["id"] for o in listing["objects"] if o["name"] in SOLID_NAMES]
+    # By index, not by name: assigning by name adds a material per object.
+    session.send("set_object_material", {"ids": solids, "material_index": material["index"]})
+    out = DEMO / "guide_shapes.3dm"
+    session.send("execute_rhinoscript_python_code", {"code": "\n".join([
+        "import Rhino, scriptcontext as sc",
+        "doc = sc.doc",
+        f"ok = doc.WriteFile(r'{out}', Rhino.FileIO.FileWriteOptions())",
+        "doc.Modified = False",
+        "print('written' if ok else 'FAILED')",
+    ])})
+    print(f"wrote {out.relative_to(ROOT)}")
+
+
 def graph_on(session: Session) -> None:
     session.send("graph_display", {"enabled": True, "scope": "all"})
 
@@ -122,7 +198,8 @@ def settled_pose_off(session: Session) -> None:
 
 
 def obb_off(session: Session) -> None:
-    session.run_command("mcpmodobb Off", "OFF")
+    session.send("run_command", {"command": "mcpmodobb Off"})
+    session.run_command("mcpmodobb Status", "MCP OBB is OFF")
 
 
 # White background and a print-size capture: the readout and markers scale with the size,
@@ -166,6 +243,26 @@ SHOTS: list[Shot] = [
         "bridges-portal-graph", "timber_bridge.3dm",
         capture={"view": "isometric", **SHADED_HIGH},
         setup=[graph_on], teardown=[graph_off],
+    ),
+    Shot(
+        "geometry-primitives", "guide_shapes.3dm",
+        capture={"view": "perspective", **SHADED_HIGH, "display_mode": "Rendered"},
+    ),
+    Shot(
+        "pose-obb", "guide_shapes.3dm",
+        capture={"view": "perspective", **SHADED_HIGH},
+        setup=[obb_on], teardown=[obb_off],
+    ),
+    Shot(
+        "views-technical", "timber_bridge.3dm",
+        capture={"view": "front", **SHADED_HIGH, "display_mode": "Technical"},
+    ),
+    Shot(
+        "views-camera-explicit", "timber_bridge_xbraced.3dm",
+        capture={"all_visible": True, "display_mode": "Shaded", "resolution": "print",
+                 "background": "white", "fit": False,
+                 "camera_location": [-9000, -14000, 7000], "camera_target": [9000, 0, 1500],
+                 "lens_mm": 85},
     ),
 ]
 
@@ -214,11 +311,13 @@ def main() -> int:
                         help="write every response next to the images, for quoting in the pages")
     parser.add_argument("--require-version", default=REQUIRED_VERSION)
     parser.add_argument("--sway", action="store_true", help="also run the sway probe on both bridges")
+    parser.add_argument("--build-shapes", action="store_true",
+                        help="rewrite RhinoAndGHFiles/guide_shapes.3dm, the file the geometry shots use")
     args = parser.parse_args()
 
     if args.list:
         for shot in SHOTS:
-            print(f"{shot.name:28} {shot.open:28} {shot.capture}")
+            print(f"{shot.name:28} {shot.open or '(scratch document)':28} {shot.capture}")
         return 0
 
     selected = SHOTS if not args.only else [s for s in SHOTS if s.name in set(args.only)]
@@ -232,11 +331,13 @@ def main() -> int:
         return 2
     session = Session(connection, args.dump_json)
     # Every plugin handler, the version command included, needs an active document.
-    session.open((selected or SHOTS)[0].open)
+    session.open((selected or SHOTS)[0].open if not args.build_shapes else SHOTS[0].open)
     session.run_command("mcpmodversion", args.require_version)
 
     failures = 0
     try:
+        if args.build_shapes:
+            build_shapes(session)
         for shot in selected:
             session.open(shot.open)
             try:
