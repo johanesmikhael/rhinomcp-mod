@@ -1,6 +1,6 @@
 # Test files
 
-Four models with answers that are known independently of the solver, for checking that a
+Five models with answers that are known independently of the solver, for checking that a
 build works and for seeing what the three joint types actually do. Open one and run
 `mcpmodevaluatestability`, or over MCP:
 
@@ -15,6 +15,7 @@ surface each joint is built over, and what type each one resolves to.
 | `stair_toppling.3dm` | the same stair at 300 mm | **unstable** - the centre of mass clears the bearing |
 | `pavilion_jointtypes.3dm` | four walls in a pinwheel, roof set on top | **stable**, 44 contact joints |
 | `bridge_jointtypes.3dm` | 10 m truss on two pads, 47 elements | **stable**, 29 joints, 36 contact and 17 pin |
+| `timber_bridge_xbraced.3dm` | 24 m timber truss on two pads, 104 elements, x-braced in plan and elevation, 37 t | **stable**, 77 joints, 24 contact and 53 pin; 3 mm at the worst pin |
 
 Run the stair twice. Same three blocks either way:
 
@@ -26,11 +27,16 @@ with 150 mm of margin. Pin collapses each bearing to its centre, and a body held
 point can rotate about it, so the same stack is a mechanism. Both are correct answers to
 different questions about how the blocks are connected.
 
-Only `bridge_jointtypes.3dm` carries joint-type rules of its own - `PAD | TRUSS` contact and
-`TRUSS | TRUSS` pin, stored in the document - so it needs no setup at all. The other three
+The two bridges carry joint-type rules of their own - `PAD | TRUSS` contact and
+`TRUSS | TRUSS` pin, stored in the document - so they need no setup at all. The other three
 take the default, which is `contact`.
 
-All four carry mass on every element. Nothing else is required to evaluate them.
+All five carry mass on every element. Nothing else is required to evaluate them.
+
+`timber_bridge_xbraced.3dm` is the largest, and the one to reach for when a change should
+be checked on something with real redundancy: chords, posts, rafters, purlins, floor beams
+and two families of diagonals, so a joint that opens has somewhere to shed its load. A
+pinned evaluation takes about a minute.
 
 ## Rebuilding them
 
@@ -40,7 +46,7 @@ Draws three of these from the regression suite's own case definitions and saves 
 which keeps the demo files and the tested cases in step. It writes to whatever document
 Rhino has open and clears it first, so point Rhino at a scratch file before running it.
 
-`bridge_jointtypes.3dm` is not rebuilt by that script; it was drawn by hand.
+The two bridges are not rebuilt by that script; they were drawn by hand.
 
 ## The rest
 
