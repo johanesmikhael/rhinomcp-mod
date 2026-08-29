@@ -106,15 +106,22 @@ class RhinoConnection:
         self,
         command_type: str,
         params: Dict[str, Any] | None = None,
+        timeout: float | None = None,
     ) -> Dict[str, Any]:
-        """Send one command at a time; never replay a command after it was sent."""
+        """Send one command at a time; never replay a command after it was sent.
+
+        ``timeout`` overrides the per-command default (120 s for an evaluation, 15 s for
+        anything else) for callers that know better - a scripted capture of a large model,
+        say. The MCP tools never pass it.
+        """
         with self._command_lock:
-            return self._send_command(command_type, params)
+            return self._send_command(command_type, params, timeout)
 
     def _send_command(
         self,
         command_type: str,
         params: Dict[str, Any] | None,
+        timeout: float | None = None,
     ) -> Dict[str, Any]:
         if not self.sock and not self.connect():
             raise ConnectionError("Not connected to Rhino")
@@ -135,7 +142,7 @@ class RhinoConnection:
             self.sock.sendall(json.dumps(command).encode('utf-8'))
             logger.info(f"Command sent, waiting for response...")
             
-            response_timeout = 120.0 if command_type == "evaluate_stability" else 15.0
+            response_timeout = timeout if timeout else (120.0 if command_type == "evaluate_stability" else 15.0)
             self.sock.settimeout(response_timeout)
             
             # Receive the response using the improved receive_full_response method

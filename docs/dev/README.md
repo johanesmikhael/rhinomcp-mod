@@ -1,8 +1,8 @@
 # Development notes
 
 Working notes for the stability evaluator, kept because the measurements in them are the
-reason the code is shaped the way it is. They are not user documentation - `README.md` at the
-repo root is. Nothing here is a promise about the current surface; where a note and the code
+reason the code is shaped the way it is. They are not user documentation - the guide in
+[`../guide/`](../guide/README.md) is. Nothing here is a promise about the current surface; where a note and the code
 disagree, the code is right.
 
 | file | what it holds |

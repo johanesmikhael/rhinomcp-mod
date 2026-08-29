@@ -689,6 +689,7 @@ async def capture_view(
     lens_mm: float | None = None,
     draw_grid: bool = False,
     draw_axes: bool = False,
+    background: str = "viewport",
     preserve_view: bool = True,
 ) -> list:
     """Temporarily frame targets in Rhino, capture PNG, and return image plus compact metadata.
@@ -701,15 +702,20 @@ async def capture_view(
         fit: Zoom/frustum-fit target bounds before capture.
         padding: Target bounds padding multiplier.
         display_mode: Rhino display mode name, for example Shaded, Rendered, Wireframe, Technical.
-        resolution: low (640x480), medium (960x720), or high (1280x900).
-        width: Optional explicit width override, clamped by plugin.
-        height: Optional explicit height override, clamped by plugin.
+        resolution: low (640x480), medium (960x720), high (1280x900) or print (2560x1800).
+            Screen-space items - overlay text, point markers, line widths - scale with
+            the size, so a large capture is not a small one with tiny labels.
+        width: Optional explicit width override, clamped to 256..3840 by the plugin.
+        height: Optional explicit height override, clamped to 256..3840 by the plugin.
         camera_location: Optional explicit camera location [x, y, z].
         camera_target: Optional explicit camera target [x, y, z].
         camera_up: Optional camera up vector [x, y, z].
         lens_mm: Optional perspective lens length.
         draw_grid: Include grid in capture.
         draw_axes: Include axes in capture.
+        background: "viewport" keeps the display mode's own background; "white" drops it
+            and flattens onto white; "transparent" keeps the alpha. Display conduits -
+            the graph overlay, the settled pose - are drawn in every case.
         preserve_view: Restore the active camera, projection, lens, frustum, and display mode after capture. Defaults True.
     """
     from rhinomcp.server import get_rhino_connection
@@ -725,6 +731,7 @@ async def capture_view(
         "resolution": resolution,
         "draw_grid": draw_grid,
         "draw_axes": draw_axes,
+        "background": background,
         "preserve_view": preserve_view,
     }
     if ids: params["ids"] = ids

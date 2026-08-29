@@ -131,17 +131,52 @@ namespace RhinoMCPModPlugin.Functions
                 viewport.DisplayMode = displayMode;
                 doc.Views.Redraw();
 
-                var size = new Size(width, height);
                 bool drawGrid = parameters["draw_grid"]?.ToObject<bool>() ?? false;
                 bool drawAxes = parameters["draw_axes"]?.ToObject<bool>() ?? false;
-                using var bitmap = view.CaptureToBitmap(size, drawGrid, drawAxes, drawAxes);
-                if (bitmap == null) return new JObject { ["error"] = "View capture failed" };
+                var background = (parameters["background"]?.ToString() ?? "viewport").ToLowerInvariant();
+                if (background != "viewport" && background != "white" && background != "transparent")
+                {
+                    return new JObject { ["error"] = $"Unsupported background '{background}'; use viewport, white or transparent" };
+                }
+
+                // ViewCapture rather than CaptureToBitmap: it can drop the display mode's
+                // background, and it scales screen-space items - the graph readout, point
+                // markers, line widths - with the capture size, so a 2560-wide image is not
+                // a 1280 one with tiny text in the corner. Display conduits draw in both.
+                var capture = new ViewCapture
+                {
+                    Width = width,
+                    Height = height,
+                    ScaleScreenItems = true,
+                    DrawGrid = drawGrid,
+                    DrawAxes = drawAxes,
+                    DrawGridAxes = drawAxes,
+                    TransparentBackground = background != "viewport",
+                    Preview = false
+                };
+                using var captured = capture.CaptureToBitmap(view);
+                if (captured == null) return new JObject { ["error"] = "View capture failed" };
 
                 string pngBase64;
                 using (var stream = new MemoryStream())
                 {
 #pragma warning disable CA1416
-                    bitmap.Save(stream, ImageFormat.Png);
+                    if (background == "white")
+                    {
+                        // Flatten the transparent capture onto white, so the file needs no
+                        // alpha and reads the same on any page.
+                        using var flattened = new Bitmap(captured.Width, captured.Height);
+                        using (var graphics = Graphics.FromImage(flattened))
+                        {
+                            graphics.Clear(Color.White);
+                            graphics.DrawImage(captured, 0, 0, captured.Width, captured.Height);
+                        }
+                        flattened.Save(stream, ImageFormat.Png);
+                    }
+                    else
+                    {
+                        captured.Save(stream, ImageFormat.Png);
+                    }
 #pragma warning restore CA1416
                     pngBase64 = Convert.ToBase64String(stream.ToArray());
                 }
@@ -189,9 +224,11 @@ namespace RhinoMCPModPlugin.Functions
 
         private static bool TryResolveCaptureSize(JObject parameters, out int width, out int height, out string error)
         {
+            // 4K is the ceiling: a documentation figure wants 2-3x a viewport's pixels, and
+            // the PNG comes back over the socket as base64, so it has to stay in the MBs.
             const int min = 256;
-            const int max = 1920;
-            const int maxPixels = 2073600;
+            const int max = 3840;
+            const int maxPixels = 3840 * 2160;
 
             string resolution = parameters["resolution"]?.ToString()?.ToLowerInvariant() ?? "medium";
             (width, height) = resolution switch
@@ -199,6 +236,7 @@ namespace RhinoMCPModPlugin.Functions
                 "low" => (640, 480),
                 "medium" => (960, 720),
                 "high" => (1280, 900),
+                "print" => (2560, 1800),
                 _ => (0, 0)
             };
 
