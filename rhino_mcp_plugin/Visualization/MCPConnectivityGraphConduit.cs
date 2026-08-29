@@ -61,6 +61,22 @@ internal sealed class MCPConnectivityGraphConduit : DisplayConduit
         return Color.FromArgb(alpha, colour.R / 2 + 40, colour.G / 2 + 40, colour.B / 2 + 40);
     }
 
+    /// <summary>
+    /// How much larger the surface being drawn is than the view on screen. 1 on screen; a
+    /// capture at 2560 px wide from a 1280 px viewport draws at 2, so the readout, markers
+    /// and line widths - all sized in pixels - come out the same size relative to the model
+    /// instead of shrinking with the capture.
+    /// </summary>
+    private static double _scale = 1.0;
+
+    /// <summary>
+    /// Set by a capture for its duration: the capture size over the on-screen size. The
+    /// pipeline does not say which of the two it is drawing into, so the capture says.
+    /// </summary>
+    public static double CaptureScale { get; set; } = 1.0;
+
+    private static int Px(int pixels) => Math.Max(1, (int)Math.Round(pixels * _scale));
+
     protected override void DrawForeground(DrawEventArgs e)
     {
         var doc = RhinoDoc.ActiveDoc;
@@ -68,6 +84,8 @@ internal sealed class MCPConnectivityGraphConduit : DisplayConduit
         {
             return;
         }
+
+        _scale = Math.Max(1.0, CaptureScale);
 
         // Scope is pinned by the mcpmodgraph command, not read from the live selection:
         // you select, run the command, and the graph stays put while you deselect and
@@ -143,15 +161,15 @@ internal sealed class MCPConnectivityGraphConduit : DisplayConduit
                 // Elbow through the contact point: shows which parts meet AND where they
                 // touch. A centre-to-centre line hides the location, which is the part
                 // that actually matters when checking a joint.
-                e.Display.DrawLine(a, contact, _edgeColor, 2);
-                e.Display.DrawLine(contact, b, _edgeColor, 2);
+                e.Display.DrawLine(a, contact, _edgeColor, Px(2));
+                e.Display.DrawLine(contact, b, _edgeColor, Px(2));
 
                 // The joint marker in the type's colour, so a contact with no measurable
                 // region - the ones a bearing outline cannot reach - still says what it will
                 // be solved as.
                 var typeColour = ColourFor(jointType);
                 var outline = byRule ? typeColour : Dimmed(typeColour, 255);
-                e.Display.DrawPoint(contact, PointStyle.X, 5, outline);
+                e.Display.DrawPoint(contact, PointStyle.X, Px(5), outline);
 
                 // The bearing the solver actually builds joints over: the measured polygon
                 // where two flat faces meet, reduced to the rectangle the bearing points are
@@ -209,7 +227,7 @@ internal sealed class MCPConnectivityGraphConduit : DisplayConduit
             }
             else
             {
-                e.Display.DrawLine(a, b, _edgeColor, 2);
+                e.Display.DrawLine(a, b, _edgeColor, Px(2));
             }
         }
 
@@ -225,7 +243,7 @@ internal sealed class MCPConnectivityGraphConduit : DisplayConduit
             e.Display.DrawPoint(
                 graph.Nodes[i].Center,
                 connected ? PointStyle.Asterisk : PointStyle.RoundControlPoint,
-                connected ? 3 : 6,
+                Px(connected ? 3 : 6),
                 connected ? _nodeColor : _isolatedColor);
         }
 
@@ -383,13 +401,13 @@ internal sealed class MCPConnectivityGraphConduit : DisplayConduit
             return;
         }
 
-        const int textHeight = 13;
-        const int rowHeight = 20;
-        const int pad = 12;
-        const int swatchSize = 10;
-        const int swatchColumn = 20;
-        const int left = 16;
-        const int top = 16;
+        var textHeight = Px(13);
+        var rowHeight = Px(20);
+        var pad = Px(12);
+        var swatchSize = Px(10);
+        var swatchColumn = Px(20);
+        var left = Px(16);
+        var top = Px(16);
 
         var longest = rows.Max(row => row.Text.Length);
         var width = pad * 2 + swatchColumn + (int)(longest * textHeight * 0.56);

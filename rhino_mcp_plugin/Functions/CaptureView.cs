@@ -129,7 +129,21 @@ namespace RhinoMCPModPlugin.Functions
                 }
 
                 viewport.DisplayMode = displayMode;
+
+                // A shaded mode draws render meshes, and Rhino builds them lazily on the
+                // first draw. A capture taken before that draw has finished shows every solid
+                // as wireframe - the first capture after a file is opened, reliably. Build
+                // them here, then draw once, so the capture sees the meshed model.
+                foreach (var rhinoObject in doc.Objects)
+                {
+                    if (rhinoObject.Geometry is Brep or Extrusion &&
+                        rhinoObject.GetMeshes(MeshType.Render).Length == 0)
+                    {
+                        rhinoObject.CreateMeshes(MeshType.Render, doc.GetCurrentMeshingParameters(), false);
+                    }
+                }
                 doc.Views.Redraw();
+                RhinoApp.Wait();
 
                 bool drawGrid = parameters["draw_grid"]?.ToObject<bool>() ?? false;
                 bool drawAxes = parameters["draw_axes"]?.ToObject<bool>() ?? false;
@@ -154,7 +168,20 @@ namespace RhinoMCPModPlugin.Functions
                     TransparentBackground = background != "viewport",
                     Preview = false
                 };
-                using var captured = capture.CaptureToBitmap(view);
+                // Tell the overlays how much larger than the screen they are drawing, so
+                // their pixel-sized text and markers keep their size relative to the model.
+                var screenWidth = Math.Max(1, view.ClientRectangle.Width);
+                MCPConnectivityGraphConduit.CaptureScale = width / (double)screenWidth;
+                System.Drawing.Bitmap captured;
+                try
+                {
+                    captured = capture.CaptureToBitmap(view);
+                }
+                finally
+                {
+                    MCPConnectivityGraphConduit.CaptureScale = 1.0;
+                }
+                using var _ = captured;
                 if (captured == null) return new JObject { ["error"] = "View capture failed" };
 
                 string pngBase64;

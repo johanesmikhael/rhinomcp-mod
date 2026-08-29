@@ -50,7 +50,11 @@ On the stair demo: `stable` as contact, `unstable` as pin. Both are right about 
 connections: a bearing pushes without pulling and spreads over the measured face; a pin holds
 one point and a body held at one point rotates about it.
 
-![The 300 mm stair after a pinned evaluation with display on: the settled bodies drawn grey over the original geometry, the top block rotated off its support](img/stability-stair-settled.png)
+![The 300 mm stair after a pinned evaluation with display on: the bodies drawn grey over the original geometry where the run stopped - 6 mm into a topple, past the 4 mm mechanism threshold, verdict unstable](img/stability-stair-settled.png)
+
+The run ends as soon as the verdict is settled - here 47 ms in, when the top block had moved
+6 mm against a threshold of 4 - so the drawn pose is where the fall was caught, not where it
+would end. A stable assembly's pose is its rest position.
 
 ## Parameters
 
