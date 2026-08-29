@@ -424,26 +424,90 @@ namespace RhinoMCPModPlugin.Commands
             {
                 // The multi-body result has no single assembly transform, no floor strength
                 // and no support margin, so printing the welded lines would show blanks.
+                // Printed from the keys the multi-body result actually carries. The block
+                // used to read the particle path's names - worst_body, max_body_*, the
+                // trends - which the rigid-body path never fills, so half the lines were
+                // blank on every default run.
                 var verdict = result["stable"]?.Value<bool>() == true ? "stable" : "unstable";
+                var conclusive = result["conclusive"]?.Value<bool?>();
+                var diverged = result["diverged"]?.Value<bool>() == true;
+                var integrator = result["integrator"]?.ToString();
                 RhinoApp.WriteLine(
-                    $"EvaluateStability ({result["evaluation_mode"]}): {verdict}");
+                    $"EvaluateStability ({result["evaluation_mode"]}" +
+                    (string.IsNullOrEmpty(integrator) ? "" : $", {integrator}") + $"): {verdict}" +
+                    (diverged ? $" - DIVERGED: {result["diverged_reason"]}" :
+                        conclusive == false ? " (inconclusive)" : ""));
+
+                var counts = result["joint_type_counts"] as JObject;
+                var typeText = counts == null
+                    ? ""
+                    : " (" + string.Join(", ", counts.Properties()
+                        .Where(pr => (pr.Value.Value<int?>() ?? 0) > 0)
+                        .Select(pr => $"{pr.Value} {pr.Name}")) + ")";
                 RhinoApp.WriteLine(
-                    $"bodies: {result["body_count"]}, contacts: {result["contact_count"]}, " +
-                    $"open contacts: {result["open_contacts"]}, particles: {result["particle_count"]}");
-                RhinoApp.WriteLine(
-                    $"worst body: {result["worst_body"]}");
-                RhinoApp.WriteLine(
-                    $"max body displacement: {result["max_body_displacement_m"]} m, " +
-                    $"max body rotation: {result["max_body_rotation_deg"]} deg " +
-                    $"(threshold {result["rotation_threshold_deg"]} deg)");
-                RhinoApp.WriteLine(
-                    $"motion_trend: {result["motion_trend"]}, " +
-                    $"rotation_trend: {result["rotation_trend"]}, " +
-                    $"steps_run: {result["solver_steps_run"]}");
-                RhinoApp.WriteLine(
-                    $"joint types: {result["joint_type_counts"]}, " +
-                    $"default {result["joint_type_default"]}, " +
-                    $"total_mass: {result["total_mass_kg"]} kg");
+                    $"bodies: {result["body_count"]}, joints: {result["joint_count"]}{typeText}, " +
+                    $"default {result["joint_type_default"]}, rules {result["joint_type_pair_rules"] ?? 0}, " +
+                    $"ground points: {result["anchored_ground_points"]}, " +
+                    $"total mass: {Metres(result["total_mass_kg"], 1)} kg");
+
+                if (result["max_pin_displacement_m"] != null)
+                {
+                    RhinoApp.WriteLine(
+                        $"worst pin: {Millimetres(result["max_pin_displacement_m"])} mm against a " +
+                        $"mechanism threshold of {Millimetres(result["mechanism_threshold_m"])} mm " +
+                        $"(span {Metres(result["span_m"], 2)} m); " +
+                        $"settled displacement {Millimetres(result["settled_displacement_m"])} mm");
+                    RhinoApp.WriteLine(
+                        $"run: {result["steps_run"]} steps, {Metres(result["simulated_seconds"], 3)} s simulated, " +
+                        $"timestep {result["timestep_s"]} s, " +
+                        (result["settled"]?.Value<bool>() == true ? "settled" : "not settled") +
+                        $", peak speed {Metres(result["peak_speed_m_s"], 4)} m/s");
+                }
+
+                var sided = result["contact_joints_sided"]?.Value<int?>();
+                if (sided.HasValue)
+                {
+                    RhinoApp.WriteLine(
+                        $"contact joints: {sided} bearing, {result["contact_joints_open"]} open; " +
+                        $"joints with a capacity: {result["joints_with_capacity"]}, " +
+                        $"at capacity: {result["joints_at_capacity"]}");
+                }
+
+                if (result["joint_forces_summary"] is JObject forces)
+                {
+                    RhinoApp.WriteLine(
+                        $"joint forces: {forces["count"]} records, max force {Metres(forces["max_force_n"], 0)} N, " +
+                        $"max tension {Metres(forces["max_tension_n"], 0)} N, max shear {Metres(forces["max_shear_n"], 0)} N");
+                    if (forces["top_by_tension"] is JArray top)
+                    {
+                        foreach (var joint in top.OfType<JObject>().Take(3))
+                        {
+                            RhinoApp.WriteLine(
+                                $"  body {joint["body"]} ({joint["joint_type"]}) with {joint["with"]}: " +
+                                $"tension {Metres(joint["tension_n"], 0)} N, shear {Metres(joint["shear_n"], 0)} N" +
+                                (joint["reached_capacity"]?.Value<bool>() == true ? " - AT CAPACITY" : ""));
+                        }
+                    }
+                }
+
+                if (result["sway"] is JObject sway && sway["sway_stiffness_min_n_per_m"] != null)
+                {
+                    RhinoApp.WriteLine(
+                        $"sway stiffness: x {sway["sway_stiffness_x_n_per_m"]} N/m, " +
+                        $"y {sway["sway_stiffness_y_n_per_m"]} N/m, softest {sway["softest_direction"]}");
+                }
+
+                // The particle path reports per-body motion under different names; print them
+                // only when they are there.
+                if (result["max_body_displacement_m"] != null)
+                {
+                    RhinoApp.WriteLine(
+                        $"worst body: {result["worst_body"]}, " +
+                        $"max body displacement {Millimetres(result["max_body_displacement_m"])} mm, " +
+                        $"rotation {result["max_body_rotation_deg"]} deg " +
+                        $"(threshold {result["rotation_threshold_deg"]} deg)");
+                }
+
                 if (result["bodies"] is JArray movedBodies)
                 {
                     var worst = movedBodies
@@ -457,6 +521,17 @@ namespace RhinoMCPModPlugin.Commands
                             $"{body["rotation_deg"]} deg, joints {body["joints"]}");
                     }
                 }
+
+                if (result["unit_warnings"] is JArray multiBodyWarnings)
+                {
+                    foreach (var warning in multiBodyWarnings)
+                    {
+                        RhinoApp.WriteLine($"Unit warning: {warning}");
+                    }
+                }
+
+                RhinoApp.WriteLine(
+                    "Full report: get_stability_report over MCP, or evaluate_stability(detail=\"full\").");
             }
             else if (result["success"]?.Value<bool>() == true)
             {
@@ -503,5 +578,19 @@ namespace RhinoMCPModPlugin.Commands
 
             return Result.Success;
         }
+
+        /// <summary>A number in the result, rounded for the command line; blank when absent.</summary>
+        private static string Metres(JToken token, int decimals)
+        {
+            var value = token?.Type is JTokenType.Float or JTokenType.Integer ? token.Value<double>() : double.NaN;
+            return double.IsNaN(value) ? "-" : value.ToString($"F{decimals}");
+        }
+
+        private static string Millimetres(JToken token)
+        {
+            var value = token?.Type is JTokenType.Float or JTokenType.Integer ? token.Value<double>() : double.NaN;
+            return double.IsNaN(value) ? "-" : (value * 1000.0).ToString("F2");
+        }
+
     }
 }
