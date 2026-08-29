@@ -126,9 +126,10 @@ def obb_off(session: Session) -> None:
 
 
 # White background and a print-size capture: the readout and markers scale with the size,
-# and the figure is read at a fraction of it on the page. Arctic rather than Shaded because
-# Shaded is whatever the machine's display-mode settings say it is - on one it drew
-# wireframe - while Arctic is the same soft white on a stock Rhino 8.
+# and the figure is read at a fraction of it on the page. Arctic rather than Shaded: Shaded
+# fills objects with its own material - white, in the default Mac profile - which on a white
+# background leaves only the edges, while Arctic shades white surfaces with ambient occlusion
+# and reads on white.
 SHADED_HIGH = {
     "all_visible": True, "display_mode": "Arctic", "resolution": "print",
     "background": "white", "padding": 1.05,
