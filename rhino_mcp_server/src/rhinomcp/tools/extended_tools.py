@@ -116,10 +116,10 @@ async def evaluate_stability(
             vertex, in N/m of its tributary area. When omitted, Rhino sizes it
             from the assembly's total mass so that settling stays within a tenth
             of the stability threshold; a sound structure would otherwise read as
-            unstable purely from sinking. Not a subgrade modulus - it is
-            multiplied by tributary areas that include each corner's share of the
-            side faces meeting there, so the product is the quantity with
-            meaning. Accepted as floor_strength under its old name.
+            unstable purely from sinking. Multiplied by each standing vertex's
+            share of the footprint, so it is a subgrade modulus in Pa/m and the
+            reported ground_bearing_area_m2 is the footprint. Accepted as
+            floor_strength under its old name.
         floor_z: World Z elevation of the collision floor, in document units.
             When omitted, Rhino places the floor at the underside of the scoped
             assembly. Pass a value only to hold the floor at a fixed level: a

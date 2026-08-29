@@ -1245,6 +1245,7 @@ public partial class RhinoMCPModFunctions
         var massMoment = Vector3d.Zero;
         var massTotal = 0.0;
         var siteAreas = new Dictionary<(long, long, long), double>();
+        var siteFloorAreas = new Dictionary<(long, long, long), double>();
         var siteMasses = new Dictionary<(long, long, long), double>();
         var sitePoints = new Dictionary<(long, long, long), Point3d>();
 
@@ -1277,9 +1278,12 @@ public partial class RhinoMCPModFunctions
 
             // Tributary area per vertex, deduplicated to one entry per unique position.
             var vertexAreas = TributaryVertexAreas(mesh);
+            var floorVertexAreas = FloorTributaryVertexAreas(
+                mesh, floorZMeters, GroundContactToleranceMeters);
             var nodeKeys = new List<(long, long, long)>();
             var nodePoints = new List<Point3d>();
             var nodeAreas = new List<double>();
+            var nodeFloorAreas = new List<double>();
             var nodeIndices = new Dictionary<(long, long, long), int>();
             for (var i = 0; i < points.Count; i++)
             {
@@ -1296,9 +1300,11 @@ public partial class RhinoMCPModFunctions
                     nodeKeys.Add(key);
                     nodePoints.Add(points[i]);
                     nodeAreas.Add(0.0);
+                    nodeFloorAreas.Add(0.0);
                 }
 
                 nodeAreas[index] += vertexAreas[i];
+                nodeFloorAreas[index] += floorVertexAreas[i];
             }
 
             var nodeArea = nodeAreas.Sum();
@@ -1340,6 +1346,8 @@ public partial class RhinoMCPModFunctions
                 sitePoints[key] = nodePoints[i];
                 siteAreas.TryGetValue(key, out var area);
                 siteAreas[key] = area + nodeAreas[i];
+                siteFloorAreas.TryGetValue(key, out var floorArea);
+                siteFloorAreas[key] = floorArea + nodeFloorAreas[i];
                 siteMasses.TryGetValue(key, out var mass);
                 siteMasses[key] = mass + (node.MassKilograms * shares[i]);
             }
@@ -1400,6 +1408,23 @@ public partial class RhinoMCPModFunctions
         foreach (var key in siteKeys)
         {
             var area = siteAreas.TryGetValue(key, out var value) ? value : 0.0;
+
+            // A vertex standing on the floor carries the floor faces meeting at it and
+            // nothing else. Its full tributary area also holds a share of the side faces
+            // above it, and how much depends on how the mesher happened to triangulate
+            // those faces - the same box meshed before and after a document unit change
+            // gave 0.47 and 0.54 m2 for one footing, and the welded verdict of a
+            // +121 mm-margin cantilever flipped with it. The footprint is what the ground
+            // actually bears on, and it is the same whichever way the walls were cut.
+            // Vertices above the floor keep their full share, so a corner that lands
+            // during a topple still meets something.
+            var onFloor = sitePoints[key].Z <= floorZMeters + GroundContactToleranceMeters;
+            if (onFloor && siteFloorAreas.TryGetValue(key, out var floorArea) &&
+                double.IsFinite(floorArea) && floorArea > 0.0)
+            {
+                area = floorArea;
+            }
+
             if (!double.IsFinite(area) || area <= 0.0)
             {
                 continue;
@@ -1430,13 +1455,12 @@ public partial class RhinoMCPModFunctions
         // RelaxationCompensation.
         if (floorStrengthIsAuto)
         {
-            // The tributary areas of the vertices standing on the floor - which is what
-            // AreaFloor multiplies its strength by, so it is the right denominator for
-            // making the total support stiffness come out at W / settlement. It is not the
-            // bearing footprint and is larger than it: a bottom corner's tributary area
-            // includes its share of the two side faces meeting there, so a 0.3 x 0.4 m
-            // pedestal base sums to about 0.47 m2. The product is what carries physical
-            // meaning here; floor_strength on its own is not a subgrade modulus.
+            // The areas of the vertices standing on the floor - which is what AreaFloor
+            // multiplies its strength by, so it is the right denominator for making the
+            // total support stiffness come out at W / settlement. Those areas are the
+            // footprint, split among the vertices on it (see the contact site loop above
+            // for why not the full tributary area), so a 0.3 x 0.4 m pedestal base sums
+            // to 0.12 m2 and floor_strength is a subgrade modulus in Pa/m.
             var bearingArea = 0.0;
             foreach (var site in contactSites)
             {
@@ -2170,14 +2194,85 @@ public partial class RhinoMCPModFunctions
         for (var faceIndex = 0; faceIndex < mesh.Faces.Count; faceIndex++)
         {
             var face = mesh.Faces[faceIndex];
-            AddTriangleArea(mesh, areas, face.A, face.B, face.C);
             if (face.IsQuad)
             {
-                AddTriangleArea(mesh, areas, face.A, face.C, face.D);
+                AddQuadArea(mesh, areas, face.A, face.B, face.C, face.D);
+            }
+            else
+            {
+                AddTriangleArea(mesh, areas, face.A, face.B, face.C);
             }
         }
 
         return areas;
+    }
+
+    /// <summary>
+    /// Tributary areas counting only the faces that lie on the floor, so a standing
+    /// vertex's area is its share of the footprint and nothing above it.
+    /// </summary>
+    private static double[] FloorTributaryVertexAreas(Mesh mesh, double floorZ, double tolerance)
+    {
+        var areas = new double[mesh.Vertices.Count];
+        var limit = floorZ + tolerance;
+        bool OnFloor(int index) =>
+            index >= 0 && index < mesh.Vertices.Count && mesh.Vertices[index].Z <= limit;
+
+        for (var faceIndex = 0; faceIndex < mesh.Faces.Count; faceIndex++)
+        {
+            var face = mesh.Faces[faceIndex];
+            if (!OnFloor(face.A) || !OnFloor(face.B) || !OnFloor(face.C))
+            {
+                continue;
+            }
+
+            if (face.IsQuad)
+            {
+                if (OnFloor(face.D))
+                {
+                    AddQuadArea(mesh, areas, face.A, face.B, face.C, face.D);
+                }
+            }
+            else
+            {
+                AddTriangleArea(mesh, areas, face.A, face.B, face.C);
+            }
+        }
+
+        return areas;
+    }
+
+    /// <summary>
+    /// A quad's area shared equally by its four corners. Splitting it into two triangles
+    /// along one diagonal gives the corners on that diagonal twice the share of the other
+    /// two, and which diagonal that is depends on the vertex order the mesher chose - so
+    /// the same face would weigh its corners differently from one meshing to the next.
+    /// Equal shares are exact for a parallelogram, which is every face of a box.
+    /// </summary>
+    private static void AddQuadArea(Mesh mesh, double[] areas, int a, int b, int c, int d)
+    {
+        if (a < 0 || b < 0 || c < 0 || d < 0 ||
+            a >= areas.Length || b >= areas.Length || c >= areas.Length || d >= areas.Length)
+        {
+            return;
+        }
+
+        var pa = (Point3d)mesh.Vertices[a];
+        var pb = (Point3d)mesh.Vertices[b];
+        var pc = (Point3d)mesh.Vertices[c];
+        var pd = (Point3d)mesh.Vertices[d];
+        var area = 0.5 * Vector3d.CrossProduct(pb - pa, pc - pa).Length +
+            0.5 * Vector3d.CrossProduct(pc - pa, pd - pa).Length;
+        if (!double.IsFinite(area) || area <= 0.0)
+        {
+            return;
+        }
+
+        var share = area / 4.0;
+        areas[a] += share;
+        areas[b] += share;
+        areas[c] += share;
+        areas[d] += share;
     }
 
     private static void AddTriangleArea(Mesh mesh, double[] areas, int a, int b, int c)

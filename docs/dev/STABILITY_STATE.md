@@ -205,11 +205,29 @@ Welded is an upper bound: it supplies every moment connection the real assembly 
    second, independent method by hand (statics margin, rank test, hand arithmetic).
 4. **Trend labels mislead.** `rotation_trend: steady` is reported while rotation is still
    growing, because the test asks about *acceleration*. Rename or report both windows.
-5. **Imperial units untested** end to end. Millimetres and metres are verified.
-6. **`floor_strength` is not a subgrade modulus.** It is divided by the summed tributary
-   areas of the vertices standing on the floor, which include those corners' share of the
-   side faces meeting there - a 0.3 x 0.4 m pedestal base sums to ~0.47 m2, not 0.12. The
-   product `ground_support_stiffness_n_per_m` is the quantity with physical meaning.
+5. ~~**Imperial units untested** end to end.~~ **Tested 2026-08-29.**
+   `scripts/stability_regression/imperial_crosscheck.py` builds nine regression cases in
+   millimetres, scales the document to feet and evaluates again: every verdict and every
+   SI-reported number agrees to 1e-3 on the contact, pinned and dynamic paths, and
+   `assign_mass(density)` in feet reproduces the stated kilograms. The one verdict it
+   flipped was not a unit bug - see item 6. Two residuals remain, neither touching a
+   verdict: the bearing graph meshes document-unit geometry with `FastRenderMesh`
+   (`MCPConnectivityGraphConduit`), so bearing samples and hence node diameters and the
+   tension/shear split at a joint move by up to ~7% between documents while joint force
+   magnitudes hold to 0.2%; and the particle integrator merges particles on a 1 um grid,
+   so `shared_particles` and its sway stiffness shift ~3% with the scaled coordinates.
+   Meshing in metre space for the bearing sampling, as the solver already does, would
+   remove the first. Contact detection itself is in multiples of the document's
+   absolute tolerance by design, so a document converted with `AdjustModelUnitSystem`
+   must have its tolerance rescaled too - the cross-check does.
+6. ~~**`floor_strength` is not a subgrade modulus.**~~ **It is now.** It used to be divided
+   by the summed tributary areas of the vertices standing on the floor, which included each
+   corner's share of the side faces above it - and that share depends on how the mesher
+   triangulated those faces, which is not stable across transforms. The same 0.3 x 0.4 m
+   footing measured 0.47 m2 in millimetres and 0.54 m2 after a scale to feet, and the welded
+   verdict of the +121 mm cantilever flipped with it. A standing vertex now carries only
+   the floor faces meeting at it, split evenly per quad, so `ground_bearing_area_m2` is the
+   footprint (0.12 m2) and `floor_strength` is W / (settlement x footprint) in Pa/m.
 7. ~~The relaxed pinned mode reports a false positive on the unbraced bridge.~~ **Fixed by
    deletion.** `pinned` is now an alias for the dynamic solver and the 407-line relaxed path
    is gone; the regression case passes without its assertion moving. See
