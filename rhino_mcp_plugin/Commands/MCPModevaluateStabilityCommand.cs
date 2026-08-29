@@ -208,15 +208,20 @@ namespace RhinoMCPModPlugin.Commands
 
             if (multiBody)
             {
-                var ruleCount = ReadPairRules(doc).Count;
+                var pairRules = ReadPairRules(doc);
+                var ruleCount = pairRules.Count;
+                var staleCount = CountStaleRules(doc, pairRules);
 
                 // What a joint is where no rule names one. Rules beat it, so this is a default
                 // and is prompted as one - the old naming implied it was the answer.
                 var getDefaultJoint = new GetOption();
                 getDefaultJoint.SetCommandPrompt(
-                    ruleCount > 0
-                        ? $"Joint type where no rule names one ({ruleCount} rules will override it)"
-                        : "Joint type where no rule names one (no rules are set)");
+                    ruleCount == 0
+                        ? "Joint type where no rule names one (no rules are set)"
+                        : staleCount == 0
+                            ? $"Joint type where no rule names one ({ruleCount} rules will override it)"
+                            : $"Joint type where no rule names one ({ruleCount} rules, {staleCount} stale " +
+                              "and naming nothing in the document - mcpmodassignjointtype Prune removes them)");
                 // Contact first, because it is the default and the prompt should say so by
                 // its order as well as by what it does when nothing is chosen.
                 var contactJointOption = getDefaultJoint.AddOption("Contact");

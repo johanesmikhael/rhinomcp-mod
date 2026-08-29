@@ -600,6 +600,15 @@ public partial class RhinoMCPModFunctions
     /// Reported rather than removed on sight, because a deleted object can be undone and a
     /// rule silently dropped in between would not come back with it. Removal is asked for.
     /// </remarks>
+    /// <summary>
+    /// How many of the stored rules name something that is not in the document. For prompts
+    /// that count rules: a count that includes the dead ones overstates what will happen.
+    /// </summary>
+    internal static int CountStaleRules(RhinoDoc doc, Dictionary<string, PairRule> rules)
+    {
+        return rules.Values.Count(rule => StaleReason(doc, rule) != null);
+    }
+
     private static string StaleReason(RhinoDoc doc, PairRule rule)
     {
         var reasons = new List<string>();
