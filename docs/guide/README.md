@@ -1,0 +1,25 @@
+# rhinomcp-mod guide
+
+Rhino 8 driven through Claude: the document read and edited over MCP, the way its elements
+touch measured, and an assembly's stability under gravity evaluated. Each feature has an MCP
+tool and a Rhino command; every page shows both.
+
+| page | covers |
+| --- | --- |
+| [00 overview](00-overview.md) | feature areas, the stability pipeline, the two routes, what is stored on the document |
+| [01 setup](01-setup.md) | plugin, `uv`, Claude Desktop, Claude Code, from source, verify, troubleshooting, session tools |
+| 02 scene inspection | not yet written - see the [reference](11-reference.md) |
+| 03 geometry, layers, materials | not yet written - see the [reference](11-reference.md) |
+| 04 pose and transforms | not yet written - see the [reference](11-reference.md) |
+| 05 views and capture | not yet written - see the [reference](11-reference.md) |
+| [06 connectivity graph](06-connectivity-graph.md) | nodes, edges, measured bearings, the overlay, the cache |
+| [07 mass and joint types](07-mass-joint-types.md) | mass from density or stated; contact, pin, fixed; rules, capacity, pruning |
+| [08 stability](08-stability.md) | modes, parameters, the command's prompts, bearings, limitations |
+| [09 reading results](09-reading-results.md) | the summary, the stored report, paging it |
+| [10 worked example](10-worked-example-timber-bridges.md) | the two timber bridges end to end |
+| [11 reference](11-reference.md) | every tool and command with its counterpart |
+
+Demo models with known answers: [`RhinoAndGHFiles/`](../../RhinoAndGHFiles/README.md).
+
+Images under `img/` are produced by `scripts/dev/build_guide_images.py` against a running
+Rhino; rerun it after a change to what the plugin draws.
