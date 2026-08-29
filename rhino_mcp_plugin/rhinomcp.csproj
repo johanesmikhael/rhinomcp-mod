@@ -6,9 +6,6 @@
     <TargetExt>.rhp</TargetExt>
     <NoWarn>NU1701</NoWarn>
     <DeployToRhino Condition="'$(DeployToRhino)' == ''">true</DeployToRhino>
-    <KangarooSolverPath Condition="'$(KangarooSolverPath)' == '' and Exists('..\KangarooSolver.dll')">..\KangarooSolver.dll</KangarooSolverPath>
-    <KangarooSolverPath Condition="'$(KangarooSolverPath)' == '' and $([MSBuild]::IsOSPlatform('OSX'))">/Applications/Rhino 8.app/Contents/Frameworks/RhCore.framework/Versions/A/Resources/ManagedPlugIns/GrasshopperPlugin.rhp/Components/KangarooSolver.dll</KangarooSolverPath>
-    <KangarooSolverPath Condition="'$(KangarooSolverPath)' == '' and Exists('$(ProgramFiles)\Rhino 8\Plug-ins\Grasshopper\Components\KangarooSolver.dll')">$(ProgramFiles)\Rhino 8\Plug-ins\Grasshopper\Components\KangarooSolver.dll</KangarooSolverPath>
   </PropertyGroup>
   
   <PropertyGroup>
@@ -28,16 +25,7 @@
     <Reference Include="System.Drawing.Common">
       <HintPath>/Applications/Rhino 8.app/Contents/Frameworks/RhCore.framework/Versions/A/Resources/System.Drawing.Common.dll</HintPath>
     </Reference>
-    <Reference Include="KangarooSolver">
-      <HintPath>$(KangarooSolverPath)</HintPath>
-      <Private>false</Private>
-    </Reference>
   </ItemGroup>
-
-  <Target Name="ValidateKangarooSolverReference" BeforeTargets="ResolveReferences"
-          Condition="'$(KangarooSolverPath)' == '' or !Exists('$(KangarooSolverPath)')">
-    <Error Text="KangarooSolver.dll was not found. Install Rhino 8 with Grasshopper or build with -p:KangarooSolverPath=/absolute/path/to/KangarooSolver.dll." />
-  </Target>
 
   <Target Name="PostBuild" AfterTargets="PostBuildEvent"
           Condition="$([MSBuild]::IsOSPlatform('OSX')) and '$(DeployToRhino)' == 'true'">

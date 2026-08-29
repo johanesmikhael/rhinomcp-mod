@@ -135,7 +135,7 @@ class RhinoConnection:
             self.sock.sendall(json.dumps(command).encode('utf-8'))
             logger.info(f"Command sent, waiting for response...")
             
-            response_timeout = 120.0 if command_type == "evaluate_stability" else 15.0
+            response_timeout = 15.0
             self.sock.settimeout(response_timeout)
             
             # Receive the response using the improved receive_full_response method

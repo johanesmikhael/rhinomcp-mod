@@ -25,9 +25,7 @@ internal sealed class MCPConnectivityGraphConduit : DisplayConduit
 
     // One colour per joint type, so what the solver will do with a bearing is visible on the
     // bearing itself rather than in a table somewhere else.
-    private static readonly Color ContactColour = Color.FromArgb(255, 20, 150, 95);
-    private static readonly Color PinColour = Color.FromArgb(255, 35, 110, 215);
-    private static readonly Color WeldedColour = Color.FromArgb(255, 200, 105, 0);
+    private static readonly Color BearingColour = Color.FromArgb(255, 20, 150, 95);
 
     // The panel the readout sits on, and the text on it. A colour that reads on every
     // background does not exist - white text vanished into the default viewport and black
@@ -36,16 +34,6 @@ internal sealed class MCPConnectivityGraphConduit : DisplayConduit
     private static readonly Color PanelColour = Color.FromArgb(235, 255, 255, 255);
     private static readonly Color TextColour = Color.FromArgb(255, 30, 33, 38);
     private static readonly Color HeadingColour = Color.FromArgb(255, 105, 112, 125);
-
-    private static Color ColourFor(Functions.StabilityRigidBodies.JointType type)
-    {
-        return type switch
-        {
-            Functions.StabilityRigidBodies.JointType.Contact => ContactColour,
-            Functions.StabilityRigidBodies.JointType.Pin => PinColour,
-            _ => WeldedColour
-        };
-    }
 
     /// <summary>
     /// The same colour, dimmed, for a joint no rule named.
@@ -95,48 +83,11 @@ internal sealed class MCPConnectivityGraphConduit : DisplayConduit
             degree[edge.B]++;
         }
 
-        // What each joint will be, resolved from the same rules the evaluator reads, per
-        // node so the lookup happens once rather than per edge. The default has to be the
-        // evaluator's own, or the overlay says one thing and the solver does another: when
-        // the default moved from welded to contact this was left behind, and a bridge whose
-        // joints would all be solved as contact was drawn as 207 welded ones.
-        var rules = new Functions.RhinoMCPModFunctions.JointTypeRules(
-            Functions.RhinoMCPModFunctions.ReadPairRules(doc),
-            Functions.RhinoMCPModFunctions.DefaultJointType);
-        var layers = new string[graph.Nodes.Count];
-        var stated = new Functions.StabilityRigidBodies.JointType?[graph.Nodes.Count];
-        for (var i = 0; i < graph.Nodes.Count; i++)
-        {
-            var rhinoObject = doc.Objects.FindId(graph.Nodes[i].ObjectId);
-            layers[i] = rhinoObject == null
-                ? null
-                : doc.Layers.FindIndex(rhinoObject.Attributes.LayerIndex)?.Name;
-            stated[i] = Functions.RhinoMCPModFunctions.TryGetElementJointType(
-                rhinoObject, out var elementType)
-                ? elementType
-                : null;
-        }
-
-        var typeCounts = new Dictionary<Functions.StabilityRigidBodies.JointType, int>();
-        var ruled = 0;
-
         foreach (var edge in graph.Edges)
         {
             var a = graph.Nodes[edge.A].Center;
             var b = graph.Nodes[edge.B].Center;
             var contact = edge.ContactPoint;
-
-            var jointType = rules.Resolve(
-                graph.Nodes[edge.A].ObjectId.ToString(), layers[edge.A], stated[edge.A],
-                graph.Nodes[edge.B].ObjectId.ToString(), layers[edge.B], stated[edge.B],
-                out var jointRule);
-            var byRule = jointRule != "default";
-            typeCounts.TryGetValue(jointType, out var seen);
-            typeCounts[jointType] = seen + 1;
-            if (byRule)
-            {
-                ruled++;
-            }
 
             if (contact.IsValid)
             {
@@ -146,11 +97,9 @@ internal sealed class MCPConnectivityGraphConduit : DisplayConduit
                 e.Display.DrawLine(a, contact, _edgeColor, 2);
                 e.Display.DrawLine(contact, b, _edgeColor, 2);
 
-                // The joint marker in the type's colour, so a contact with no measurable
-                // region - the ones a bearing outline cannot reach - still says what it will
-                // be solved as.
-                var typeColour = ColourFor(jointType);
-                var outline = byRule ? typeColour : Dimmed(typeColour, 255);
+                // The joint marker, so a contact with no measurable region - the ones a
+                // bearing outline cannot reach - is still shown where it was found.
+                var outline = BearingColour;
                 e.Display.DrawPoint(contact, PointStyle.X, 5, outline);
 
                 // The bearing the solver actually builds joints over: the measured polygon
@@ -162,7 +111,7 @@ internal sealed class MCPConnectivityGraphConduit : DisplayConduit
                 // one - because the two answered the same question by different methods and
                 // the disagreement was the thing worth seeing. The solver has run on the
                 // exact one since; there is no longer a comparison to draw, only a bearing.
-                var fill = byRule ? Color.FromArgb(70, typeColour) : Dimmed(typeColour, 35);
+                var fill = Color.FromArgb(70, BearingColour);
 
                 // A buried bearing is not solved on unless it is asked for by name, so it is
                 // not drawn either: the overlay draws the joints the solver will build. It
@@ -256,22 +205,7 @@ internal sealed class MCPConnectivityGraphConduit : DisplayConduit
         // The legend earns its space by naming what is on screen. Colour alone is not a
         // legend: green means bearing to whoever chose it and nothing to anyone reading it.
         rows.Add(HudRow.Heading("BEARINGS"));
-        foreach (var entry in typeCounts.OrderBy(pair => (int)pair.Key))
-        {
-            rows.Add(HudRow.Swatched(
-                ColourFor(entry.Key),
-                $"{Functions.RhinoMCPModFunctions.TypeName(entry.Key)}  {entry.Value}"));
-        }
-
-        // Stated against assumed. A joint drawn dim is solved exactly like a bright one of
-        // the same colour; what differs is whether anyone said so, which is the question this
-        // overlay exists to answer.
-        if (ruled < graph.Edges.Count)
-        {
-            rows.Add(HudRow.Swatched(
-                Dimmed(ColourFor(Functions.RhinoMCPModFunctions.DefaultJointType), 255),
-                $"no rule  {graph.Edges.Count - ruled}"));
-        }
+        rows.Add(HudRow.Swatched(BearingColour, $"measured  {graph.Edges.Count - unmeasured}"));
 
         // How each bearing was arrived at, as legend entries rather than as sentences. Only
         // the readings that are not the ordinary one appear, so a clean model shows a short

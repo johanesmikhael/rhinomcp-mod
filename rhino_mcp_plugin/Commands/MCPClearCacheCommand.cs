@@ -14,14 +14,10 @@ namespace RhinoMCPModPlugin.Commands
         private const string ObbStorageKey = "rhinomcp.obb.v1";
 
         /// <summary>
-        /// The settled shape the stability preview draws from.
+        /// Left behind by the stability evaluator on documents that have met one. Cleared
+        /// here because it is a cache like the others and lives in the same place.
         /// </summary>
-        /// <remarks>
-        /// Cleared here because it is a cache like the others and lives in the same place, on
-        /// the objects. Leaving it out meant the command reported the cache cleared while the
-        /// preview carried on drawing the result of an evaluation that no longer existed.
-        /// </remarks>
-        private const string AfterEvaluationKey = Functions.RhinoMCPModFunctions.AfterEvaluationKey;
+        private const string AfterEvaluationKey = "rhinomcp.after_eva.v1";
 
         public MCPClearCacheCommand()
         {

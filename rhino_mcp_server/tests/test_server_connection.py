@@ -50,17 +50,6 @@ class RhinoConnectionTests(unittest.TestCase):
         self.assertTrue(sock.closed)
         self.assertIsNone(connection.sock)
 
-    def test_stability_uses_extended_timeout(self):
-        response = json.dumps(
-            {"status": "success", "result": {"stable": True}}
-        ).encode("utf-8")
-        sock = FakeSocket([response])
-        connection = RhinoConnection("127.0.0.1", 1999, sock=sock)
-
-        connection.send_command("evaluate_stability", {})
-
-        self.assertEqual(120.0, sock.timeouts[-1])
-
 
 if __name__ == "__main__":
     unittest.main()

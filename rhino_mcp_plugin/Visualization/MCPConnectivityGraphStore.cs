@@ -200,8 +200,7 @@ internal static class MCPConnectivityGraphStore
             };
 
             var rhinoObject = doc.Objects.FindId(node.ObjectId);
-            var stabilityText = rhinoObject?.Attributes?.GetUserString(
-                Functions.RhinoMCPModFunctions.StabilityKey);
+            var stabilityText = rhinoObject?.Attributes?.GetUserString("rhinomcp.stability.v1");
             if (!string.IsNullOrWhiteSpace(stabilityText))
             {
                 try
