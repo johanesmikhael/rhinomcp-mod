@@ -195,6 +195,14 @@ From Rhino: `mcpmodversion`.
 | read the command line | `get_rhino_log(lines=20)` | - |
 | listener | - | `mcpmodstart`, `mcpmodstop`, `mcpmodversion` |
 
+Pass `close_current=True` when switching files. Rhino can hold several documents at once, but
+every tool here works on the active one, and an open that leaves an extra document behind does
+not reliably make the new file active - so the call is refused rather than left pointing at the
+wrong model. Closing as you go leaves Rhino one document to activate, which is reliable. The
+new file is opened before the old one closes, so Rhino is never left with no document at all,
+and `open_file` returns `active_name` alongside `name` for the document actually in effect.
+Closing discards unsaved changes unless `save_current=True`.
+
 `run_rhino_command` passes the whole string to Rhino's script runner with a leading `_`, so
 option tokens after the name answer the command's prompts. A command left waiting at a prompt
 swallows the next calls; dashed (`-mcpmodclearcache`) and option forms (`mcpmodobb Off`) run

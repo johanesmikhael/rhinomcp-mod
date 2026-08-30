@@ -46,7 +46,7 @@ This page lists every MCP tool and Rhino command with its equivalent in the othe
 | `assign_joint_type` | a rule: `joint_type` for a layer pair, an id pair, an element, or a founded base (`with_ground=True`); `capacity_kn`; `clear=True`; `prune=True`; no arguments lists | `mcpmodassignjointtype` | [07](07-mass-joint-types.md) |
 | `evaluate_stability` | evaluate the scope: `mode` assembly (one body) / elements (one per element), `joint_type` default, solver parameters, `lateral_load_fraction` sway probe, `display`, `detail` | `mcpmodevaluatestability` | [08](08-stability.md) |
 | `get_stability_report` | one section of the last evaluation's stored report, sorted, filtered and paged; no `section` lists them | - | [09](09-reading-results.md) |
-| `open_file` | open a `.3dm`, optionally closing the current document | `Open` | [01](01-setup.md#10-session-tools) |
+| `open_file` | open a `.3dm` and make it active; `close_current=True` to switch reliably, and the call fails rather than leave the wrong document active | `Open` | [01](01-setup.md#10-session-tools) |
 | `close_file` | close the active document, optionally saving | `Close` | [01](01-setup.md#10-session-tools) |
 | `list_plugins` | loaded plugins | `PlugInManager` | [01](01-setup.md#10-session-tools) |
 | `run_rhino_command` | run a command by name with option tokens; prompting commands must be given their answers or the dashed form | - | [01](01-setup.md#10-session-tools) |
