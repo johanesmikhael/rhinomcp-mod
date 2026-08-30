@@ -45,7 +45,8 @@ says nothing. Narrow the scope and retry rather than trusting it.
 `source` is where the answer came from. The graph is stored on the document under
 `rhinomcp-mod:connectivity-graph` with a fingerprint of the geometry it was computed from
 (object ids, quantised bounding boxes, tolerance); while the fingerprint matches, the stored
-graph is returned (`document_text_cache`), otherwise it is recomputed (`computed`). An edit
+graph is returned (`document_text_cache`, or `memory_cache` when the same session already
+built it), otherwise it is recomputed (`computed`). An edit
 to an element invalidates it; a change to the plugin's own measurement does not, which is
 what `-mcpmodclearcache` is for.
 

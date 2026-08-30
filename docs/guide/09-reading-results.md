@@ -24,12 +24,12 @@ than a tool result carries into context.
 ## The summary
 
 ```python
-result = evaluate_stability(mode="pinned")
+result = evaluate_stability(mode="elements")
 ```
 
 ```text
 {"success": true, "stable": true, "verdict": "stable", "conclusive": true, "diverged": false,
- "evaluation_mode": "multi_body_pinned_dynamic", "integrator": "rigid_bodies",
+ "mode": "elements", "evaluation_mode": "multi_body_pinned_dynamic", "integrator": "rigid_bodies",
  "body_count": 104, "joint_count": 77, "joint_type_counts": {"contact": 24, "pin": 53, "fixed": 0},
  "joint_type_default": "contact", "joint_type_pair_rules": 2,
  "max_pin_displacement_m": 0.00305, "mechanism_threshold_m": 0.1365, "settled_displacement_m": 0.00123,
@@ -43,6 +43,8 @@ result = evaluate_stability(mode="pinned")
 
 | field | reads |
 | --- | --- |
+| `mode` | which of the two modes ran, `assembly` or `elements`. An older mode name resolves to one of them and says so in `unit_warnings` ([08](08-stability.md)) |
+| `evaluation_mode` | the internal solver name, kept for callers that read it. `multi_body_pinned_dynamic` is the elements path; the "pinned" and "dynamic" in it name solvers that no longer exist separately, so read `mode` instead |
 | `verdict` | `stable`, `unstable` or `inconclusive`. `inconclusive` is not `unstable`: the run ended before the assembly settled or clearly fell |
 | `conclusive`, `diverged`, `diverged_reason` | whether the run answered at all; a diverged run stopped on a non-finite speed and reports no verdict |
 | `max_pin_displacement_m` against `mechanism_threshold_m` | the verdict metric: the furthest any joint moved, against the distance that counts as collapse (a fraction of `span_m`) |
@@ -118,7 +120,7 @@ differently. Match on `guid`.
 ## Full detail
 
 ```python
-evaluate_stability(mode="pinned", detail="full")
+evaluate_stability(mode="elements", detail="full")
 ```
 
 Everything the report has, in the one answer, as before 0.3.1. For an assembly of a few

@@ -35,38 +35,41 @@ async def evaluate_stability(
     bbox_mode: str = "intersects",
     selected: bool = False,
 ) -> dict[str, Any]:
-    """Experimentally evaluate the active model as one welded rigid assembly.
+    """Experimentally evaluate whether the active model stands up under gravity.
 
     The model must have a connectivity graph and positive mass assigned to
-    every graph node. Graph edges are not physical joints in this mode: all
-    nodes receive one shared rigid transform. By default the graph is read
-    from the active document.
+    every graph node. By default the graph is read from the active document.
+
+    Two questions, chosen by `mode`, and neither subsumes the other, so run
+    both: does the scope tip over as a whole ("assembly"), and is it a
+    mechanism - can any element rotate or slide off its supports ("elements").
 
     Args:
-        mode: "welded" (default) treats the whole scope as one rigid body and
-            answers whether it tips over. "pinned" gives every element its own
-            rigid body, joined at the connectivity graph's contact points, and
-            answers whether the assembly is a mechanism - whether any element
-            can rotate or slide off its supports. Neither subsumes the other: a
-            pin holds in tension, so pinned mode cannot see an element toppling
-            off another, and welded mode cannot see a mechanism at all. Run
-            both. "contact" also gives every element its own body, but joins
-            them across bearing surfaces that carry compression and no tension,
-            so an element can rotate off its support or lift away - the closest
-            of the three to a dry-stacked assembly, and the only one that can
-            fail a single element rather than the whole scope.
-            Pinned and contact modes report per-element displacement and rotation and
-            names the element that moved furthest, and its result carries no
-            floor strength, assembly transform or support margin.
+        mode: "assembly" (default) fuses the whole scope into one rigid body
+            with no joints at all, and answers whether it tips or slides.
+            "elements" gives every element its own rigid body, joined at the
+            connectivity graph's contact points by whatever joint type the
+            model states there, and answers whether the assembly is a
+            mechanism. What a joint carries is not part of this choice - it is
+            per joint, set by assign_joint_type, defaulted by `joint_type`.
+            "elements" reports per-element displacement and rotation and names
+            the element that moved furthest; its result carries no floor
+            strength, assembly transform or support margin.
+            The older names still work and say so in `unit_warnings`: "welded"
+            and "single_rigid_assembly" mean "assembly"; "pinned", "dynamic",
+            "pinned_dynamic", "contact" and the "multi_body_*" spellings all
+            mean "elements". "contact" in particular forces nothing - it named
+            a solver that is now the default joint type, so per-joint rules
+            still apply under it exactly as under "elements".
         joint_penetration: How far a bearing surface may close under its own
             load, in document units. Sizes the joint stiffness where none is
             stated.
-        ground_settlement: Welded (assembly) mode only. How far the assembly
+        ground_settlement: Assembly mode only. How far the assembly
             may settle into the ground under its own weight, in document units;
             the floor spring is sized from it where no floor strength is given.
             The multi-body modes size their ground springs from the joints
             instead and do not read it.
-        joint_stiffness_n_per_m: Pinned modes only. Axial joint stiffness in N/m,
+        joint_stiffness_n_per_m: Elements mode only. Axial joint stiffness in N/m,
             stated rather than derived, and applied to EVERY member in the scope.
             That last part matters: left unset, each member gets its own
             (E/rho) m / L^2 with the section recovered from mass, so a slender
@@ -78,7 +81,7 @@ async def evaluate_stability(
             it joins - a screwed or doweled timber joint, where the timber's own
             stiffness is nearly irrelevant and a joint test gives this number
             directly. Per-joint values are not supported yet.
-        lateral_load_fraction: Pinned modes only. The sideways probe that
+        lateral_load_fraction: Elements mode only. The sideways probe that
             measures sway stiffness, as a fraction of the weight carried.
             **Off by default** - pass 0.05 to ask for it.
 
@@ -109,8 +112,8 @@ async def evaluate_stability(
         stability_threshold: Maximum displacement considered stable, in the
             active Rhino document's length unit. When omitted, Rhino converts
             the canonical 0.01 m default to document units.
-        rigid_strength: Welded mode only: how rigid the single assembly body is.
-            It no longer reaches the pinned joints - use joint_stiffness_n_per_m
+        rigid_strength: Assembly mode only: how rigid the single assembly body is.
+            It no longer reaches the element joints - use joint_stiffness_n_per_m
             for those. When omitted, Rhino sizes it above the ground stiffness. The two goals are blended by
             weight, so a rigid strength below the floor lets the floor deform
             the assembly it is supporting and a sound structure reads as
@@ -137,11 +140,11 @@ async def evaluate_stability(
             more than a tool result can carry into context. The full report is
             stored on the document either way; get_stability_report pages any
             section of it afterwards.
-        duration_seconds: pinned_dynamic mode only. How long to simulate, in seconds.
+        duration_seconds: Elements mode only. How long to simulate, in seconds.
             Unlike a step count this means the same thing on every model: a mechanism
             with a tenth of gravity available to it covers 50 mm in 0.32 s, so the
             default 0.5 s separates falling from standing with room to spare.
-        damping_ratio: pinned_dynamic mode only. Viscous damping as a fraction of
+        damping_ratio: Elements mode only. Viscous damping as a fraction of
             critical. Defaults to 0.02, the low end of what codes assume for steel
             framing. With none at all a sound structure oscillates forever about its
             static deflection and peaks at twice it. The two integrators do not mean
@@ -150,7 +153,7 @@ async def evaluate_stability(
             damps each joint against relative motion there, which barely touches a mode
             where both ends of a joint move together. The rigid path typically needs
             0.2 to settle inside a half-second run.
-        bearing_source: pinned_dynamic + integrator="rigid_bodies" only. Which
+        bearing_source: Elements mode + integrator="rigid_bodies" only. Which
             measurement of a bearing the solver builds joints over. A joint's moment
             capacity is its bearing's size and nothing else, so this is not a
             reporting choice.
@@ -170,13 +173,13 @@ async def evaluate_stability(
             itself, so it credits a joint with moment capacity in proportion to a
             modelling artefact. Right where an overlap is a deliberate socket; wrong for
             truss members that merely interpenetrate at their nodes.
-        joint_type: pinned_dynamic + integrator="rigid_bodies" only. What every joint
+        joint_type: Elements mode + integrator="rigid_bodies" only. What every joint
             in the assembly is, since geometry cannot tell you: a screwed panel and a
             dry-stacked one look identical to an intersection test.
 
             "fixed" - the bearing carries force and moment, always. A moment
             connection: beam to column, a plate welded or bolted rigid. Not to be
-            confused with mode="welded", which is the whole scope as one rigid body.
+            confused with mode="assembly", which is the whole scope as one rigid body.
             "pin" - the bearing collapses to its centre, so it carries force in three
             directions and no moment about any axis. Truss to truss, a single bolt.
             "contact" (default) - the bearing pushes and does not pull, with friction across it,
@@ -189,7 +192,7 @@ async def evaluate_stability(
             "contact" has no direction to open along and falls back to fixed; the
             result reports how many were actually sided.
 
-        integrator: pinned_dynamic mode only. "rigid_bodies" (default) or
+        integrator: Elements mode only. "rigid_bodies" (default) or
             "particles". They answer differently and the difference is not small.
 
             "rigid_bodies" integrates the body itself under F = ma and Euler's
@@ -216,7 +219,7 @@ async def evaluate_stability(
 
             Use "particles" to reproduce a calibrated deflection or to cross-check.
             Use the default for anything else.
-        solver_substeps: Kangaroo substeps per solver step. Ignored by pinned_dynamic,
+        solver_substeps: Kangaroo substeps per solver step. Ignored by elements mode,
             which derives its own timestep from the stiffest spring holding the
             lightest mass.
         display: Cache evaluated geometry in Rhino for display when true.
@@ -437,7 +440,7 @@ async def assign_joint_type(
     test. So state it the way an engineer knows it - by construction type,
     for a pair of element classes - and the evaluator resolves each joint.
 
-    Read by pinned_dynamic with integrator="rigid_bodies". Ignored by the
+    Read by elements mode with integrator="rigid_bodies". Ignored by the
     other modes, which have their own fixed idea of what a joint is.
 
     Args:

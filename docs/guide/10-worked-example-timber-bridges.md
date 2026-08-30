@@ -84,7 +84,7 @@ the side of a pad under a member that sits on top of it
 **5. Evaluate.**
 
 ```python
-evaluate_stability(mode="pinned")
+evaluate_stability(mode="elements")
 ```
 
 | | x-braced | portal |
@@ -126,7 +126,7 @@ y, report the stiffness. The braced bridge is still moving at the default half s
 is given longer.
 
 ```python
-evaluate_stability(mode="pinned", lateral_load_fraction=0.05, duration_seconds=1.5)
+evaluate_stability(mode="elements", lateral_load_fraction=0.05, duration_seconds=1.5)
 ```
 
 | `sway` | x-braced | portal |
@@ -147,7 +147,7 @@ move them. Rerun with `detail="full"` or page `sway` from the report to see the 
 **8. See it.**
 
 ```python
-evaluate_stability(mode="pinned", display=True)
+evaluate_stability(mode="elements", display=True)
 ```
 
 draws each element where it came to rest, grey over the original. At these displacements

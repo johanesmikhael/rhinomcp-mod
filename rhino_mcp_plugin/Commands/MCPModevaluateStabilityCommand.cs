@@ -196,7 +196,9 @@ namespace RhinoMCPModPlugin.Commands
 
             var evalModeIndex = getEvalMode.Option()?.Index ?? -1;
             var multiBody = evalModeIndex == elementsOption;
-            var evaluationMode = multiBody ? "pinned" : "welded";
+            var evaluationMode = multiBody
+                ? RhinoMCPModFunctions.ElementsMode
+                : RhinoMCPModFunctions.AssemblyMode;
             parameters["mode"] = evaluationMode;
 
             if (!multiBody)

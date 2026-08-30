@@ -42,9 +42,9 @@ other route has no equivalent.
 | `delete_named_view` | delete `name` | `NamedView` | [05](05-views-capture.md) |
 | `get_connectivity_graph` | nodes and edges for a scope, each edge with its contact point; `source` says whether it was computed or read from the document cache | `mcpmodgraph`, `mcpmodgraphexport` | [06](06-connectivity-graph.md) |
 | `graph_display` | show or hide the graph overlay; pin its scope | `mcpmodgraph` | [06](06-connectivity-graph.md) |
-| `assign_mass` | mass per object from `density` (kg/m³) and volume, or one `mass` (kg) each; scoped by `ids`, `names`, `layer`, `selected`; `overwrite=False` fills only what is missing | `mcpmodassignmass`, `mcpmodassignmissingmass`, `mcpmodmassfromlayerdensity` | [07](07-mass-joint-types.md) |
+| `assign_mass` | mass per object from `density` and volume, or one `mass` each, both in the document's own units (kg/m³ and kg metric, lbm/ft³ and lbm imperial; stored as kg); scoped by `ids`, `names`, `layer`, `selected`; `overwrite=False` fills only what is missing | `mcpmodassignmass`, `mcpmodassignmissingmass`, `mcpmodmassfromlayerdensity` | [07](07-mass-joint-types.md) |
 | `assign_joint_type` | a rule: `joint_type` for a layer pair, an id pair, an element, or a founded base (`with_ground=True`); `capacity_kn`; `clear=True`; `prune=True`; no arguments lists | `mcpmodassignjointtype` | [07](07-mass-joint-types.md) |
-| `evaluate_stability` | evaluate the scope: `mode` welded / pinned / contact, `joint_type` default, solver parameters, `lateral_load_fraction` sway probe, `display`, `detail` | `mcpmodevaluatestability` | [08](08-stability.md) |
+| `evaluate_stability` | evaluate the scope: `mode` assembly (one body) / elements (one per element; older names welded, pinned, contact still resolve to these and say so), `joint_type` default, solver parameters, `lateral_load_fraction` sway probe, `display`, `detail` | `mcpmodevaluatestability` | [08](08-stability.md) |
 | `get_stability_report` | one section of the last evaluation's stored report, sorted, filtered and paged; no `section` lists them | - | [09](09-reading-results.md) |
 | `open_file` | open a `.3dm`, optionally closing the current document | `Open` | [01](01-setup.md#9-session-tools) |
 | `close_file` | close the active document, optionally saving | `Close` | [01](01-setup.md#9-session-tools) |

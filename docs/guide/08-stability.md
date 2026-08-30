@@ -1,17 +1,16 @@
 # Stability evaluation
 
-<!-- run: 2026-08-29, plugin 0.3.1 -->
+<!-- run: 2026-08-30, plugin 0.3.1+ -->
 
 | task | mcp | rhino command |
 | --- | --- | --- |
-| elements as separate bodies, joined where they bear | `evaluate_stability(mode="pinned")` | `mcpmodevaluatestability` > Elements |
-| the scope as one rigid body: does it tip or slide | `evaluate_stability(mode="welded")` | `mcpmodevaluatestability` > Assembly |
-| every joint a dry bearing, whatever the rules say | `evaluate_stability(mode="contact")` | `mcpmodevaluatestability` > Elements > Contact |
-| default type for joints no rule names | `evaluate_stability(mode="pinned", joint_type="pin")` | the `Joint type where no rule names one` prompt |
-| a subset | `evaluate_stability(mode="pinned", ids=[...])`, `layer=`, `bbox=`, `selected=True` | pre-select, or pick at the first prompt |
-| measure sway stiffness too | `evaluate_stability(mode="pinned", lateral_load_fraction=0.05)` | Custom > `Sway probe` |
-| see the settled pose | `evaluate_stability(mode="pinned", display=True)` | `mcpmodstabilitydisplay On` |
-| the whole report in one answer | `evaluate_stability(mode="pinned", detail="full")` | - |
+| elements as separate bodies, joined where they bear | `evaluate_stability(mode="elements")` | `mcpmodevaluatestability` > Elements |
+| the scope as one rigid body: does it tip or slide | `evaluate_stability(mode="assembly")` | `mcpmodevaluatestability` > Assembly |
+| default type for joints no rule names | `evaluate_stability(mode="elements", joint_type="pin")` | the `Joint type where no rule names one` prompt |
+| a subset | `evaluate_stability(mode="elements", ids=[...])`, `layer=`, `bbox=`, `selected=True` | pre-select, or pick at the first prompt |
+| measure sway stiffness too | `evaluate_stability(mode="elements", lateral_load_fraction=0.05)` | Custom > `Sway probe` |
+| see the settled pose | `evaluate_stability(mode="elements", display=True)` | `mcpmodstabilitydisplay On` |
+| the whole report in one answer | `evaluate_stability(mode="elements", detail="full")` | - |
 
 An assembly is evaluated as separate rigid bodies resting on one another, joined where the
 geometry says they touch, under gravity. The question is whether it stands: whether it is a
@@ -26,31 +25,68 @@ rotation.
 
 ## Modes
 
+`mode` asks how many bodies there are. That is the whole of it - what a joint carries is a
+separate question, answered per joint ([07](07-mass-joint-types.md)).
+
 | mode | bodies | joints | answers |
 | --- | --- | --- | --- |
-| `pinned` | one per element | what the rules say; `contact` where nothing is said | is it a mechanism; how far does it move; how stiff is it |
-| `contact` | one per element | all bearings, rules ignored | can anything rotate off, lift, or slide |
-| `welded` | the whole scope, one body | none | does the assembly tip or slide as a whole |
+| `assembly` | the whole scope, one body | none at all | does it tip or slide as a whole |
+| `elements` | one per element | whatever the model says at each; `contact` where nothing is said | is it a mechanism; how far does it move; how stiff is it |
 
-`pinned` is the general one and the default in Rhino's `Elements`. `contact` is `pinned` with
-every joint forced to a bearing, for a dry-stacked reading of a model that has rules.
-`welded` is a different thing from the `fixed` joint type: it supplies every moment
-connection the real assembly lacks, so it passes structures a dry stack would not hold. It is
-a cheap upper bound, and its `support_margin_m` - the centre of mass against the bearing
-footprint - is closed-form. Neither subsumes the other.
+Neither subsumes the other. `assembly` supplies every moment connection the real structure
+lacks, so it passes things a dry stack would not hold - a cheap upper bound whose
+`support_margin_m`, the centre of mass against the bearing footprint, is closed-form. It
+cannot see a mechanism at all. `elements` can, but a joint it models as a pin holds in
+tension, so it will not show an element toppling off another unless that joint is a bearing.
+Run both.
+
+`assembly` is not "every joint welded": it is *no joints*, which is why it is named after the
+number of bodies rather than after a joint type.
 
 ```python
-evaluate_stability(mode="pinned")                         # the model as its rules describe it
-evaluate_stability(mode="pinned", joint_type="pin")       # unnamed joints as pins instead of bearings
-evaluate_stability(mode="contact")                        # every joint a bearing
-evaluate_stability(mode="welded")                         # one body; tips or not
+evaluate_stability(mode="assembly")                        # one body; tips or not
+evaluate_stability(mode="elements")                        # the model as its rules describe it
+evaluate_stability(mode="elements", joint_type="pin")      # unnamed joints as pins, not the default contact bearings
 ```
 
-On the stair demo: `stable` as contact, `unstable` as pin. Both are right about different
-connections: a bearing pushes without pulling and spreads over the measured face; a pin holds
-one point and a body held at one point rotates about it.
+### The older mode names
 
-![The 300 mm stair after a pinned evaluation with display on: the bodies drawn grey over the original geometry where the run stopped - 6 mm into a topple, past the 4 mm mechanism threshold, verdict unstable](img/stability-stair-settled.png)
+There were three solvers once - `welded`, `contact` and `pinned` - and `mode` chose between
+them. Two of the three are now one solver told a different default joint type, so only two
+modes remain. Every old spelling still runs, and says which mode it resolved to in
+`unit_warnings`:
+
+| you pass | you get |
+| --- | --- |
+| `welded`, `single_rigid_assembly` | `assembly` |
+| `pinned`, `dynamic`, `pinned_dynamic`, `multi_body_pinned`, `multi_body_pinned_dynamic` | `elements` |
+| `contact`, `multi_body_contact` | `elements` |
+
+`mode="contact"` deserves its own line, because it reads like it does something and does not.
+It forces no joint to anything: contact is a joint type now, and already the default one, so
+`mode="contact"` and `mode="elements"` are the same run on the same model - identical
+displacements to the last digit. To read a model that has rules as a dry stack, assign contact
+with `assign_joint_type`. To change only what *unnamed* joints are, pass `joint_type`.
+
+### Contact against pin
+
+The three-block stair in `stair_jointtypes.3dm`, 600 x 600 x 300 blocks each stepped 300 mm,
+mechanism threshold 4.2 mm:
+
+| joints | worst displacement | verdict |
+| --- | --- | --- |
+| `contact` (the default) | 0.001 mm | `stable` |
+| `pin` | 5.7 mm | `unstable` |
+
+Both are right about different connections. A bearing pushes without pulling and spreads over
+the measured face, so the blocks lean on one another and settle. A pin holds one point, and a
+body held at one point rotates about it. Which one the drawing means is a fact about the
+building, not about the solver, which is why it is stated per joint rather than chosen here.
+
+The steeper stair in `stair_toppling.3dm` is `unstable` either way - 5.9 mm as bearings, 8.0 mm
+as pins - because that one really does topple.
+
+![The 300 mm stair after an elements evaluation with display on: the bodies drawn grey over the original geometry where the run stopped - 6 mm into a topple, past the 4 mm mechanism threshold, verdict unstable](img/stability-stair-settled.png)
 
 The run ends as soon as the verdict is settled - here 47 ms in, when the top block had moved
 6 mm against a threshold of 4 - so the drawn pose is where the fall was caught, not where it
@@ -67,7 +103,7 @@ that matches nothing, or that would truncate the graph, fails rather than guessi
 that leaves out the pads its columns stand on is evaluated standing on the ground: the floor
 is placed at the underside of the scope unless `floor_z` is given.
 
-**Joint solver** (`pinned`, `contact`):
+**Elements mode:**
 
 | parameter | default | what it is |
 | --- | --- | --- |
@@ -80,7 +116,7 @@ is placed at the underside of the scope unless `floor_z` is given.
 | `bearing_source` | `exact` | `buried` also uses the surface inside overlapping solids - off because its area grows with a modelling artefact |
 | `integrator` | `rigid_bodies` | `particles` is the earlier point-joint model, kept as a reference; it cannot represent joint types |
 
-**Assembly solver** (`welded`):
+**Assembly mode:**
 
 | parameter | default | what it is |
 | --- | --- | --- |
@@ -88,7 +124,7 @@ is placed at the underside of the scope unless `floor_z` is given.
 | `ground_support_stiffness_n_per_m` | from weight and settlement | states the floor spring outright instead |
 | `rigid_strength` | from the floor | how rigid the single body is; below the floor stiffness the floor deforms the body |
 | `stability_threshold` | 10 mm, in document units | displacement counted as unstable |
-| `current_step`, `solver_substeps` | 50, 1 | the relaxation budget |
+| `current_step`, `solver_substeps` | 2000, 1 | the relaxation budget. 50 was the old default and reported collapses as stable - a toppling assembly has barely started moving that early - so the budget is large and the run exits early once motion settles or clearly diverges |
 
 **Both:** `floor_z` (document units; default the scope's underside), `gravity` (9.80665 m/s²),
 `display` (draw the settled pose), `detail` (`summary` or `full`; [09](09-reading-results.md)).
@@ -172,7 +208,7 @@ Measured against hand-computed statics:
 - **Joint stiffness is per end** and is not shared along a member's load path.
 - **Overlapping bodies double-count mass** from `assign_mass(density=...)`, since each
   element's own volume includes the overlap - about 4% for a centreline truss.
-- **The welded floor is sized from the footprint.** `ground_settlement` moves the verdict of
+- **The assembly-mode floor is sized from the footprint.** `ground_settlement` moves the verdict of
   a marginal assembly: at 1 mm the +121 mm cantilever demo reads unstable, at 0.1 mm stable.
 
 None of this makes the result a certified structural analysis.

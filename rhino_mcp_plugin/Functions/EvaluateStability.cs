@@ -22,6 +22,81 @@ public partial class RhinoMCPModFunctions
     internal const StabilityRigidBodies.JointType DefaultJointType =
         StabilityRigidBodies.JointType.Contact;
 
+    public const string AssemblyMode = "assembly";
+    public const string ElementsMode = "elements";
+
+    /// <summary>
+    /// Resolves the <c>mode</c> parameter to the only two things the evaluator does: the whole
+    /// scope as one body, or one body per element. Returns true for the elements path.
+    /// </summary>
+    /// <remarks>
+    /// There were three solvers once, and <c>mode</c> chose between them. Two of the three are
+    /// now the same solver told a different default joint type, so the modes they were named
+    /// after no longer name anything: "contact" ran the elements path with contact as the
+    /// default joint type, which is what the elements path does anyway. Every old spelling is
+    /// still accepted - they are in saved scripts and in every published document - but each
+    /// one now says in the result which of the two it resolved to, so a caller relying on a
+    /// distinction that no longer exists hears about it rather than getting a silent second
+    /// name for the same run. See MCPModevaluateStabilityCommand, which asks the question the
+    /// right way round: how many bodies first, what to assume at a joint second.
+    /// </remarks>
+    private static bool ResolveEvaluationMode(string modeText, out string aliasWarning)
+    {
+        aliasWarning = null;
+
+        if (string.IsNullOrWhiteSpace(modeText))
+        {
+            return false;
+        }
+
+        var mode = modeText.Trim();
+
+        bool Is(string candidate) => string.Equals(mode, candidate, StringComparison.OrdinalIgnoreCase);
+
+        if (Is(ElementsMode))
+        {
+            return true;
+        }
+
+        if (Is(AssemblyMode))
+        {
+            return false;
+        }
+
+        // Named after the single-body solver rather than after having one body.
+        if (Is("welded") || Is(EvaluationMode))
+        {
+            aliasWarning =
+                $"mode '{mode}' is an alias for mode '{AssemblyMode}'. 'welded' named a solver; " +
+                "the scope is one rigid body with no joints at all, which is a different thing " +
+                "from every joint being the 'welded' joint type.";
+            return false;
+        }
+
+        // Named after the relaxed pinned solver, which is gone.
+        if (Is("pinned") || Is("dynamic") || Is("pinned_dynamic") ||
+            Is(PinnedEvaluationMode) || Is(PinnedDynamicEvaluationMode))
+        {
+            aliasWarning =
+                $"mode '{mode}' is an alias for mode '{ElementsMode}'.";
+            return true;
+        }
+
+        // Named after the contact solver, which is now a joint type.
+        if (Is("contact") || Is(ContactEvaluationMode))
+        {
+            aliasWarning =
+                $"mode '{mode}' is an alias for mode '{ElementsMode}' and forces nothing: contact " +
+                "is a joint type now, and already the default one, so per-joint and per-pair rules " +
+                "still apply. To read a model that has rules as a dry stack, assign contact with " +
+                "assign_joint_type; to change only what unnamed joints are, pass joint_type.";
+            return true;
+        }
+
+        throw new ArgumentException(
+            $"Unknown evaluation mode '{modeText}'; use '{AssemblyMode}' or '{ElementsMode}'.");
+    }
+
     public const string GraphKey = "rhinomcp-mod:connectivity-graph";
     public const string EvaluationGraphKey = "rhinomcp-mod:connectivity-graph-eva";
     public const string StabilityKey = "rhinomcp.stability.v1";
@@ -372,38 +447,10 @@ public partial class RhinoMCPModFunctions
             // welded catches an assembly tipping over, pinned catches a mechanism. See the
             // remarks on the pinned solver for why a pin cannot see overturning.
             var modeText = parameters?["mode"]?.ToString();
-            // "pinned" and "pinned_dynamic" are the same thing: the relaxed pinned solver
-            // is gone, and the names are kept only so existing callers keep working.
-            var pinned =
-                string.Equals(modeText, "pinned", StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(modeText, "dynamic", StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(modeText, "pinned_dynamic", StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(modeText, PinnedEvaluationMode, StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(modeText, PinnedDynamicEvaluationMode, StringComparison.OrdinalIgnoreCase);
-            if (!pinned && !string.IsNullOrWhiteSpace(modeText) &&
-                !string.Equals(modeText, "welded", StringComparison.OrdinalIgnoreCase) &&
-                !string.Equals(modeText, "contact", StringComparison.OrdinalIgnoreCase) &&
-                !string.Equals(modeText, ContactEvaluationMode, StringComparison.OrdinalIgnoreCase) &&
-                !string.Equals(modeText, EvaluationMode, StringComparison.OrdinalIgnoreCase))
+            var pinned = ResolveEvaluationMode(modeText, out var modeAliasWarning);
+            if (modeAliasWarning != null)
             {
-                throw new ArgumentException(
-                    $"Unknown evaluation mode '{modeText}'; use 'welded', 'pinned', 'contact' or 'pinned_dynamic'.");
-            }
-
-            // "contact" is a joint type now, not a solver.
-            //
-            // It was a separate relaxed solver answering "does anything leave anything else",
-            // with its own contact stiffness, its own pseudo-time step and a torque_gain that
-            // existed only because Kangaroo's projective step has no moments. The multi-body
-            // integrator answers the same question from Newton's and Euler's equations, with
-            // the bearing pushing and not pulling and the moment falling out of r x F, and it
-            // reproduces every verdict the old one was trusted for. So the mode is kept as a
-            // name for a model whose joints are all bearings, and it means exactly that.
-            var contactMode = string.Equals(modeText, "contact", StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(modeText, ContactEvaluationMode, StringComparison.OrdinalIgnoreCase);
-            if (contactMode)
-            {
-                pinned = true;
+                unitWarnings.Add(modeAliasWarning);
             }
 
             if (pinned)
@@ -606,6 +653,7 @@ public partial class RhinoMCPModFunctions
                             gravity, floorZ, floorZIsAuto, rigidStrength, totalMassKilograms,
                             unitWarnings);
                         rigidResult["evaluation_mode"] = PinnedDynamicEvaluationMode;
+                        rigidResult["mode"] = ElementsMode;
                         foreach (var key in new[]
                         {
                             "integrator", "max_pin_displacement_m", "settled_displacement_m", "timestep_s",
@@ -658,6 +706,7 @@ public partial class RhinoMCPModFunctions
                         gravity, floorZ, floorZIsAuto, rigidStrength, totalMassKilograms,
                         unitWarnings);
                     dynamicResult["evaluation_mode"] = PinnedDynamicEvaluationMode;
+                    dynamicResult["mode"] = ElementsMode;
                     foreach (var key in new[]
                     {
                         "max_pin_displacement_m", "settled_displacement_m", "timestep_s",
@@ -900,6 +949,7 @@ public partial class RhinoMCPModFunctions
                 ["success"] = true,
                 ["stable"] = stable,
                 ["evaluation_mode"] = EvaluationMode,
+                ["mode"] = AssemblyMode,
                 ["node_count"] = stabilityNodes.Count,
                 ["solver_iterations"] = currentStep * solverSubsteps,
                 ["stability_threshold"] = stabilityThreshold,

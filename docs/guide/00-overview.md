@@ -27,7 +27,7 @@ In order. Each step has a tool and a command; either does the same work.
 | 1. mass on every element | `assign_mass(density=...)` | `mcpmodassignlayerdensity` then `mcpmodmassfromlayerdensity`, or `mcpmodassignmass` |
 | 2. joint rules where the default is wrong | `assign_joint_type(...)` | `mcpmodassignjointtype` |
 | 3. graph: check what will be solved | `graph_display(enabled=True)`, `get_connectivity_graph()` | `mcpmodgraph` |
-| 4. evaluate | `evaluate_stability(mode="pinned")` | `mcpmodevaluatestability` |
+| 4. evaluate | `evaluate_stability(mode="elements")` | `mcpmodevaluatestability` |
 | 5. read | the returned summary; `get_stability_report(section=...)` | the command line |
 | 6. see the settled pose | `evaluate_stability(display=True)` | `mcpmodstabilitydisplay` |
 | 7. clear what was stored | - | `mcpmodclearcache` |
