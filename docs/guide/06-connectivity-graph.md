@@ -1,6 +1,6 @@
 # Connectivity graph
 
-<!-- run: 2026-08-29, plugin 0.3.1 -->
+<!-- run: 2026-08-30, plugin 0.4.0 -->
 
 | task | mcp | rhino command |
 | --- | --- | --- |
@@ -32,7 +32,7 @@ get_connectivity_graph(selected=True)
 {"n": [{"i": 0, "name": "STAIR_0", "guid": "..."}, {"i": 1, "name": "STAIR_1", "guid": "..."}, ...],
  "e": [[0, 1, [350.0, 300.0, 300.0]], [1, 2, [450.0, 300.0, 600.0]]],
  "node_count": 3, "edge_count": 2, "candidate_count": 3, "examined_count": 3,
- "node_limit": 20000, "truncated": false, "source": "computed", "tol": 0.005}
+ "node_limit": 20000, "truncated": false, "source": "computed", "tolerance": 0.005}
 ```
 
 `e` is undirected and stores `[i, j, contact point]`, where `i` and `j` index `n`. Filters

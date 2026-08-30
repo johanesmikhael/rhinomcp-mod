@@ -1,6 +1,6 @@
 # Pose and transforms
 
-<!-- run: 2026-08-29, plugin 0.3.1, RhinoAndGHFiles/guide_shapes.3dm -->
+<!-- run: 2026-08-30, plugin 0.4.0, RhinoAndGHFiles/guide_shapes.3dm -->
 
 | task | mcp | rhino command |
 | --- | --- | --- |
@@ -47,7 +47,7 @@ rotate_objects(objects=[{
 ```
 
 ```text
-{"rotated": 1, "updates": [{"id": "a52346b7-...", "name": "BLOCK",
+{"rotated": 1, "updates": [{"id": "faee3c94-...", "name": "BLOCK",
    "updated": {"pose": {"world_from_local": {"R": [[0.866019, -0.500011, 0.0],
                                                    [0.500011, 0.866019, -0.0],
                                                    [0.0, 0.0, 1.0]],
@@ -80,7 +80,7 @@ reset_objects_pose(objects=[{"id": "..."}])
 ```
 
 ```text
-{"reset": 1, "updates": [{"id": "a52346b7-...", "name": "BLOCK",
+{"reset": 1, "updates": [{"id": "faee3c94-...", "name": "BLOCK",
    "updated": {"pose": {"world_from_local": {"R": [[1.0, 0.0, -0.0], [-0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
                                              "t": [0.0, 0.0, 0.0]}},
                "position": [0.0, 0.0, 0.0]},

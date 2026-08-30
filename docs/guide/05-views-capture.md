@@ -1,6 +1,6 @@
 # Views and capture
 
-<!-- run: 2026-08-29, plugin 0.3.1, RhinoAndGHFiles/timber_bridge.3dm and timber_bridge_xbraced.3dm -->
+<!-- run: 2026-08-30, plugin 0.4.0, RhinoAndGHFiles/timber_bridge.3dm and timber_bridge_xbraced.3dm -->
 
 | task | mcp | rhino command |
 | --- | --- | --- |
@@ -94,8 +94,8 @@ socket as base64 and is roughly one megabyte at `print` size.
 ```text
 {"png_base64": "iVBORw0KGgo...",
  "metadata": {"view": "front", "target_mode": "all_visible", "display_mode": "Technical",
-              "width": 2560, "height": 1800,
-              "camera_location": [12000.0, -3730.635217, 1520.0],
+              "width": 960, "height": 720,
+              "camera_location": [12000.0, -5648.936902, 1520.0],
               "camera_target": [12000.0, 0.0, 1520.0], "camera_up": [0.0, 0.0, 1.0],
               "lens_mm": null, "projection": "parallel", "preserve_view": true,
               "object_count": 90, "objects": [{"id": "...", "name": "BOT_0_00", "type": "Brep"}, ...],
@@ -118,10 +118,10 @@ get_viewport_info()
 ```
 
 ```text
-{"viewports": [{"id": "1dd48cc7-...", "name": "Perspective", "active": true,
+{"viewports": [{"id": "c44270f9-...", "name": "Perspective", "active": true,
                 "projection": "perspective", "lensMm": 50.0, "displayMode": "Shaded",
-                "cameraLocation": "2632.94,-1932.94,1901.41",
-                "cameraTarget": "904.17,-204.17,777.71"},
+                "cameraLocation": "41182.37,-29182.37,30702.37",
+                "cameraTarget": "9213.02,2786.98,-1266.98"},
                {"name": "Top", "active": false, "projection": "parallel",
                 "lensMm": null, "displayMode": "Wireframe", ...}]}
 ```

@@ -1,6 +1,6 @@
 # Geometry, layers, materials
 
-<!-- run: 2026-08-29, plugin 0.3.1, RhinoAndGHFiles/guide_shapes.3dm -->
+<!-- run: 2026-08-30, plugin 0.4.0, RhinoAndGHFiles/guide_shapes.3dm -->
 
 | task | mcp | rhino command |
 | --- | --- | --- |
@@ -80,11 +80,11 @@ per object, and `all=True` to apply one entry to every object. It reports what a
 changed:
 
 ```text
-{"modified": 1, "updates": [{"id": "a191d7bf-...", "name": "BALL2",
+{"modified": 1, "updates": [{"id": "a934e842-...", "name": "BALL2",
    "updated": {"pose": {"world_from_local": {"R": [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
                                              "t": [520.0, -300.0, 110.0]}},
                "position": [520.0, -300.0, 110.0], "name": "BALL2"},
-   "changed_fields": ["position", "pose", "name"]}]}
+   "changed_fields": ["pose", "position", "name"]}]}
 ```
 
 `delete_objects` requires `confirm=True`. Names must be unique in the document; if two objects
@@ -120,7 +120,7 @@ get_layer_states()
 ```
 
 ```text
-{"layers": [{"index": 0, "name": "SHAPES", "visible": true, "locked": false, "color": "0,0,0"}]}
+{"layers": [{"index": 0, "name": "SHAPES", "visible": true, "locked": false, "color": "0,0,0"}], "count": 1}
 ```
 
 ```python
