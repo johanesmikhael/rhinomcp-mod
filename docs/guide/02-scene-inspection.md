@@ -29,7 +29,8 @@ get_document_info(detail="full", max_geometry_points=64)   # the legacy per-obje
 
 ```text
 {"meta_data": {"name": "guide_shapes.3dm", "tolerance": 0.001, "angle_tolerance": 1.0,
-               "path": "/.../RhinoAndGHFiles/guide_shapes.3dm", "units": "Millimeters"},
+               "path": "/.../RhinoAndGHFiles/guide_shapes.3dm", "units": "Millimeters",
+               "mass_unit": "kg", "density_unit": "kg/m³"},
  "detail": "inventory", "object_count": 8, "objects_returned": 3, "objects_offset": 0,
  "objects_limit": 3, "objects_truncated": true, "objects_skipped_errors": 0,
  "objects": [{"id": "004b1f31-...", "name": "POST", "type": "Brep", "layer": "SHAPES",
@@ -41,9 +42,12 @@ get_document_info(detail="full", max_geometry_points=64)   # the legacy per-obje
 means there are more - page with `offset`, or narrow the scope. Layers are listed the same
 way and truncate the same way.
 
-`units` and `tolerance` are worth reading before anything else: every length in every other
-tool is in document units, and the tolerance is what contact detection is measured in
-([06](06-connectivity-graph.md)).
+`units`, `mass_unit`, `density_unit` and `tolerance` are worth reading before anything else.
+Every length in every other tool is in document units, and the tolerance is what contact
+detection is measured in ([06](06-connectivity-graph.md)). Mass and density follow the document
+too, which is why they are named here rather than left implied: `assign_mass(density=2400)`
+means concrete in this millimetre document and sixteen times concrete in an imperial one, and
+no later tool can tell the two apart ([07](07-mass-joint-types.md)).
 
 Three levels of `detail`:
 

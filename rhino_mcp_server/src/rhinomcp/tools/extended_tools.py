@@ -368,15 +368,18 @@ async def assign_mass(
     the interactive Rhino commands, which stop and ask per object or per layer.
 
     Args:
-        density: Material density in kg/m^3, for example 2400 for concrete.
-            Each object's mass follows from its own closed volume, so this is
-            the right choice whenever the geometry is solid. Objects with no
-            computable volume are reported under "skipped" rather than guessed
-            at. Document units are converted for you.
-        mass: One mass in kilograms applied to every object in the scope. Use
-            it for geometry that is not a closed solid, or to model a part as
-            heavier or lighter than its volume implies. Pass exactly one of
-            density or mass.
+        density: Material density, stated in the document's own units - kg/m³ in
+            a metric document, lbm/ft³ in an imperial one, the same rule every
+            length in every other tool follows. Read `units` from
+            get_document_info before choosing the number. Each object's mass
+            follows from its own closed volume, so this is the right choice
+            whenever the geometry is solid. Objects with no computable volume
+            are reported under "skipped" rather than guessed at.
+        mass: One mass applied to every object in the scope, stated in the
+            document's own units - kg in a metric document, lbm in an imperial
+            one. Use it for geometry that is not a closed solid, or to model a
+            part as heavier or lighter than its volume implies. Pass exactly
+            one of density or mass.
         ids: Object GUIDs to assign.
         names: Object names to assign.
         layer: Layer name, or list of names, to assign.
@@ -388,7 +391,9 @@ async def assign_mass(
     connectivity graph and the evaluator read an omitted scope.
 
     Returns per-object masses in kg, the volumes used, anything skipped and
-    why, and the scope total.
+    why, the scope total, and the input value with the unit it was read in, so
+    the caller can confirm the number was taken the way it was meant. Whatever
+    the document's units, mass is stored on the object in canonical kilograms.
     """
     from rhinomcp.server import get_rhino_connection
 

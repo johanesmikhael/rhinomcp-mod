@@ -31,7 +31,34 @@ public partial class RhinoMCPModFunctions
             if (hasDensity == hasMass)
             {
                 throw new InvalidOperationException(
-                    "Pass exactly one of 'density' (kg/m^3) or 'mass' (kg per object).");
+                    $"Pass exactly one of 'density' ({unitContext.DensityInputUnit}) or " +
+                    $"'mass' ({unitContext.MassInputUnit} per object), stated in this " +
+                    $"{doc.ModelUnitSystem} document's own units.");
+            }
+
+            // A density or a mass is stated in the document's own units, the same as every
+            // length: kg/m³ and kg in a metric document, lbm/ft³ and lbm in an imperial one.
+            // Storage is canonical kilograms either way.
+            var densityUnit = unitContext.DensityInputUnit;
+            var massUnit = unitContext.MassInputUnit;
+            var densityKilogramsPerCubicMeter = 0.0;
+            var massKilogramsInput = 0.0;
+
+            if (hasDensity)
+            {
+                if (!StabilityUnits.TryDensityToKilogramsPerCubicMeter(
+                        density, densityUnit, out densityKilogramsPerCubicMeter))
+                {
+                    throw new InvalidOperationException(
+                        $"Density {density} could not be converted from '{densityUnit}' to " +
+                        $"{StabilityUnits.KilogramPerCubicMeterUnit}.");
+                }
+            }
+            else if (!StabilityUnits.TryMassToKilograms(mass, massUnit, out massKilogramsInput))
+            {
+                throw new InvalidOperationException(
+                    $"Mass {mass} could not be converted from '{massUnit}' to " +
+                    $"{StabilityUnits.KilogramUnit}.");
             }
 
             var overwrite = parameters?["overwrite"]?.Type == JTokenType.Boolean
@@ -85,11 +112,11 @@ public partial class RhinoMCPModFunctions
                     }
 
                     volumeCubicMeters = volume * volumeScaleToCubicMeters;
-                    massKilograms = density * volumeCubicMeters.Value;
+                    massKilograms = densityKilogramsPerCubicMeter * volumeCubicMeters.Value;
                 }
                 else
                 {
-                    massKilograms = mass;
+                    massKilograms = massKilogramsInput;
                 }
 
                 if (!double.IsFinite(massKilograms) || massKilograms <= 0.0)
@@ -133,7 +160,11 @@ public partial class RhinoMCPModFunctions
             {
                 ["success"] = true,
                 ["source"] = hasDensity ? "density" : "mass",
-                ["density_kg_m3"] = hasDensity ? density : null,
+                ["density_kg_m3"] = hasDensity ? densityKilogramsPerCubicMeter : null,
+                ["input_value"] = hasDensity ? density : mass,
+                ["input_unit"] = hasDensity ? densityUnit : massUnit,
+                ["document_mass_unit"] = massUnit,
+                ["document_density_unit"] = densityUnit,
                 ["assigned"] = assigned,
                 ["skipped"] = skipped,
                 ["total_mass_kg"] = totalKilograms,

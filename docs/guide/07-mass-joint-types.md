@@ -24,19 +24,20 @@ stored on the object under `rhinomcp.stability.v1` as kilograms, whatever the do
 and travels with a copy of the object.
 
 ```python
-assign_mass(density=2400, layer="Blocks")     # kg/m³; each object's mass from its own closed volume
+assign_mass(density=2400, layer="Blocks")     # kg/m³ here; each object's mass from its own closed volume
 assign_mass(mass=850, names=["SLAB"])         # kg, the same value on every object in the scope
 assign_mass(density=500, overwrite=False)     # fill in what has no mass yet, leave the rest
 ```
 
 Exactly one of `density` or `mass`. Scope by `ids`, `names`, `layer` (one or a list) or
 `selected`; no scope is the whole document. The result lists each object's mass and the volume
-used, the scope total, and `skipped` - objects with no computable closed volume when a density
-was given. Give those a `mass`.
+used, the scope total, the input value and the unit it was read as, and `skipped` - objects with
+no computable closed volume when a density was given. Give those a `mass`.
 
 ```text
 {"assigned": [{"guid": "...", "name": "BOT_0_01", "mass": 259.2, "mass_unit": "kg", "volume_m3": 0.108}, ...],
- "skipped": [], "total_mass_kg": 37231.4, "density_kg_m3": 2400, "document_length_unit": "Millimeters"}
+ "skipped": [], "total_mass_kg": 37231.4, "density_kg_m3": 2400, "input_value": 2400, "input_unit": "kg/m³",
+ "document_length_unit": "Millimeters", "document_density_unit": "kg/m³"}
 ```
 
 The Rhino commands prompt per object or per layer. In a metric document they take `kg` and
@@ -49,6 +50,39 @@ mcpmodmassfromlayerdensity        every object on a layer with a density gets de
 mcpmodassignmass                  pick objects; Mass for BOT_0_01 in kg <259.2>:
 mcpmodassignmissingmass           the same, only for objects with no mass
 ```
+
+### Imperial documents
+
+A density or a mass is in the document's own units, exactly as every length is. Nothing to pass
+and nothing to convert by hand - `get_document_info` names them outright, alongside `units`
+([02](02-scene-inspection.md)), so read them before choosing a number:
+
+```text
+"meta_data": {..., "units": "Inches", "mass_unit": "lbm", "density_unit": "lbm/ft³"}
+```
+
+| document | `density` | `mass` | stored |
+| --- | --- | --- | --- |
+| Millimeters, Meters, ... | kg/m³ | kg | kg |
+| Inches, Feet, ... | lbm/ft³ | lbm | kg |
+
+```python
+# Inch document. 150 lbm/ft³ is read as such and stored as 2403 kg/m³ of concrete.
+assign_mass(density=150, layer="Blocks")
+assign_mass(mass=1874, names=["SLAB"])       # lbm; stored as 850 kg
+```
+
+Pound-mass, never pound-force. The result names the unit it read the number in, next to the
+document's own, so a number entered the wrong way is visible in the response:
+
+```text
+{"input_value": 150, "input_unit": "lbm/ft³", "density_kg_m3": 2402.8,
+ "document_length_unit": "Inches", "document_density_unit": "lbm/ft³"}
+```
+
+Only the number's unit follows the document. Volume is computed from geometry in document
+units and converted for you either way, and the stored mass is canonical kilograms, so a model
+built in inches and one built in millimetres evaluate identically.
 
 ## Joint types
 

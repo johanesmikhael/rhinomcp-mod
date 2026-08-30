@@ -277,6 +277,16 @@ public partial class RhinoMCPModFunctions
             ["units"] = doc.ModelUnitSystem.ToString(),
         };
 
+        // A caller reads this before it states a mass or a density, and those follow the
+        // document like every length does. Naming the units here is what keeps a bare number
+        // from being read as the wrong quantity: 2400 means concrete in kg/m³ and sixteen
+        // times concrete in lbm/ft³, and nothing downstream can tell which was meant.
+        if (StabilityUnits.TryCreate(doc.ModelUnitSystem, out var unitContext, out _))
+        {
+            metaData["mass_unit"] = unitContext.MassInputUnit;
+            metaData["density_unit"] = unitContext.DensityInputUnit;
+        }
+
         var objectData = new JArray();
 
         var objects = doc.Objects

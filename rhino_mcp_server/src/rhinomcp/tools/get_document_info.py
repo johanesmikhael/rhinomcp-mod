@@ -16,6 +16,13 @@ def get_document_info(
     """
     Get information about the current Rhino document.
 
+    `meta_data` carries the units every other tool works in: `units` for lengths,
+    and `mass_unit` / `density_unit` for the numbers assign_mass takes - kg and
+    kg/m³ in a metric document, lbm and lbm/ft³ in an imperial one. Read them
+    before stating a mass or a density; a bare 2400 is concrete in one document
+    and sixteen times concrete in the other, and nothing downstream can tell
+    which was meant.
+
     Parameters:
     - detail: "inventory" for id/name/type/layer/bbox, "summary" for compact descriptors,
       or "full" for the legacy per-object geometry payload.
