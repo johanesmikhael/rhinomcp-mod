@@ -1,6 +1,6 @@
 # Stability evaluation
 
-<!-- run: 2026-08-30, plugin 0.3.1+ -->
+<!-- run: 2026-08-30, plugin 0.4.0 -->
 
 | task | mcp | rhino command |
 | --- | --- | --- |

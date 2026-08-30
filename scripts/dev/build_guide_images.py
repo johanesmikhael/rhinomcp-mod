@@ -7,7 +7,7 @@ the PNG. One run regenerates the whole set, so a change to what the plugin draws
 away from the guide.
 
 Talks to the plugin socket directly (the MCP tool returns the image to the model, not to a
-file). Needs Rhino on 127.0.0.1:1999 with the 0.3.1 plugin loaded; demo files are opened
+file). Needs Rhino on 127.0.0.1:1999 with the 0.4.0 plugin loaded; demo files are opened
 read-only and never saved.
 
     python3 scripts/dev/build_guide_images.py            # every shot
@@ -32,7 +32,7 @@ from rhinomcp.server import RhinoConnection  # noqa: E402
 
 DEMO = ROOT / "RhinoAndGHFiles"
 OUT = ROOT / "docs" / "guide" / "img"
-REQUIRED_VERSION = "0.3.1"
+REQUIRED_VERSION = "0.4.0"
 
 Step = tuple[str, dict[str, Any]] | Callable[["Session"], None]
 

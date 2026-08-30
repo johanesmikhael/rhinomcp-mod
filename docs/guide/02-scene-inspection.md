@@ -1,6 +1,6 @@
 # Scene inspection
 
-<!-- run: 2026-08-29, plugin 0.3.1, RhinoAndGHFiles/guide_shapes.3dm -->
+<!-- run: 2026-08-30, plugin 0.4.0, RhinoAndGHFiles/guide_shapes.3dm -->
 
 | task | mcp | rhino command |
 | --- | --- | --- |
@@ -30,11 +30,11 @@ get_document_info(detail="full", max_geometry_points=64)   # the legacy per-obje
 {"meta_data": {"name": "guide_shapes.3dm", "tolerance": 0.001, "angle_tolerance": 1.0,
                "path": "/.../RhinoAndGHFiles/guide_shapes.3dm", "units": "Millimeters",
                "mass_unit": "kg", "density_unit": "kg/m³"},
- "detail": "inventory", "object_count": 8, "objects_returned": 3, "objects_offset": 0,
+ "detail": "inventory", "object_count": 7, "objects_returned": 3, "objects_offset": 0,
  "objects_limit": 3, "objects_truncated": true, "objects_skipped_errors": 0,
- "objects": [{"id": "004b1f31-...", "name": "POST", "type": "Brep", "layer": "SHAPES",
+ "objects": [{"id": "13bd5bec-...", "name": "POST", "type": "Brep", "layer": "SHAPES",
               "bbox": [[790.0, -70.0, 0.0], [930.0, 70.0, 300.0]], "bbox_frame": "world_aabb"}, ...],
- "layer_count": 1, "layers": [{"id": "92bc2989-...", "name": "SHAPES", "visible": true, "locked": false}]}
+ "layer_count": 1, "layers": [{"id": "9338a475-...", "name": "SHAPES", "visible": true, "locked": false}]}
 ```
 
 `object_count` is the number of objects in the document, and `objects_returned` is the number

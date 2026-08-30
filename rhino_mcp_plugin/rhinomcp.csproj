@@ -13,7 +13,7 @@
   
   <PropertyGroup>
     <!-- Specifies information for Assembly and Yak -->
-    <Version>0.3.1</Version>
+    <Version>0.4.0</Version>
     <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
     <Title>rhinomcp-mod</Title>
     <AssemblyName>rhinomcp-mod</AssemblyName>
