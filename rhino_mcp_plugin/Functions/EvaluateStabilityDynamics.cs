@@ -774,7 +774,6 @@ internal static class StabilityDynamics
 
 public partial class RhinoMCPModFunctions
 {
-    public const string PinnedDynamicEvaluationMode = "multi_body_pinned_dynamic";
 
     /// <summary>
     /// The pinned assembly, integrated in real time instead of relaxed.
@@ -1234,7 +1233,7 @@ public partial class RhinoMCPModFunctions
             widest = Math.Max(widest, entry["diameter_m"]?.Value<double>() ?? 0.0);
         }
 
-        graph["evaluation_mode"] = PinnedDynamicEvaluationMode;
+        graph["mode"] = RhinoMCPModFunctions.ElementsMode;
         graph["body_count"] = bodies.Count;
         graph["particle_count"] = particles.Count;
         graph["joint_count"] = bodies.Sum(b => b.JointCount) / 2;

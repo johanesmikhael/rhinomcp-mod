@@ -1798,7 +1798,7 @@ public partial class RhinoMCPModFunctions
                 StabilityUnits.SolverTransformToDocument(move * about, lengthToMeters);
         }
 
-        graph["evaluation_mode"] = PinnedDynamicEvaluationMode;
+        graph["mode"] = RhinoMCPModFunctions.ElementsMode;
         graph["integrator"] = "rigid_bodies";
         graph["body_count"] = pinned.Count;
         graph["particle_count"] = sites.Count;

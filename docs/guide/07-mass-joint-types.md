@@ -19,9 +19,9 @@
 
 ## Mass
 
-Nothing is evaluated without it: every element in the scope must carry a positive mass. It is
-stored on the object under `rhinomcp.stability.v1` as kilograms, whatever the document's units,
-and travels with a copy of the object.
+Every element in the evaluation scope must have a positive mass. Mass is stored on the object
+under `rhinomcp.stability.v1` in kilograms, regardless of document units, and is preserved when
+the object is copied.
 
 ```python
 assign_mass(density=2400, layer="Blocks")     # kg/m³ here; each object's mass from its own closed volume
@@ -29,10 +29,11 @@ assign_mass(mass=850, names=["SLAB"])         # kg, the same value on every obje
 assign_mass(density=500, overwrite=False)     # fill in what has no mass yet, leave the rest
 ```
 
-Exactly one of `density` or `mass`. Scope by `ids`, `names`, `layer` (one or a list) or
-`selected`; no scope is the whole document. The result lists each object's mass and the volume
-used, the scope total, the input value and the unit it was read as, and `skipped` - objects with
-no computable closed volume when a density was given. Give those a `mass`.
+Provide exactly one of `density` or `mass`. Define the scope with `ids`, `names`, `layer` (one
+or a list), or `selected`; omitting the scope selects the whole document. The result lists
+each object's mass and source volume, the total mass, the input value and unit, and `skipped`.
+Objects are skipped when a density is supplied but no closed volume can be computed; assign
+those objects an explicit mass.
 
 ```text
 {"assigned": [{"guid": "...", "name": "BOT_0_01", "mass": 259.2, "mass_unit": "kg", "volume_m3": 0.108}, ...],
@@ -53,9 +54,8 @@ mcpmodassignmissingmass           the same, only for objects with no mass
 
 ### Imperial documents
 
-A density or a mass is in the document's own units, exactly as every length is. Nothing to pass
-and nothing to convert by hand - `get_document_info` names them outright, alongside `units`
-([02](02-scene-inspection.md)), so read them before choosing a number:
+Density and mass inputs use the document's units. `get_document_info` reports these units
+alongside the length unit ([02](02-scene-inspection.md)); check them before selecting a value:
 
 ```text
 "meta_data": {..., "units": "Inches", "mass_unit": "lbm", "density_unit": "lbm/ft³"}
@@ -72,25 +72,25 @@ assign_mass(density=150, layer="Blocks")
 assign_mass(mass=1874, names=["SLAB"])       # lbm; stored as 850 kg
 ```
 
-Pound-mass, never pound-force. The result names the unit it read the number in, next to the
-document's own, so a number entered the wrong way is visible in the response:
+Imperial mass values use pound-mass, not pound-force. The response reports the interpreted
+input unit and the document unit so unit mismatches are visible:
 
 ```text
 {"input_value": 150, "input_unit": "lbm/ft³", "density_kg_m3": 2402.8,
  "document_length_unit": "Inches", "document_density_unit": "lbm/ft³"}
 ```
 
-Only the number's unit follows the document. Volume is computed from geometry in document
-units and converted for you either way, and the stored mass is canonical kilograms, so a model
-built in inches and one built in millimetres evaluate identically.
+Only the input unit follows the document. Volume is computed from the geometry and converted
+automatically, and stored mass remains in kilograms. Equivalent models built in inches and
+millimetres therefore use the same canonical mass during evaluation.
 
 ## Joint types
 
-Geometry cannot tell a screwed panel from a dry-stacked one - they look identical to an
-intersection test - so the connection is stated. Three types; the type decides how the
-measured bearing ([06](06-connectivity-graph.md)) is used:
+Geometry alone cannot distinguish a screwed connection from dry contact. Assign a joint type
+to describe the connection. The type determines how the measured bearing
+([06](06-connectivity-graph.md)) is used:
 
-| type | carries | what it is |
+| type | carries | example |
 | --- | --- | --- |
 | `contact` | compression and moment until it opens; friction across it; no tension | dry masonry, a beam on a corbel, a panel on a pad |
 | `pin` | force in three directions, no moment | truss to truss, a single bolt |
@@ -100,10 +100,10 @@ The moment comes from the spread of the bearing. A joint reduced to a point has 
 and resists no rotation, so `pin` collapses the bearing to its centre and the other two keep
 its extent.
 
-A joint nobody names is `contact`, the only one of the three that describes two things found
-touching. `fixed` is the strongest assumption available; `pin` hangs in tension and discards
-the bearing, so a stack of blocks pinned becomes a mechanism hinged at points that exist
-nowhere in the drawing.
+An unmatched joint defaults to `contact`, which represents two detected surfaces touching.
+`fixed` is the strongest available assumption. `pin` carries tension but reduces the bearing
+to a point, so applying it to a stack of blocks creates point hinges not represented by the
+physical bearing surfaces.
 
 ![The unbraced timber bridge with its graph drawn: pins blue between beams and planks, fixed amber wherever a portal meets anything, contact green on the pads](img/joint-types-portal.png)
 
@@ -124,23 +124,23 @@ assign_joint_type(joint_type="fixed", layer="PAD", with_ground=True)         # a
 Layer rules match the layer's leaf name, not its full path. Element rules (an `ids` list with
 no `with_`) are stored on the object beside its mass.
 
-Precedence: a pair rule beats an element rule beats the default. Where two elements' own
-rules disagree the weaker governs - a hinge assumed where a moment connection exists reports
-the structure softer than it is, which fails safe. The result carries each joint's resolved
-type and the rule that decided it (`nodes[].joint_type`, `nodes[].joint_type_rule`;
+Pair rules take precedence over element rules, which take precedence over the default. If two
+element rules disagree, the weaker joint type applies. This produces a more flexible model
+when the connection is ambiguous. The result includes each joint's resolved type and the rule
+that selected it (`nodes[].joint_type`, `nodes[].joint_type_rule`;
 [09](09-reading-results.md)).
 
-**Founded bases.** A base is a bearing too. Anything resting on the floor can lift off it and
-slide on it, which is what an unfounded block does. A pad cast into a footing and one set down
-on gravel are drawn identically, so `with_ground=True` states the footing the way the other
-rules state a joint. Without it an arch spreads at its springings and a post lifts the far
-edge of its base under an overhanging load - both correct for something merely set down.
+**Founded bases.** A base resting on the floor uses a contact bearing and can lift or slide.
+Geometry cannot distinguish a pad cast into a footing from one placed on gravel. Use
+`with_ground=True` to define a fixed or pinned ground connection when required. Without that
+rule, an arch can spread at its springings and a post under an overhanging load can lift one
+edge of its base.
 
-**Capacity.** `capacity_kn` limits tension, per bearing point, which gives a joint a moment
-capacity as well as an axial one. A joint that reaches it yields: the pull holds at the limit
-and the structure redistributes, or moves. It does not break. Read `peak_point_tension_n` and
-never the net force: a cantilever's connection can sit in net compression at -7.1 kN while
-one of its bearing points is pulled at 24.5.
+**Capacity.** `capacity_kn` limits tension at each bearing point, giving the joint both axial
+and moment capacity. When the limit is reached, tension remains at the limit while the
+structure redistributes or moves; the joint is not removed. Compare capacity against
+`peak_point_tension_n`, not net force. For example, a cantilever connection can have -7.1 kN
+net compression while one bearing point carries 24.5 kN of tension.
 
 ## List, prune, clear
 
@@ -158,10 +158,9 @@ assign_joint_type(clear=True)       # remove every rule
  "stale_rules": 1}
 ```
 
-A rule naming a deleted object is kept, not dropped: the deletion can be undone and the rule
-should come back with it. Stale rules match nothing and change no verdict; the evaluate
-command's prompt counts them (`4 rules, 2 stale`) so they are not mistaken for live ones.
-`prune` removes them on request.
+A rule that names a deleted object is retained so undoing the deletion also restores its use.
+Stale rules match nothing and do not affect the verdict. The evaluation prompt reports their
+count, for example `4 rules, 2 stale`. Use `prune` to remove them.
 
 In Rhino, `mcpmodassignjointtype`:
 

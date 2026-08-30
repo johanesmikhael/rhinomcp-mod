@@ -21,7 +21,7 @@
 
 ![Six primitives from create_objects - a box, a sphere, a cylinder, a cone, a turned box and a cylinder laid along x - with a polyline and a circle, all rendered in one diffuse material](img/geometry-primitives.png)
 
-That is `RhinoAndGHFiles/guide_shapes.3dm`, built by
+The image shows `RhinoAndGHFiles/guide_shapes.3dm`, built by
 [`scripts/dev/build_guide_images.py --build-shapes`](../../scripts/dev/build_guide_images.py)
 out of the calls on this page.
 
@@ -57,13 +57,14 @@ create_objects(objects=[
 | `CONE` | `radius`, `height`, `cap`, `axis` |
 | `SURFACE` | `points`, `count` as `[u_count, v_count]` |
 
-Solids are built centred on the origin - a box on `Plane.WorldXY`, a cylinder and a cone
-with their axis midpoint there - and then placed. So `translation` is where the centre goes,
-not a corner: the 180 mm box above sits on z = 0 because it is lifted by half its height.
+Solids are created at the origin and then placed. Boxes use `Plane.WorldXY`; cylinders and
+cones place the midpoint of their axis at the origin. Therefore, `translation` specifies the
+centre rather than a corner. The 180 mm box above sits on z = 0 because its centre is
+translated upward by half its height.
 `rotation_matrix` (3x3, world axes), `scale` and `color` apply at creation;
 `name` is what the response is keyed by, and what `names=` selectors match later.
 
-Curves and circles are created on the world plane. Everything lands on the current layer.
+Curves and circles are created on the world plane. New objects are placed on the current layer.
 
 ## Copying, changing, deleting
 
@@ -86,8 +87,8 @@ changed:
    "changed_fields": ["position", "pose", "name"]}]}
 ```
 
-`delete_objects` requires `confirm=True`, and `names` must be unique in the document -
-two objects called `POST` and it refuses rather than guessing:
+`delete_objects` requires `confirm=True`. Names must be unique in the document; if two objects
+are named `POST`, the operation fails with:
 
 ```text
 Multiple objects with name POST found.
@@ -110,9 +111,9 @@ delete_layer(name="GUIDE 2")
 `create_layer` takes an optional `parent` layer name. `delete_layer` and
 `get_or_set_current_layer` take either `name` or `guid`; `rename_layer` takes the id only.
 
-Layers matter beyond tidiness here: mass is assigned by layer density and joint-type rules
-are stated per layer pair ([07](07-mass-joint-types.md)), so the layer an element is on is
-usually what decides how it is solved.
+Layers also affect stability evaluation. Mass can be assigned from layer density, and
+joint-type rules can apply to layer pairs ([07](07-mass-joint-types.md)). An element's layer
+can therefore determine how it is evaluated.
 
 ```python
 get_layer_states()
@@ -127,9 +128,8 @@ save_layer_state(name="all on")
 restore_layer_state(name="all on")
 ```
 
-Saved layer states live in the plugin, not in the document: they are gone when Rhino or the
-plugin restarts. Named views are the opposite - they are stored in the `.3dm`
-([05](05-views-capture.md)).
+Saved layer states are stored in plugin memory and are lost when Rhino or the plugin restarts.
+Named views are stored in the `.3dm` ([05](05-views-capture.md)).
 
 ## Materials
 
@@ -140,9 +140,9 @@ get_object_materials(ids=[...])
 get_materials()
 ```
 
-Only a diffuse colour is supported. `create_material` returns the index; assign by
-`material_index` rather than by `material_name`, which has to look the name up and is
-ambiguous when two materials share it.
+Only diffuse colour is supported. `create_material` returns the material index. Prefer
+`material_index` when assigning a material because `material_name` is ambiguous if names are
+duplicated.
 
 ```text
 {"objects": [{"id": "2384a0d0-...", "name": "CAP", "material_index": 0, "material_name": "guide oak"},
@@ -150,6 +150,6 @@ ambiguous when two materials share it.
  "count": 2}
 ```
 
-`material_index` -1 is `ByLayer` - nothing assigned to the object itself. Materials show in a
-capture taken in the `Rendered` display mode; `Shaded` uses the display mode's own colour
+`material_index` -1 means `ByLayer`, with no material assigned directly to the object. Materials
+appear in a capture taken in the `Rendered` display mode; `Shaded` uses the display mode's colour
 ([05](05-views-capture.md)).

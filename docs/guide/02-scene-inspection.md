@@ -13,9 +13,8 @@
 | select by layer, name, id or type | `select_objects(layer="SHAPES")` | `SelLayer`, `SelName` |
 | clear the selection | `deselect_all()` | `SelNone` |
 
-`get_document_info` is the first call: it says what exists and gives the ids the other tools
-take. It never returns geometry - that is `get_objects_info`, on the handful of ids that
-turned out to matter.
+Start with `get_document_info`. It returns the document inventory and the object ids accepted
+by other tools. It does not return geometry; use `get_objects_info` for the relevant objects.
 
 ## The inventory
 
@@ -38,16 +37,17 @@ get_document_info(detail="full", max_geometry_points=64)   # the legacy per-obje
  "layer_count": 1, "layers": [{"id": "92bc2989-...", "name": "SHAPES", "visible": true, "locked": false}]}
 ```
 
-`object_count` is the document; `objects_returned` is this page. `objects_truncated` true
-means there are more - page with `offset`, or narrow the scope. Layers are listed the same
-way and truncate the same way.
+`object_count` is the number of objects in the document, and `objects_returned` is the number
+on the current page. If `objects_truncated` is true, use `offset` to request another page or
+narrow the scope. Layer results use the same paging behaviour.
 
-`units`, `mass_unit`, `density_unit` and `tolerance` are worth reading before anything else.
-Every length in every other tool is in document units, and the tolerance is what contact
-detection is measured in ([06](06-connectivity-graph.md)). Mass and density follow the document
-too, which is why they are named here rather than left implied: `assign_mass(density=2400)`
-means concrete in this millimetre document and sixteen times concrete in an imperial one, and
-no later tool can tell the two apart ([07](07-mass-joint-types.md)).
+Check `units`, `mass_unit`, `density_unit`, and `tolerance` before making geometry or mass
+calls.
+Every other tool reports length in document units, and contact detection uses the document
+tolerance ([06](06-connectivity-graph.md)). Mass and density inputs also follow document units.
+For example, `assign_mass(density=2400)` represents concrete in this millimetre document but
+2400 lbm/ft³, about sixteen times the density of concrete, in an imperial document. Later tools
+cannot infer which unit was intended ([07](07-mass-joint-types.md)).
 
 Three levels of `detail`:
 
@@ -57,7 +57,9 @@ Three levels of `detail`:
 | `summary` | the above plus point counts, planarity, face counts, material and colour | telling similar things apart |
 | `full` | the legacy per-object payload, geometry included | rarely; prefer `get_objects_info` |
 
-## A region rather than a document
+<a id="a-region-rather-than-a-document"></a>
+
+## Inspecting a region
 
 ```python
 get_document_info(bbox=[[0, 0, 0], [600, 400, 400]], bbox_mode="intersects")
@@ -68,10 +70,12 @@ get_document_info(bbox=[[0, 0, 0], [600, 400, 400]], bbox_mode="intersects")
 `contained` (all of it is inside). The response carries a `spatial_filter` block with the
 normalised box, the mode, and how many objects matched.
 
-On a large model this is the difference between a listing that is read and one that is paged
-through: scope to the bay being worked on rather than raising `limit`.
+For a large model, use a bounding-box scope for the region of interest instead of increasing
+`limit` for the entire document.
 
-## One object, and several
+<a id="one-object-and-several"></a>
+
+## Inspecting individual objects
 
 ```python
 get_object_info(name="TURNED_BLOCK")                       # or id=
@@ -88,10 +92,10 @@ get_objects_info(objects=[{"name": "CAP"}, {"id": "..."}])
                                             "t": [520.0, 700.0, 100.0]}}}}
 ```
 
-That block is the point of these two tools: a solid comes back as an oriented box - three
-extents in its own frame - plus the frame itself, rather than as a world box that says a
-turned beam is as wide as it is long. `R` and `t` are `world_from_local`: local to world.
-What they mean and how to change them is [04](04-pose-transforms.md).
+These tools describe a solid with an oriented box and its coordinate frame. The three extents
+are measured in the object's local frame, so a rotated beam is not represented by an oversized
+world-aligned box. `R` and `t` define `world_from_local`, the transform from local to world
+coordinates. See [04](04-pose-transforms.md) for pose operations.
 
 `geometry_detail` picks how much:
 
@@ -101,8 +105,8 @@ What they mean and how to change them is [04](04-pose-transforms.md).
 | `obb_pose` (default) | oriented box extents plus pose; lines and curves as local points plus pose |
 | `ortho3` | oriented box, pose, and up to three orthographic outlines |
 
-`ortho3` is for shapes an oriented box cannot tell apart - a cone, a cylinder and a tapered
-box with the same extents. It returns silhouettes on three planes of the local frame:
+Use `ortho3` to distinguish shapes that have the same oriented-box extents, such as a cone,
+cylinder, and tapered box. It returns silhouettes on three planes of the local frame:
 
 ```python
 get_objects_info(objects=[{"name": "CAP"}], geometry_detail="ortho3", outline_max_points=12)
@@ -115,8 +119,9 @@ get_objects_info(objects=[{"name": "CAP"}], geometry_detail="ortho3", outline_ma
           {"axis": "right", "loops": [[[66.96, 120.0], [-110.0, 120.0], [0.0, -120.0], ...]]}]
 ```
 
-The front outline is a triangle and the top outline a circle: a cone, apex at negative local
-z. `outline_max_points` caps the points per loop. Non-solids fall back to `obb_pose`.
+In this response, the triangular front outline and circular top outline identify a cone with
+its apex in the negative local z direction. `outline_max_points` limits the points per loop.
+Non-solid objects fall back to `obb_pose`.
 
 `include_attributes=True` adds the user attributes on each object - that is where mass and
 element joint type are stored ([07](07-mass-joint-types.md)). `include_world=True` adds

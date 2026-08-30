@@ -528,7 +528,7 @@ namespace RhinoMCPModPlugin.Commands
                 var diverged = result["diverged"]?.Value<bool>() == true;
                 var integrator = result["integrator"]?.ToString();
                 RhinoApp.WriteLine(
-                    $"EvaluateStability ({result["evaluation_mode"]}" +
+                    $"EvaluateStability ({result["mode"]}" +
                     (string.IsNullOrEmpty(integrator) ? "" : $", {integrator}") + $"): {verdict}" +
                     (diverged ? $" - DIVERGED: {result["diverged_reason"]}" :
                         conclusive == false ? " (inconclusive)" : ""));

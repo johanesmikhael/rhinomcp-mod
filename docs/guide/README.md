@@ -1,13 +1,14 @@
 # rhinomcp-mod guide
 
-Rhino 8 driven through Claude: the document read and edited over MCP, the way its elements
-touch measured, and an assembly's stability under gravity evaluated. Each feature has an MCP
-tool and a Rhino command; every page shows both.
+rhinomcp-mod connects Rhino 8 to MCP clients. It provides tools for reading and editing the
+open document, measuring contact between elements, and evaluating an assembly's stability
+under gravity. Each operation is also available as a Rhino command, and every feature page
+documents both interfaces.
 
 | page | covers |
 | --- | --- |
 | [00 overview](00-overview.md) | feature areas, the stability pipeline, the two routes, what is stored on the document |
-| [01 setup](01-setup.md) | plugin, `uv`, Claude Desktop, Claude Code, from source, verify, troubleshooting, session tools |
+| [01 setup](01-setup.md) | plugin, `uv`, Claude Desktop, Claude Code, OpenCode, from source, verify, troubleshooting, session tools |
 | [02 scene inspection](02-scene-inspection.md) | the inventory, paging, a region, per-object geometry, selection |
 | [03 geometry, layers, materials](03-geometry-layers-materials.md) | the primitive types, copy and modify, layers and their states, materials |
 | [04 pose and transforms](04-pose-transforms.md) | what a pose is, rotate, reset, rebase, the OBB overlay |

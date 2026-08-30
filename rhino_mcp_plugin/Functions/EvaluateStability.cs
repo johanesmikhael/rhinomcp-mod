@@ -26,24 +26,16 @@ public partial class RhinoMCPModFunctions
     public const string ElementsMode = "elements";
 
     /// <summary>
-    /// Resolves the <c>mode</c> parameter to the only two things the evaluator does: the whole
-    /// scope as one body, or one body per element. Returns true for the elements path.
+    /// Resolves the <c>mode</c> parameter. Returns true for the elements path.
     /// </summary>
     /// <remarks>
-    /// There were three solvers once, and <c>mode</c> chose between them. Two of the three are
-    /// now the same solver told a different default joint type, so the modes they were named
-    /// after no longer name anything: "contact" ran the elements path with contact as the
-    /// default joint type, which is what the elements path does anyway. Every old spelling is
-    /// still accepted - they are in saved scripts and in every published document - but each
-    /// one now says in the result which of the two it resolved to, so a caller relying on a
-    /// distinction that no longer exists hears about it rather than getting a silent second
-    /// name for the same run. See MCPModevaluateStabilityCommand, which asks the question the
-    /// right way round: how many bodies first, what to assume at a joint second.
+    /// The evaluator does two things, so <c>mode</c> has two values: the whole scope as one
+    /// body, or one body per element. What a joint carries is a separate question answered per
+    /// joint, never by the mode. See MCPModevaluateStabilityCommand, which asks it in that
+    /// order: how many bodies first, what to assume at a joint second.
     /// </remarks>
-    private static bool ResolveEvaluationMode(string modeText, out string aliasWarning)
+    private static bool ResolveEvaluationMode(string modeText)
     {
-        aliasWarning = null;
-
         if (string.IsNullOrWhiteSpace(modeText))
         {
             return false;
@@ -51,57 +43,26 @@ public partial class RhinoMCPModFunctions
 
         var mode = modeText.Trim();
 
-        bool Is(string candidate) => string.Equals(mode, candidate, StringComparison.OrdinalIgnoreCase);
-
-        if (Is(ElementsMode))
+        if (string.Equals(mode, ElementsMode, StringComparison.OrdinalIgnoreCase))
         {
             return true;
         }
 
-        if (Is(AssemblyMode))
+        if (string.Equals(mode, AssemblyMode, StringComparison.OrdinalIgnoreCase))
         {
             return false;
-        }
-
-        // Named after the single-body solver rather than after having one body.
-        if (Is("welded") || Is(EvaluationMode))
-        {
-            aliasWarning =
-                $"mode '{mode}' is an alias for mode '{AssemblyMode}'. 'welded' named a solver; " +
-                "the scope is one rigid body with no joints at all, which is a different thing " +
-                "from every joint being the 'welded' joint type.";
-            return false;
-        }
-
-        // Named after the relaxed pinned solver, which is gone.
-        if (Is("pinned") || Is("dynamic") || Is("pinned_dynamic") ||
-            Is(PinnedEvaluationMode) || Is(PinnedDynamicEvaluationMode))
-        {
-            aliasWarning =
-                $"mode '{mode}' is an alias for mode '{ElementsMode}'.";
-            return true;
-        }
-
-        // Named after the contact solver, which is now a joint type.
-        if (Is("contact") || Is(ContactEvaluationMode))
-        {
-            aliasWarning =
-                $"mode '{mode}' is an alias for mode '{ElementsMode}' and forces nothing: contact " +
-                "is a joint type now, and already the default one, so per-joint and per-pair rules " +
-                "still apply. To read a model that has rules as a dry stack, assign contact with " +
-                "assign_joint_type; to change only what unnamed joints are, pass joint_type.";
-            return true;
         }
 
         throw new ArgumentException(
-            $"Unknown evaluation mode '{modeText}'; use '{AssemblyMode}' or '{ElementsMode}'.");
+            $"Unknown evaluation mode '{modeText}'; use '{AssemblyMode}' or '{ElementsMode}'. " +
+            "A joint's type is not a mode: set it per joint with assign_joint_type, or change " +
+            "the default for joints no rule names with joint_type.");
     }
 
     public const string GraphKey = "rhinomcp-mod:connectivity-graph";
     public const string EvaluationGraphKey = "rhinomcp-mod:connectivity-graph-eva";
     public const string StabilityKey = "rhinomcp.stability.v1";
     public const string AfterEvaluationKey = "rhinomcp.after_eva.v1";
-    public const string EvaluationMode = "single_rigid_assembly";
 
     // Raised from 50: a toppling assembly has barely started moving after 50 iterations,
     // so the old default reported collapses as stable. Early exit on settled or clearly
@@ -447,11 +408,7 @@ public partial class RhinoMCPModFunctions
             // welded catches an assembly tipping over, pinned catches a mechanism. See the
             // remarks on the pinned solver for why a pin cannot see overturning.
             var modeText = parameters?["mode"]?.ToString();
-            var pinned = ResolveEvaluationMode(modeText, out var modeAliasWarning);
-            if (modeAliasWarning != null)
-            {
-                unitWarnings.Add(modeAliasWarning);
-            }
+            var pinned = ResolveEvaluationMode(modeText);
 
             if (pinned)
             {
@@ -652,7 +609,6 @@ public partial class RhinoMCPModFunctions
                         var rigidResult = BuildPinnedResult(graph, doc, unitContext, rigidStable,
                             gravity, floorZ, floorZIsAuto, rigidStrength, totalMassKilograms,
                             unitWarnings);
-                        rigidResult["evaluation_mode"] = PinnedDynamicEvaluationMode;
                         rigidResult["mode"] = ElementsMode;
                         foreach (var key in new[]
                         {
@@ -705,7 +661,6 @@ public partial class RhinoMCPModFunctions
                     var dynamicResult = BuildPinnedResult(graph, doc, unitContext, dynamicStable,
                         gravity, floorZ, floorZIsAuto, rigidStrength, totalMassKilograms,
                         unitWarnings);
-                    dynamicResult["evaluation_mode"] = PinnedDynamicEvaluationMode;
                     dynamicResult["mode"] = ElementsMode;
                     foreach (var key in new[]
                     {
@@ -749,7 +704,7 @@ public partial class RhinoMCPModFunctions
                 out var finalXform);
 
             graph["stable"] = stable;
-            graph["evaluation_mode"] = EvaluationMode;
+            graph["mode"] = AssemblyMode;
             graph["document_length_unit"] = doc.ModelUnitSystem.ToString();
             graph["displacement_unit"] = doc.ModelUnitSystem.ToString();
             graph["length_to_meters"] = unitContext.LengthToMeters;
@@ -948,7 +903,6 @@ public partial class RhinoMCPModFunctions
             {
                 ["success"] = true,
                 ["stable"] = stable,
-                ["evaluation_mode"] = EvaluationMode,
                 ["mode"] = AssemblyMode,
                 ["node_count"] = stabilityNodes.Count,
                 ["solver_iterations"] = currentStep * solverSubsteps,

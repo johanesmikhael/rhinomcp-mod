@@ -55,12 +55,6 @@ async def evaluate_stability(
             "elements" reports per-element displacement and rotation and names
             the element that moved furthest; its result carries no floor
             strength, assembly transform or support margin.
-            The older names still work and say so in `unit_warnings`: "welded"
-            and "single_rigid_assembly" mean "assembly"; "pinned", "dynamic",
-            "pinned_dynamic", "contact" and the "multi_body_*" spellings all
-            mean "elements". "contact" in particular forces nothing - it named
-            a solver that is now the default joint type, so per-joint rules
-            still apply under it exactly as under "elements".
         joint_penetration: How far a bearing surface may close under its own
             load, in document units. Sizes the joint stiffness where none is
             stated.

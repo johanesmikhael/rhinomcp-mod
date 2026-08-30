@@ -13,10 +13,10 @@
 | write it to a file | - | `mcpmodgraphexport <path>` |
 | discard the stored graph | - | `-mcpmodclearcache` |
 
-The graph is which elements touch, and where. A node is an object; an edge is two objects
-within the contact gap of each other, with the point they meet at and the bearing surface
-measured between them. It is what the stability evaluator solves over ([08](08-stability.md)),
-and the overlay is the check that the model being solved is the model that was meant.
+The connectivity graph records which elements touch and where they meet. Each node represents
+an object. Each edge represents two objects within the contact gap and includes the contact
+point and measured bearing surface. The stability evaluator uses this graph
+([08](08-stability.md)); inspect the overlay before evaluation to verify the detected contacts.
 
 ## Data
 
@@ -35,20 +35,20 @@ get_connectivity_graph(selected=True)
  "node_limit": 20000, "truncated": false, "source": "computed", "tol": 0.005}
 ```
 
-`e` is undirected: `[i, j, contact point]` into `n`. Filters combine with AND. Components
-plus nearby unattached objects are included, so an element that touches nothing still appears
-as a node with no edges - the thing to look for.
+`e` is undirected and stores `[i, j, contact point]`, where `i` and `j` index `n`. Filters
+combine with AND. The result includes connected components and nearby unattached objects, so
+an element with no contacts appears as a node with no edges.
 
-`truncated` true means candidates beyond `node_limit` were never tested: a missing edge then
-says nothing. Narrow the scope and retry rather than trusting it.
+If `truncated` is true, candidates beyond `node_limit` were not tested and missing edges are
+not conclusive. Narrow the scope and run the query again.
 
-`source` is where the answer came from. The graph is stored on the document under
+`source` identifies how the result was obtained. The graph is stored on the document under
 `rhinomcp-mod:connectivity-graph` with a fingerprint of the geometry it was computed from
-(object ids, quantised bounding boxes, tolerance); while the fingerprint matches, the stored
+(object ids, quantised bounding boxes, and tolerance). While the fingerprint matches, the stored
 graph is returned (`document_text_cache`, or `memory_cache` when the same session already
-built it), otherwise it is recomputed (`computed`). An edit
-to an element invalidates it; a change to the plugin's own measurement does not, which is
-what `-mcpmodclearcache` is for.
+built it); otherwise, it is recomputed (`computed`). Editing an element invalidates the cache.
+Changes to the plugin's measurement implementation do not, so use `-mcpmodclearcache` after
+upgrading measurement behaviour.
 
 Contact detection works in multiples of the document's absolute tolerance, so a document
 whose tolerance is coarse finds contacts a fine one would not.
@@ -67,19 +67,18 @@ graph_display(enabled=False)
 What is drawn:
 
 - an asterisk at each node's centre; a hollow circle for a node with no edges
-- each edge as two segments through the contact point, so where they touch is visible, not
-  just that they do
+- each edge as two segments through the contact point, showing the contact location
 - the bearing at each contact, in the colour of the joint type it will be solved as: contact
-  green, pin blue, fixed amber. Bright where a rule named it, dim where it took the default,
-  so "did my rule reach this joint" can be read off the picture
+  green, pin blue, fixed amber. Bearings matched by a rule are bright; bearings using the
+  default are dim
 - a short normal on each bearing, the direction it pushes
 - a line where two faces cross without overlapping, drawn thick: a hinge about itself
 - the readout: elements and contacts, joint types by count, how many joints took the default,
   and how many bearings were lines, sampled, or unmeasured
 
-A bearing drawn on a vertical face under a member that sits on top of it, or a support with
-more patches than members resting on it, is a member seated into its support keeping the
-wrong face ([08 - limitations](08-stability.md#limitations)).
+A bearing drawn on a vertical face beneath a supported member, or a support with more patches
+than supported members, can indicate that contact detection retained the wrong face
+([08 - limitations](08-stability.md#limitations)).
 
 In Rhino, `mcpmodgraph` prompts for objects (Enter with a pre-selection uses it; `All` is the
 whole document; `Off` hides the overlay) and pins that scope: a later `graph_display()` or

@@ -336,7 +336,7 @@ public partial class RhinoMCPModFunctions
         {
             ["success"] = true,
             ["stable"] = full["stable"],
-            ["evaluation_mode"] = full["evaluation_mode"],
+            ["mode"] = full["mode"],
             ["sections"] = sections,
             ["pageable"] = new JArray(HeavySections.Keys.Where(k => full[k] is JArray))
         };

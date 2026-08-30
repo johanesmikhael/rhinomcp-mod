@@ -16,9 +16,8 @@
 | save, restore, delete a named view | `save_named_view(name=...)`, `restore_named_view(name=...)`, `delete_named_view(name=...)` | `NamedView` |
 | list named views | `get_named_views()` | `NamedView` |
 
-`capture_view` returns the PNG itself - base64 in `png_base64`, plus a `metadata` block - not
-a path on disk. Nothing is written to a file unless the caller writes it. By default the
-active viewport is put back exactly as it was afterwards.
+`capture_view` returns the PNG as base64 in `png_base64`, together with a `metadata` block. It
+does not write a file. By default, it restores the active viewport after the capture.
 
 ## Framing
 
@@ -29,10 +28,11 @@ capture_view(selected=True, view="front", padding=1.4)
 capture_view(view="perspective", fit=False)          # keep the camera where it is
 ```
 
-Targets are `ids`, `selected=True` or `all_visible=True`; with none of them the current
-viewport is captured as it stands. `view` is `perspective`, `isometric`, `top`, `front` or
-`right` - the first two perspective, the rest parallel. `fit` (default true) frames the
-targets, `padding` (default 1.15, minimum 1.0) leaves room around them.
+Set the target with `ids`, `selected=True`, or `all_visible=True`. If none is supplied, the
+current viewport is captured without selecting a target. `view` accepts `perspective`,
+`isometric`, `top`, `front`, or `right`; the first two are perspective views and the remaining
+three are parallel. `fit` defaults to true and frames the targets. `padding` defaults to 1.15
+and has a minimum value of 1.0.
 
 An explicit camera overrides the preset. Both ends are required, and it is always
 perspective:
@@ -45,9 +45,9 @@ capture_view(all_visible=True, fit=False,
 
 ![The x-braced bridge seen from an 85 mm camera set close to one abutment, the trusses running away from the viewer](img/views-camera-explicit.png)
 
-`lens_mm` is the 35 mm-equivalent focal length; the presets use 50 mm and never inherit a
-lens from a parallel viewport. `camera_up` sets which way is up when the default roll is
-wrong. `fit=False` keeps the stated camera from being overridden by the framing.
+`lens_mm` is the 35 mm-equivalent focal length. Presets use 50 mm and do not inherit a lens
+from a parallel viewport. Use `camera_up` to control camera roll. Set `fit=False` to prevent
+automatic framing from changing the explicit camera.
 
 ## Display modes and background
 
@@ -61,10 +61,10 @@ capture_view(all_visible=True, view="front", display_mode="Technical")
 `Technical`, `Arctic`, `Ghosted`. `Rendered` is the one that shows assigned materials
 ([03](03-geometry-layers-materials.md)); `Shaded` shows the display mode's own object colour.
 
-`background` is `viewport` (the display mode's own gradient, the default), `white` or
-`transparent`. A display mode that fills objects with a white material - the default `Shaded`
-on macOS is one - leaves nothing but edges on a white background; either change the mode's
-object colour or shoot `Arctic`, which shades white surfaces.
+`background` accepts `viewport`, `white`, or `transparent`. The default, `viewport`, uses the
+display mode's background. A mode that fills objects with white, including the default
+`Shaded` mode on macOS, may show only edges against a white background. Change the mode's
+object colour or use `Arctic` to retain surface shading.
 
 `draw_grid` and `draw_axes` are off by default, so a capture is the model and not the
 construction plane.
@@ -83,12 +83,13 @@ overlay ([04](04-pose-transforms.md)) all appear in a capture if they are on.
 | `print` | 2560 x 1800 |
 
 `width` and `height` override the preset, clamped to 256..3840 and to about 8.3 megapixels
-in total. Screen-space items - overlay text, node markers, line widths - scale with the
-capture, so a `print` capture is a larger picture rather than the same picture with unreadable
-labels. The PNG travels back over the socket as base64: at `print` size that is roughly a
-megabyte, which is fine for a file and large for a chat.
+in total. Screen-space items, including overlay text, node markers, and line widths, scale with
+the capture. A `print` capture therefore retains readable labels. The PNG is returned over the
+socket as base64 and is roughly one megabyte at `print` size.
 
-## What comes back
+<a id="what-comes-back"></a>
+
+## Capture response
 
 ```text
 {"png_base64": "iVBORw0KGgo...",
@@ -101,15 +102,16 @@ megabyte, which is fine for a file and large for a chat.
               "bbox": {"min": [-1500.0, -2000.0, -800.0], "max": [25500.0, 2000.0, 3840.0]}}}
 ```
 
-The camera fields are what was used, so a capture that framed itself can be reproduced
-exactly: pass them back as `camera_location` / `camera_target` / `lens_mm` with `fit=False`.
+The camera fields record the values used for the capture. To reproduce an automatically framed
+capture, pass them back as `camera_location`, `camera_target`, and `lens_mm` with `fit=False`.
 `lens_mm` is null for a parallel projection.
 
-`preserve_view` defaults to true: camera, projection, lens, frustum and display mode are
-restored after the capture, so the person at Rhino sees no change. Set it false only when the
-capture is meant to become the new view.
+`preserve_view` defaults to true and restores the camera, projection, lens, frustum, and
+display mode after the capture. Set it to false to retain the captured view in Rhino.
 
-## The real viewports
+<a id="the-real-viewports"></a>
+
+## Viewport state
 
 ```python
 get_viewport_info()
@@ -124,15 +126,15 @@ get_viewport_info()
                 "lensMm": null, "displayMode": "Wireframe", ...}]}
 ```
 
-`displayMode` here is worth a look before capturing: the capture switches the mode itself, but
-a viewport left in `Wireframe` is what the person at Rhino is looking at.
+`displayMode` reports the mode currently shown in Rhino. `capture_view` can temporarily use a
+different mode without changing this state when `preserve_view=True`.
 
 ```python
 zoom_to_objects(ids=["..."])     # or nothing, for the current selection
 ```
 
-`zoom_to_objects` changes the real viewport and leaves it changed - it is the tool for "show
-me that", where `capture_view` is the tool for "let me see it".
+`zoom_to_objects` changes the active Rhino viewport and leaves it changed. `capture_view`
+instead produces an image and restores the viewport by default.
 
 ## Named views
 
@@ -149,7 +151,6 @@ delete_named_view(name="guide iso")
                   "cameraTarget": "904.17,-204.17,777.71"}], "count": 1}
 ```
 
-Named views are stored in the document and saved with the file, so they survive a restart -
-unlike saved layer states, which live in the plugin for the session
-([03](03-geometry-layers-materials.md)). Saving over an existing name replaces it, so a name
-stays unambiguous to restore by.
+Named views are stored in the document and saved with the file. Saved layer states remain only
+for the plugin session ([03](03-geometry-layers-materials.md)). Saving a named view with an
+existing name replaces the previous definition.

@@ -2,9 +2,9 @@
 
 <!-- run: 2026-08-29, plugin 0.3.1 -->
 
-Two 24 m timber trusses on two pads, drawn to the same span. One is x-braced in plan and
-elevation; the other has no diagonals and rigid portal frames instead. Both stand. The
-pipeline below runs on each, and the sway probe at the end is what tells them apart.
+This example evaluates two 24 m timber bridges on two pads. The first is x-braced in plan and
+elevation. The second uses rigid portal frames without diagonal bracing. Both are stable under
+self-weight, but the sway probe shows different stiffness behaviour.
 
 | | `timber_bridge_xbraced.3dm` | `timber_bridge.3dm` |
 | --- | --- | --- |
@@ -15,7 +15,7 @@ pipeline below runs on each, and the sway probe at the end is what tells them ap
 ![The x-braced bridge](img/bridges-xbraced-iso.png)
 ![The portal-framed bridge](img/bridges-portal-iso.png)
 
-**1. Open and look.**
+**1. Open the document.**
 
 ```python
 open_file("RhinoAndGHFiles/timber_bridge_xbraced.3dm", close_current=True)
@@ -29,19 +29,20 @@ get_document_info(detail="inventory", limit=10)
  "layers": [{"name": "TRUSS"}, {"name": "PAD"}]}
 ```
 
-Names carry the member family: `TOP`, `BOT` chords, `POST`, `RAFT`, `FLOOR`, `PLNA`/`PLNB`
-purlins, `DGA`/`DGB` diagonals, `XFA`/`XFB` the cross bracing.
+Object names identify the member family: `TOP` and `BOT` chords, `POST`, `RAFT`, `FLOOR`,
+`PLNA`/`PLNB` purlins, `DGA`/`DGB` diagonals, and `XFA`/`XFB` cross bracing.
 
-**2. Mass.** Already on every element in both files. To check without changing anything:
+**2. Verify mass.** Every element in both files already has mass assigned. Check the values
+without overwriting them:
 
 ```python
 assign_mass(density=2400, overwrite=False)    # assigns nothing; reports what is there
 ```
 
-`total_mass_kg` 37231 and 35794; `skipped` empty. To set it from scratch, `assign_mass(density=…)`
-with the timber's density.
+The returned `total_mass_kg` values are 37231 and 35794, and `skipped` is empty. To assign mass
+from scratch, call `assign_mass(density=...)` with the appropriate timber density.
 
-**3. Rules.** Stored in the document; list them:
+**3. Inspect joint rules.** The rules are stored in each document. List them with:
 
 ```python
 assign_joint_type()
@@ -61,10 +62,10 @@ portal:   {"rules": [{"a": "ground:",      "b": "layer:PAD",    "joint_type": "c
                      {"a": "layer:PORTAL", "b": "layer:PORTAL", "joint_type": "fixed"}], "stale_rules": 0}
 ```
 
-The braced truss is bolted at its nodes and set on its pads. The portal bridge says where its
-moment connections are: every joint a portal takes part in.
+The braced truss uses pinned connections at its nodes and contact bearings on its pads. In the
+portal bridge, every connection involving a portal member is fixed.
 
-**4. Graph.**
+**4. Inspect the connectivity graph.**
 
 ```python
 graph_display(enabled=True)
@@ -74,14 +75,13 @@ get_connectivity_graph()
 ![The x-braced bridge with its graph: 104 elements, 609 contacts; pins blue at the nodes, contact green on the pads](img/bridges-xbraced-graph.png)
 ![The portal bridge with its graph: fixed amber where portals meet beams and planks, pins blue between beams and planks](img/bridges-portal-graph.png)
 
-The readout counts contacts between element pairs; the evaluation clusters those into joints
-- 77 on the braced bridge, 206 on the portal one - because several members meet at one node.
-Nothing dim in either picture: every contact was named by a rule. Two things to look for
-before evaluating: a node with no edges (an element floating), and a bearing patch drawn on
-the side of a pad under a member that sits on top of it
+The graph counts contacts between element pairs. The evaluation clusters contacts at the same
+node into 77 joints for the braced bridge and 206 for the portal bridge. Every bearing is shown
+at full brightness because each contact matches a rule. Before evaluation, check for nodes with
+no edges and for bearing patches drawn on the side of a pad beneath a supported member
 ([08 - limitations](08-stability.md#limitations)).
 
-**5. Evaluate.**
+**5. Evaluate stability.**
 
 ```python
 evaluate_stability(mode="elements")
@@ -98,13 +98,14 @@ evaluate_stability(mode="elements")
 | `joint_forces_summary.max_tension_n` | 14109 (a pin) | 8387 (a fixed joint) |
 | `ground_sites_summary.fz_total_n` | 340583 | 351052 |
 
-Both stand, an order of magnitude inside the mechanism threshold. The braced bridge moves
-four times as much at its worst pin and opens 16 of its 48 bearings - the diagonals pull on
-their chords and a bearing that is pulled lifts; the portal bridge, carrying its sway in
-bending, lifts none. Its most-loaded joint is a fixed one, at 60% of the braced bridge's
-most-loaded pin.
+Both bridges are stable, with maximum pin displacement more than an order of magnitude below
+the mechanism threshold. The worst pin displacement in the braced bridge is about four times
+that of the portal bridge. Sixteen of its 48 contact bearings open as the diagonals pull on
+their chords. No bearings open in the portal bridge, which carries sway through bending. Its
+highest joint tension occurs at a fixed connection and is about 60% of the braced bridge's
+highest pin tension.
 
-**6. Read the report.** The most-tensioned joints and what they join:
+**6. Read detailed results.** Query the most-tensioned joints and the elements they connect:
 
 ```python
 get_stability_report(section="joint_forces", limit=5)
@@ -117,13 +118,13 @@ x-braced, joint_forces by tension: [{"body": 43, "guid": "0700897d-...", "joint_
                                      "force_n": 14125.5, "tension_n": 14108.7, "shear_n": 689.5, "bearing_points": 1}, ...]
 ```
 
-`body` 43 is `BOT_1_03`, a bottom chord, pulled at its node by six members. On the portal
-bridge the same query returns fixed joints at the portal legs, each with `bearing_points`
-above 1 - a fixed joint keeps its bearing's spread, a pin has one point.
+`body` 43 is `BOT_1_03`, a bottom chord connected to six members at the node. For the portal
+bridge, the same query returns fixed joints at the portal legs with `bearing_points` greater
+than 1. Fixed joints preserve the distributed bearing; pins reduce it to one point.
 
-**7. Sway.** The probe: settle, push sideways with 5% of the carried weight along x and along
-y, report the stiffness. The braced bridge is still moving at the default half second, so it
-is given longer.
+**7. Measure sway stiffness.** The probe first settles the bridge, then applies 5% of the
+carried weight along x and y and reports the resulting stiffness. The braced bridge remains in
+motion after the default 0.5 seconds, so this example uses a longer duration.
 
 ```python
 evaluate_stability(mode="elements", lateral_load_fraction=0.05, duration_seconds=1.5)
@@ -137,22 +138,24 @@ evaluate_stability(mode="elements", lateral_load_fraction=0.05, duration_seconds
 | `notional_load_n` | 18256 | 17551 |
 | `settled` at the end of the run | false | true |
 
-Across the span the two are alike: 3.7e7 against 3.3e7 N/m, the pads and the deck doing the
-same work in both. Along it the portal bridge is six times stiffer - its 112 fixed joints
-carry longitudinal sway in bending, while the braced truss's pins let it rack until the
-diagonals take up. The braced bridge's figures carry a caveat: `settled` is false, so its
-stiffness was measured on a structure still creeping, and a longer `duration_seconds` would
-move them. Rerun with `detail="full"` or page `sway` from the report to see the drift ratios.
+Transverse stiffness is similar: 3.7e7 N/m for the braced bridge and 3.3e7 N/m for the portal
+bridge. Longitudinally, the portal bridge is about six times stiffer. Its 112 fixed joints
+resist sway through bending, while the pinned braced truss racks until the diagonals engage.
+The braced bridge reports `settled: false`, so its stiffness was measured while motion was
+continuing and can change with a longer `duration_seconds`. Use `detail="full"` or query the
+`sway` report section to inspect drift ratios.
 
-**8. See it.**
+**8. Display the evaluated pose.**
 
 ```python
 evaluate_stability(mode="elements", display=True)
 ```
 
-draws each element where it came to rest, grey over the original. At these displacements
-the two coincide on screen; the settled pose earns its place on the stair
-([08](08-stability.md)). `mcpmodstabilitydisplay Off` hides it.
+This draws each element at its evaluated position in grey over the original geometry. The
+displacements in both bridge examples are too small to distinguish at this view scale. The
+stair example shows a more visible displacement ([08](08-stability.md)). Run
+`mcpmodstabilitydisplay Off` to hide the overlay.
 
-**9. Clear.** `-mcpmodclearcache` removes the stored graph, the settled poses and the masses
-from this document; the joint rules stay unless `assign_joint_type(clear=True)`.
+**9. Clear cached data.** `-mcpmodclearcache` removes the stored graph, settled poses, and
+masses from the document. Joint rules remain until removed with
+`assign_joint_type(clear=True)`.

@@ -1,7 +1,7 @@
 # Reference
 
-Every MCP tool and every Rhino command, with its counterpart on the other route. `-` means the
-other route has no equivalent.
+This page lists every MCP tool and Rhino command with its equivalent in the other interface.
+`-` indicates that no equivalent is available.
 
 ## MCP tools
 
@@ -44,13 +44,13 @@ other route has no equivalent.
 | `graph_display` | show or hide the graph overlay; pin its scope | `mcpmodgraph` | [06](06-connectivity-graph.md) |
 | `assign_mass` | mass per object from `density` and volume, or one `mass` each, both in the document's own units (kg/m³ and kg metric, lbm/ft³ and lbm imperial; stored as kg); scoped by `ids`, `names`, `layer`, `selected`; `overwrite=False` fills only what is missing | `mcpmodassignmass`, `mcpmodassignmissingmass`, `mcpmodmassfromlayerdensity` | [07](07-mass-joint-types.md) |
 | `assign_joint_type` | a rule: `joint_type` for a layer pair, an id pair, an element, or a founded base (`with_ground=True`); `capacity_kn`; `clear=True`; `prune=True`; no arguments lists | `mcpmodassignjointtype` | [07](07-mass-joint-types.md) |
-| `evaluate_stability` | evaluate the scope: `mode` assembly (one body) / elements (one per element; older names welded, pinned, contact still resolve to these and say so), `joint_type` default, solver parameters, `lateral_load_fraction` sway probe, `display`, `detail` | `mcpmodevaluatestability` | [08](08-stability.md) |
+| `evaluate_stability` | evaluate the scope: `mode` assembly (one body) / elements (one per element), `joint_type` default, solver parameters, `lateral_load_fraction` sway probe, `display`, `detail` | `mcpmodevaluatestability` | [08](08-stability.md) |
 | `get_stability_report` | one section of the last evaluation's stored report, sorted, filtered and paged; no `section` lists them | - | [09](09-reading-results.md) |
-| `open_file` | open a `.3dm`, optionally closing the current document | `Open` | [01](01-setup.md#9-session-tools) |
-| `close_file` | close the active document, optionally saving | `Close` | [01](01-setup.md#9-session-tools) |
-| `list_plugins` | loaded plugins | `PlugInManager` | [01](01-setup.md#9-session-tools) |
-| `run_rhino_command` | run a command by name with option tokens; prompting commands must be given their answers or the dashed form | - | [01](01-setup.md#9-session-tools) |
-| `get_rhino_log` | the last `lines` of the command line | - | [01](01-setup.md#9-session-tools) |
+| `open_file` | open a `.3dm`, optionally closing the current document | `Open` | [01](01-setup.md#10-session-tools) |
+| `close_file` | close the active document, optionally saving | `Close` | [01](01-setup.md#10-session-tools) |
+| `list_plugins` | loaded plugins | `PlugInManager` | [01](01-setup.md#10-session-tools) |
+| `run_rhino_command` | run a command by name with option tokens; prompting commands must be given their answers or the dashed form | - | [01](01-setup.md#10-session-tools) |
+| `get_rhino_log` | the last `lines` of the command line | - | [01](01-setup.md#10-session-tools) |
 
 ## Rhino commands
 
@@ -71,5 +71,6 @@ other route has no equivalent.
 | `mcpmodclearcache` | clear the stored graph, poses, boxes, masses and settled poses | `All` / `Selected` | `-mcpmodclearcache` | - | [00](00-overview.md#what-is-stored-on-the-document) |
 | `mcpmodobb` | draw oriented bounding boxes and projection profiles | `On` / `Off` / `Toggle` / `Status` | `mcpmodobb Off` | - | [04](04-pose-transforms.md) |
 
-Scripted form: what to pass to `run_rhino_command`. A command with `-` there prompts for a pick
-and has no non-interactive path; use the tool.
+The scripted form column shows the value to pass to `run_rhino_command`. A command marked `-`
+requires interactive selection and has no non-interactive command form; use the MCP tool
+instead.

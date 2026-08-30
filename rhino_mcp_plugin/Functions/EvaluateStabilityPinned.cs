@@ -32,7 +32,6 @@ namespace RhinoMCPModPlugin.Functions;
 /// </remarks>
 public partial class RhinoMCPModFunctions
 {
-    public const string PinnedEvaluationMode = "multi_body_pinned";
 
     // Markers give each body three non-shared particles so its transform can be recovered
     // the same way the welded mode recovers the assembly's. PhysicalSystem exposes particle
@@ -1062,7 +1061,6 @@ public partial class RhinoMCPModFunctions
         {
             ["success"] = true,
             ["stable"] = stable,
-            ["evaluation_mode"] = PinnedEvaluationMode,
             ["body_count"] = graph["body_count"],
             ["joint_count"] = graph["joint_count"],
             ["particle_count"] = graph["particle_count"],
@@ -1110,7 +1108,6 @@ public partial class RhinoMCPModFunctions
         return normal;
     }
 
-    public const string ContactEvaluationMode = "multi_body_contact";
 
 
     /// <summary>
