@@ -184,7 +184,7 @@ def graph_off(session: Session) -> None:
 def settled_pose_on(session: Session) -> None:
     result = session.send(
         "evaluate_stability",
-        {"mode": "pinned", "joint_type": "contact", "display": True},
+        {"mode": "elements", "joint_type": "contact", "display": True},
     )
     session.dump("stability-stair-toppling", result)
 
@@ -194,7 +194,7 @@ def settled_pose_off(session: Session) -> None:
         session.run_command("mcpmodstabilitydisplay Off", "OFF")
     except SystemExit:
         # The command's off switch is also reachable through the evaluator.
-        session.send("evaluate_stability", {"mode": "pinned", "joint_type": "contact", "display": False})
+        session.send("evaluate_stability", {"mode": "elements", "joint_type": "contact", "display": False})
 
 
 def obb_off(session: Session) -> None:
@@ -294,7 +294,7 @@ def sway(session: Session) -> None:
         session.open(name)
         result = session.send(
             "evaluate_stability",
-            {"mode": "pinned", "display": False, "lateral_load_fraction": 0.05},
+            {"mode": "elements", "display": False, "lateral_load_fraction": 0.05},
         )
         session.dump(f"sway-{pathlib.Path(name).stem}", result)
         block = result.get("sway") or {}

@@ -110,16 +110,16 @@ def evaluate(
     params.update(case.params)
 
     # Applied under the case's own parameters, never over them.
-    if OVERRIDES.get("integrator") and case.mode in ("pinned", "pinned_dynamic"):
+    if OVERRIDES.get("integrator") and case.mode == "elements":
         params.setdefault("integrator", OVERRIDES["integrator"])
         if OVERRIDES["integrator"] == "rigid_bodies":
             # The rigid path damps joints against relative motion, which barely touches a
             # mode where both ends move together, so its 2% is not the particle path's 2%.
             params.setdefault("damping_ratio", 0.2)
-    if OVERRIDES.get("fast") and case.mode in ("pinned", "pinned_dynamic"):
+    if OVERRIDES.get("fast") and case.mode == "elements":
         params.setdefault("lateral_load_fraction", 0.0)
         params.setdefault("timestep_safety", 0.4)
-    if OVERRIDES.get("timestep_safety") and case.mode in ("pinned", "pinned_dynamic"):
+    if OVERRIDES.get("timestep_safety") and case.mode == "elements":
         params["timestep_safety"] = OVERRIDES["timestep_safety"]
 
     result = connection.send_command("evaluate_stability", params)

@@ -204,7 +204,7 @@ def rule_stair_build() -> str:
 
 
 RULE_EVAL = {
-    "mode": "pinned_dynamic",
+    "mode": "elements",
     "integrator": "rigid_bodies",
     "joint_type": "fixed",
     "damping_ratio": 0.2,
@@ -569,7 +569,7 @@ def check_capacity(send: Callable[[str, dict], Any], ids: list[str]) -> list[str
             send("assign_joint_type",
                  {"joint_type": "fixed", "capacity_kn": capacity_kn, "ids": ids})
         return send("evaluate_stability", {"detail": "full",
-            "mode": "pinned_dynamic",
+            "mode": "elements",
             "integrator": "rigid_bodies",
             "ids": ids,
             "gravity": GRAVITY,
@@ -638,7 +638,7 @@ MICRO_REACTION_TOLERANCE = 0.02
 def check_joint_forces(send: Callable[[str, dict], Any], ids: list[str]) -> list[str]:
     """Reported joint forces against the reactions statics requires."""
     result = send("evaluate_stability", {"detail": "full",
-        "mode": "pinned_dynamic",
+        "mode": "elements",
         "integrator": "rigid_bodies",
         "ids": ids,
         "gravity": GRAVITY,
@@ -763,7 +763,7 @@ def check_bridge_on_pads(send: Callable[[str, dict], Any], ids: list[str]) -> li
         send("graph_display", {"enabled": True, "ids": ids})
 
     result = send("evaluate_stability", {"detail": "full",
-        "mode": "pinned_dynamic",
+        "mode": "elements",
         "integrator": "rigid_bodies",
         "ids": ids,
         "gravity": GRAVITY,
@@ -950,7 +950,7 @@ def hybrid_check(rules, expect_stable: bool, weight_n: float, expect_types=None)
             send("graph_display", {"enabled": True, "ids": ids})
 
         result = send("evaluate_stability", {"detail": "full",
-            "mode": "pinned_dynamic",
+            "mode": "elements",
             "ids": ids,
             "gravity": GRAVITY,
             "display": SHOW_WORK,
@@ -1098,7 +1098,7 @@ def pavilion_check(expect_stable: bool, sway=None):
         # What this arrangement should be asked instead is how it resists a load that is
         # actually a load, which is the notional lateral fraction below.
         result = send("evaluate_stability", {"detail": "full",
-            "mode": "pinned_dynamic",
+            "mode": "elements",
             "ids": ids,
             "gravity": GRAVITY,
             "display": SHOW_WORK,
@@ -2253,7 +2253,7 @@ built.append(str(doc.Objects.AddBrep(brep, attrs)))
 #     footing spans           x = 0 .. 400
 #     centre of mass outside  675 - 400 = 275 mm
 #
-# It must go over, and `mode="welded"` says so analytically: support_margin_m = -0.275, to
+# It must go over, and `mode="assembly"` says so analytically: support_margin_m = -0.275, to
 # the millimetre. The rigid path said stable at 0.12 mm.
 #
 # The suite had every other kind of toppling and not this one. Every case that tips does it
@@ -2302,7 +2302,7 @@ CASES: list[Case] = [
     # Toppling about the ground, which nothing else in the suite asks about.
     Case(
         name="footing_overturns",
-        mode="pinned",
+        mode="elements",
         tier=FAST,
         stable=False,
         reason=(
@@ -2314,7 +2314,7 @@ CASES: list[Case] = [
     ),
     Case(
         name="footing_holds",
-        mode="pinned",
+        mode="elements",
         tier=FAST,
         stable=True,
         reason=(
@@ -2326,7 +2326,7 @@ CASES: list[Case] = [
     # The simplest thing that must fall over, and the two defects that stopped it falling.
     Case(
         name="column_on_edge_falls",
-        mode="pinned",
+        mode="elements",
         tier=FAST,
         stable=False,
         reason=(
@@ -2338,7 +2338,7 @@ CASES: list[Case] = [
     ),
     Case(
         name="column_flat_stands",
-        mode="pinned",
+        mode="elements",
         tier=FAST,
         stable=True,
         reason="the same column and pad, set down square, bearing over its whole 400 x 400 base",
@@ -2348,7 +2348,7 @@ CASES: list[Case] = [
     # two below; only the curve differs, so the verdict is about shape and nothing else.
     Case(
         name="funicular_catenary",
-        mode="pinned",
+        mode="elements",
         tier=SYSTEMS,
         stable=True,
         reason=(
@@ -2363,7 +2363,7 @@ CASES: list[Case] = [
     # mass on one voussoir and the same ring at six times the thickness goes over.
     Case(
         name="funicular_catenary_wrong_load",
-        mode="pinned",
+        mode="elements",
         tier=SYSTEMS,
         stable=False,
         reason=(
@@ -2377,7 +2377,7 @@ CASES: list[Case] = [
     # other two, which is the ordering the pair of cases exists to hold.
     Case(
         name="funicular_parabola_stands",
-        mode="pinned",
+        mode="elements",
         tier=SYSTEMS,
         stable=True,
         reason="100 mm parabola stands where the circle of the same span and rise does not",
@@ -2386,7 +2386,7 @@ CASES: list[Case] = [
     ),
     Case(
         name="funicular_parabola_fails",
-        mode="pinned",
+        mode="elements",
         tier=SYSTEMS,
         stable=False,
         reason=(
@@ -2397,7 +2397,7 @@ CASES: list[Case] = [
     ),
     Case(
         name="funicular_circle_fails",
-        mode="pinned",
+        mode="elements",
         tier=SYSTEMS,
         stable=False,
         reason=(
@@ -2410,7 +2410,7 @@ CASES: list[Case] = [
     # 13 voussoirs, inner radius 2000 mm; t/R quoted on the mean radius 2000 + t/2.
     Case(
         name="arch_heyman_thickness",
-        mode="pinned",
+        mode="elements",
         tier=SYSTEMS,
         stable=True,
         reason=(
@@ -2426,7 +2426,7 @@ CASES: list[Case] = [
     ),
     Case(
         name="arch_heyman_thickness_below",
-        mode="pinned",
+        mode="elements",
         tier=SYSTEMS,
         stable=False,
         reason=(
@@ -2483,7 +2483,7 @@ CASES: list[Case] = [
     ),
     Case(
         name="stair3_step100",
-        mode="contact",
+        mode="elements",
         tier=FAST,
         stable=True,
         reason=f"joint margin {stair_margin_mm(100.0):+.0f} mm (600/2 - 1.5*100)",
@@ -2491,7 +2491,7 @@ CASES: list[Case] = [
     ),
     Case(
         name="stair3_step300",
-        mode="contact",
+        mode="elements",
         tier=FAST,
         stable=False,
         reason=f"joint margin {stair_margin_mm(300.0):+.0f} mm, centre of mass clear of the overlap",
@@ -2499,17 +2499,17 @@ CASES: list[Case] = [
     ),
     Case(
         name="stair3_step250",
-        mode="contact",
+        mode="elements",
         tier=SLOW,
         stable=False,
         reason=(
             f"joint margin {stair_margin_mm(250.0):+.0f} mm; inside the known blind band "
-            "where contact mode has read stable"),
+            "where contact joints have read stable"),
         build=stair_build(250.0),
     ),
     Case(
         name="pedestal_eccentric",
-        mode="contact",
+        mode="elements",
         tier=FAST,
         stable=False,
         reason=f"cap centre of mass {abs(PEDESTAL_MARGIN_MM):.0f} mm beyond the pedestal face",
@@ -2517,11 +2517,11 @@ CASES: list[Case] = [
     ),
     Case(
         name="pedestal_welded_reference",
-        mode="welded",
+        mode="assembly",
         tier=FAST,
         stable=True,
         reason=(
-            "welded mode cannot see one element leave another; the combined centre of mass "
+            "assembly mode cannot see one element leave another; the combined centre of mass "
             "is still over the pedestal, so stable here is correct for what this mode asks"),
         build=pedestal_build,
     ),
@@ -2532,7 +2532,7 @@ CASES: list[Case] = [
     # first one go.
     Case(
         name="stair3_step100_contact_joint",
-        mode="pinned_dynamic",
+        mode="elements",
         tier=FAST,
         stable=True,
         reason=f"joint margin {stair_margin_mm(100.0):+.0f} mm (600/2 - 1.5*100)",
@@ -2546,7 +2546,7 @@ CASES: list[Case] = [
     ),
     Case(
         name="stair3_step300_contact_joint",
-        mode="pinned_dynamic",
+        mode="elements",
         tier=FAST,
         stable=False,
         reason=(
@@ -2562,7 +2562,7 @@ CASES: list[Case] = [
     ),
     Case(
         name="pedestal_eccentric_contact_joint",
-        mode="pinned_dynamic",
+        mode="elements",
         tier=FAST,
         stable=False,
         reason=f"cap centre of mass {abs(PEDESTAL_MARGIN_MM):.0f} mm beyond the pedestal face",
@@ -2583,7 +2583,7 @@ CASES: list[Case] = [
     # A concrete frame carrying a mass-timber deck, built as it would be built.
     Case(
         name="hybrid_as_built",
-        mode="pinned_dynamic",
+        mode="elements",
         tier=SYSTEMS,
         stable=True,
         reason=(
@@ -2597,7 +2597,7 @@ CASES: list[Case] = [
     # pedestal again in a different material: a bearing carries no tension, so it rotates off.
     Case(
         name="hybrid_panel_off_bearing",
-        mode="pinned_dynamic",
+        mode="elements",
         tier=SYSTEMS,
         stable=False,
         reason=(
@@ -2617,7 +2617,7 @@ CASES: list[Case] = [
     # single run at the optimistic end would have reported a sound deck and shown nothing.
     Case(
         name="hybrid_panel_spline_upper_bound",
-        mode="pinned_dynamic",
+        mode="elements",
         tier=SYSTEMS,
         stable=True,
         reason=(
@@ -2644,7 +2644,7 @@ CASES: list[Case] = [
     # reason was wrong too - a four-hinge mechanism needs hinges, and there were none.
     Case(
         name="hybrid_dry_stacked",
-        mode="pinned_dynamic",
+        mode="elements",
         tier=SYSTEMS,
         stable=True,
         reason=(
@@ -2659,7 +2659,7 @@ CASES: list[Case] = [
     # same four-hinge mechanism. Everything else is as built.
     Case(
         name="hybrid_pinned_base",
-        mode="pinned_dynamic",
+        mode="elements",
         tier=SYSTEMS,
         stable=False,
         reason=(
@@ -2673,7 +2673,7 @@ CASES: list[Case] = [
     # is the arrangement of the walls under it.
     Case(
         name="pavilion_pinwheel",
-        mode="pinned_dynamic",
+        mode="elements",
         tier=SYSTEMS,
         stable=True,
         reason=(
@@ -2691,7 +2691,7 @@ CASES: list[Case] = [
     # has no lever arm, and the two directions would come out the same.
     Case(
         name="pavilion_parallel_walls",
-        mode="pinned_dynamic",
+        mode="elements",
         tier=SYSTEMS,
         stable=True,
         reason=(
@@ -2704,7 +2704,7 @@ CASES: list[Case] = [
     # everything holding it up, and a bearing carries no tension, so it goes.
     Case(
         name="pavilion_roof_off_walls",
-        mode="pinned_dynamic",
+        mode="elements",
         tier=SYSTEMS,
         stable=False,
         reason=(
@@ -2715,7 +2715,7 @@ CASES: list[Case] = [
     ),
     Case(
         name="joint_type_rules",
-        mode="pinned_dynamic",
+        mode="elements",
         tier=FAST,
         stable=True,
         reason=(
@@ -2726,7 +2726,7 @@ CASES: list[Case] = [
     ),
     Case(
         name="stair3_step100_welded_joint",
-        mode="pinned_dynamic",
+        mode="elements",
         tier=FAST,
         stable=True,
         reason="a welded bearing carries moment over its measured width, so the stack stands",
@@ -2740,7 +2740,7 @@ CASES: list[Case] = [
     ),
     Case(
         name="stair3_step100_pin_joint",
-        mode="pinned_dynamic",
+        mode="elements",
         tier=FAST,
         stable=False,
         reason=(
@@ -2756,7 +2756,7 @@ CASES: list[Case] = [
     ),
     Case(
         name="cantilever_margin_plus120",
-        mode="welded",
+        mode="assembly",
         tier=FAST,
         stable=True,
         reason=f"centre of mass {cantilever_margin_mm(200.0):+.0f} mm inside the pedestal face",
@@ -2764,7 +2764,7 @@ CASES: list[Case] = [
     ),
     Case(
         name="cantilever_margin_minus40",
-        mode="welded",
+        mode="assembly",
         tier=FAST,
         stable=False,
         reason=(
@@ -2774,7 +2774,7 @@ CASES: list[Case] = [
     ),
     Case(
         name="cantilever_margin_minus220",
-        mode="welded",
+        mode="assembly",
         tier=FAST,
         stable=False,
         reason=f"centre of mass {abs(cantilever_margin_mm(800.0)):.0f} mm outside the pedestal face",
@@ -2782,7 +2782,7 @@ CASES: list[Case] = [
     ),
     Case(
         name="bridge_braced",
-        mode="pinned",
+        mode="elements",
         tier=FAST,
         stable=True,
         reason="rank test finds 0 mechanisms; hand midspan sag about 1.8 mm",
@@ -2807,7 +2807,7 @@ CASES: list[Case] = [
     # "unstable" was an inference laid on top of it, and it was wrong.
     Case(
         name="bridge_unbraced_dynamic",
-        mode="pinned_dynamic",
+        mode="elements",
         tier=FAST,
         stable=True,
         reason=(
@@ -2849,7 +2849,7 @@ CASES: list[Case] = [
     ),
     Case(
         name="bridge_braced_dynamic",
-        mode="pinned_dynamic",
+        mode="elements",
         tier=FAST,
         stable=True,
         reason="0 mechanisms; stiffer in y than the unbraced bridge, 1.66e9 against 1.13e9",
@@ -2888,7 +2888,7 @@ CASES: list[Case] = [
     # dynamics rather than a fitted frame.
     Case(
         name="free_fall_two_members",
-        mode="pinned_dynamic",
+        mode="elements",
         tier=MICRO,
         stable=False,
         reason="nothing supports them; they must fall at g, reaching the 10 mm limit in 0.045 s",
@@ -2921,7 +2921,7 @@ CASES: list[Case] = [
     # mg/k - about 1.5 micron - and descends at the solver's update rate instead of at g.
     Case(
         name="free_fall_two_members_particles",
-        mode="pinned_dynamic",
+        mode="elements",
         tier=MICRO,
         stable=False,
         reason="the particle integrator cannot represent free motion; it reaches 0.2% of g",
@@ -2946,7 +2946,7 @@ CASES: list[Case] = [
     # is deleted. The defect is gone rather than tolerated, and the assertion never moved.
     Case(
         name="joint_capacity_binds",
-        mode="pinned_dynamic",
+        mode="elements",
         tier=SYSTEMS,
         stable=True,
         reason=(
@@ -2957,7 +2957,7 @@ CASES: list[Case] = [
     ),
     Case(
         name="joint_forces_reactions",
-        mode="pinned_dynamic",
+        mode="elements",
         tier=SYSTEMS,
         stable=True,
         reason=(
@@ -2968,7 +2968,7 @@ CASES: list[Case] = [
     ),
     Case(
         name="bridge_on_pads",
-        mode="pinned_dynamic",
+        mode="elements",
         tier=SYSTEMS,
         stable=True,
         reason=(
@@ -2979,7 +2979,7 @@ CASES: list[Case] = [
     ),
     Case(
         name="bridge_unbraced_pinned_alias",
-        mode="pinned",
+        mode="elements",
         tier=FAST,
         # It stands, and it takes a second to say so.
         #
@@ -3005,8 +3005,7 @@ CASES: list[Case] = [
         # actually about, pin, is what let the question be asked at all.
         stable=True,
         reason=(
-            "infinitesimal mechanisms stiffen at second order, so it stands; and \"pinned\" "
-            "must now answer identically to \"pinned_dynamic\""),
+            "infinitesimal mechanisms stiffen at second order, so it stands"),
         build=bridge_build(braced=False),
         params={"joint_type": "pin", "duration_seconds": 1.0},
     ),
@@ -3019,7 +3018,7 @@ CASES: list[Case] = [
 for _integrator in ("particles", "rigid_bodies"):
     CASES.append(Case(
         name=f"axial_one_storey_{_integrator}",
-        mode="pinned_dynamic",
+        mode="elements",
         tier=MICRO,
         stable=True,
         reason=(
@@ -3032,7 +3031,7 @@ for _integrator in ("particles", "rigid_bodies"):
     ))
     CASES.append(Case(
         name=f"axial_splayed_{_integrator}",
-        mode="pinned_dynamic",
+        mode="elements",
         tier=MICRO,
         stable=True,
         reason=(
@@ -3045,7 +3044,7 @@ for _integrator in ("particles", "rigid_bodies"):
     ))
     CASES.append(Case(
         name=f"axial_two_storeys_{_integrator}",
-        mode="pinned_dynamic",
+        mode="elements",
         tier=MICRO,
         stable=True,
         reason=(
