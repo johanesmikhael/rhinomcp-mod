@@ -1,6 +1,6 @@
 # Worked example: the two timber bridges
 
-<!-- run: 2026-08-29, plugin 0.3.1 -->
+<!-- run: 2026-08-30, plugin 0.4.0 -->
 
 This example evaluates two 24 m timber bridges on two pads. The first is x-braced in plan and
 elevation. The second uses rigid portal frames without diagonal bracing. Both are stable under
@@ -39,8 +39,11 @@ without overwriting them:
 assign_mass(density=2400, overwrite=False)    # assigns nothing; reports what is there
 ```
 
-The returned `total_mass_kg` values are 37231 and 35794, and `skipped` is empty. To assign mass
-from scratch, call `assign_mass(density=...)` with the appropriate timber density.
+Nothing is written, so `assigned` is empty and `assigned_mass_kg` is 0. Every element lands in
+`skipped`, each carrying the mass it already holds, and `total_mass_kg` is what the scope
+weighs: 37231 for the x-braced file and 35794 for the portal one - the same totals
+`evaluate_stability` reports, which is the point of checking here first. To assign mass from
+scratch, call `assign_mass(density=...)` with the appropriate timber density.
 
 **3. Inspect joint rules.** The rules are stored in each document. List them with:
 

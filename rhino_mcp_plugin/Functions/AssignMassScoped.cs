@@ -75,6 +75,7 @@ public partial class RhinoMCPModFunctions
             var assigned = new JArray();
             var skipped = new JArray();
             var totalKilograms = 0.0;
+            var keptKilogramsTotal = 0.0;
 
             foreach (var rhinoObject in targets)
             {
@@ -84,14 +85,28 @@ public partial class RhinoMCPModFunctions
                 {
                     var existing = rhinoObject.Attributes.GetUserString(StabilityKey);
                     if (!string.IsNullOrWhiteSpace(existing) &&
-                        JObject.Parse(existing)["mass"] != null)
+                        JObject.Parse(existing)["mass"] is JToken existingMass &&
+                        existingMass.Type is JTokenType.Float or JTokenType.Integer)
                     {
+                        // An object skipped for already having a mass is the one skip that is
+                        // not a problem to fix: it is what an audit looks like. So it reports
+                        // the mass it kept. Without it, overwrite=False can say that every
+                        // object has a mass and never say what any of them is, which is not
+                        // enough to check a model with.
+                        var keptKilograms = existingMass.Value<double>();
                         skipped.Add(new JObject
                         {
                             ["guid"] = guidString,
                             ["name"] = rhinoObject.Name,
+                            ["mass"] = keptKilograms,
+                            ["mass_unit"] = StabilityUnits.KilogramUnit,
                             ["reason"] = "Object already carries a mass and overwrite is off."
                         });
+                        if (double.IsFinite(keptKilograms) && keptKilograms > 0.0)
+                        {
+                            keptKilogramsTotal += keptKilograms;
+                        }
+
                         continue;
                     }
                 }
@@ -167,7 +182,12 @@ public partial class RhinoMCPModFunctions
                 ["document_density_unit"] = densityUnit,
                 ["assigned"] = assigned,
                 ["skipped"] = skipped,
-                ["total_mass_kg"] = totalKilograms,
+                // What this call wrote, and what the scope weighs. They differ whenever
+                // anything was skipped, and it is the scope total that answers "is the mass
+                // right", so that is the one named total_mass_kg - the same quantity
+                // evaluate_stability reports under the same name.
+                ["assigned_mass_kg"] = totalKilograms,
+                ["total_mass_kg"] = totalKilograms + keptKilogramsTotal,
                 ["document_length_unit"] = doc.ModelUnitSystem.ToString(),
                 ["mass_unit"] = StabilityUnits.KilogramUnit
             };

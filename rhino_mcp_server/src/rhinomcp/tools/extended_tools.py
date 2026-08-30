@@ -382,15 +382,22 @@ async def assign_mass(
         layer: Layer name, or list of names, to assign.
         selected: When True, assign to the current selection.
         overwrite: When False, objects that already carry a mass keep it and
-            are reported under "skipped". Defaults to True.
+            are reported under "skipped" with the mass they kept, which makes
+            this the way to audit a model's masses without changing them.
+            Defaults to True.
 
     Omitting every scope argument assigns the whole document, matching how the
     connectivity graph and the evaluator read an omitted scope.
 
     Returns per-object masses in kg, the volumes used, anything skipped and
-    why, the scope total, and the input value with the unit it was read in, so
-    the caller can confirm the number was taken the way it was meant. Whatever
-    the document's units, mass is stored on the object in canonical kilograms.
+    why, and the input value with the unit it was read in, so the caller can
+    confirm the number was taken the way it was meant. Whatever the document's
+    units, mass is stored on the object in canonical kilograms.
+
+    Two totals, because they answer different questions: `assigned_mass_kg` is
+    what this call wrote, and `total_mass_kg` is what the scope weighs -
+    assigned plus already carried, the same quantity evaluate_stability
+    reports under that name. They are equal only when nothing was skipped.
     """
     from rhinomcp.server import get_rhino_connection
 
