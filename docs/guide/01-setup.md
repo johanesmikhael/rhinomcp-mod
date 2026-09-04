@@ -54,11 +54,15 @@ Add the `rhino` entry inside `mcpServers`, keeping whatever else is there:
   "mcpServers": {
     "rhino": {
       "command": "uvx",
-      "args": ["rhinomcp-mod"]
+      "args": ["--with", "mcp[cli]<2", "rhinomcp-mod"]
     }
   }
 }
 ```
+
+The `mcp[cli]<2` pin is required through 0.4.0. `mcp` 2.x renamed `FastMCP` to `MCPServer` and
+removed `mcp.server.fastmcp`, which the server imports; without the pin `uvx` resolves 2.x and the
+server exits at import.
 
 Restart Claude Desktop. `uvx` resolves the latest published version on first start and caches it;
 `uvx --refresh rhinomcp-mod` picks up a new release.
@@ -66,8 +70,8 @@ Restart Claude Desktop. `uvx` resolves the latest published version on first sta
 ## 4. Claude Code
 
 ```bash
-claude mcp add rhino -- uvx rhinomcp-mod          # this project
-claude mcp add -s user rhino -- uvx rhinomcp-mod  # every project
+claude mcp add rhino -- uvx --with 'mcp[cli]<2' rhinomcp-mod          # this project
+claude mcp add -s user rhino -- uvx --with 'mcp[cli]<2' rhinomcp-mod  # every project
 claude mcp list
 ```
 
@@ -91,7 +95,7 @@ Add the `rhino` entry under `mcp`, keeping whatever else is there:
   "mcp": {
     "rhino": {
       "type": "local",
-      "command": ["uvx", "rhinomcp-mod"]
+      "command": ["uvx", "--with", "mcp[cli]<2", "rhinomcp-mod"]
     }
   }
 }
@@ -178,6 +182,7 @@ From Rhino: `mcpmodversion`.
 | symptom | check |
 | --- | --- |
 | no Rhino tools in the MCP client | Rhino open with a document; `mcpmodversion` answers; `uvx --version` works; the JSON parses; the client restarted after the edit; for OpenCode, `opencode mcp list` includes `rhino` |
+| `ModuleNotFoundError: No module named 'mcp.server.fastmcp'` in the client's MCP log | `mcp` 2.x was resolved - add `--with 'mcp[cli]<2'` to the `uvx` invocation |
 | `Could not connect to Rhino` | listener not running - `mcpmodstart`; another process on 1999 |
 | `Object reference not set` on every call | no active document - open a file |
 | a tool call returns success and nothing happens, later calls hang | a prompting command was run through `run_rhino_command` and is waiting at its prompt - press Esc in Rhino; use the scripted form (`-mcpmodclearcache`) or pass the option tokens (`mcpmodstabilitydisplay Off`) |

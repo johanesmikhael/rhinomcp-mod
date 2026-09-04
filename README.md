@@ -47,14 +47,18 @@ Rhino commands for the caches these build: `mcpmodobb` (oriented boxes and profi
   "mcpServers": {
     "rhino": {
       "command": "uvx",
-      "args": ["rhinomcp-mod"]
+      "args": ["--with", "mcp[cli]<2", "rhinomcp-mod"]
     }
   }
 }
 ```
 
-Claude Code: `claude mcp add rhino -- uvx rhinomcp-mod`. Running from source, the start
-order, verification and troubleshooting: [`docs/guide/01-setup.md`](docs/guide/01-setup.md).
+The `mcp[cli]<2` pin is required through 0.4.0. `mcp` 2.x renamed `FastMCP` to `MCPServer` and
+removed `mcp.server.fastmcp`, which the server imports; without the pin `uvx` resolves 2.x and the
+server exits at import with `ModuleNotFoundError: No module named 'mcp.server.fastmcp'`.
+
+Claude Code: `claude mcp add rhino -- uvx --with 'mcp[cli]<2' rhinomcp-mod`. Running from source,
+the start order, verification and troubleshooting: [`docs/guide/01-setup.md`](docs/guide/01-setup.md).
 
 ## Guide
 
